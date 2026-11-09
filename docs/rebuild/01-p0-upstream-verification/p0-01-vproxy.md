@@ -38,22 +38,29 @@ cargo init --name vproxy-standalone --bin
 
 **2. 固定 VProxy 版本并以 git 依赖引入**
 
-> 关键：版本必须在 `docs/THIRD_PARTY.md` 锁定为具体 commit/tag，本页用 `<PIN VProxy commit/tag>` 占位，
-> 执行者填入真实值（如某个 release tag 或完整 40 位 commit SHA）。
+> **⚠️ 2026-11-10 P0 实查结论（见 ACTION-LOG S3）：VProxy 是单 crate 应用，无 workspace 子 crate。**
+> 其 `[lib]` 虽存在（`crate-type=["rlib","cdylib","staticlib"]`），但 `default=["gui"]` 且
+> **基础依赖硬带 `rhai`（脚本引擎）、`sqlx(sqlite)`、`axum`、`ring`、`tokio[full]`**——
+> `default-features=false` 也关不掉这些，只会关 GUI。
+>
+> **结论：不把 vproxy 作为 lib 依赖**（违反方案 §3.1「不让上游类型/依赖渗透」，并引入
+> rhai+sqlite 等不需要的攻击面/编译面）。本页 spike 的落地形式改为
+> **「clone 后定位 parser/fingerprint/export 源文件，评估最小化移植面」**。
+> 以下 A/B 两种原方案保留为历史备选，仅在 VProxy 未来拆出独立 parser crate 时复活。
+>
+> 版本锁定：`docs/THIRD_PARTY.md` 仍需记录本次调查所用 commit（`main` @ 2026-11-09）与 release tag（`1.16.9`）。
 
 ```toml
-# spikes/vproxy-standalone/Cargo.toml  [dependencies] 段
-# 方式 A：git 依赖（先验证用，便于锁定 commit）
-vproxy = { git = "https://github.com/mateo-ki/vproxy", rev = "<PIN VProxy commit/tag>" }
-# 方式 B：确认可发布到 crates.io / 内部 registry 后改用版本号
-# vproxy = "x.y.z"
-serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
+# 【方案 A｜已否决】git 依赖 —— 保留仅作记录
+# vproxy = { git = "https://github.com/mateo-ki/vproxy", rev = "<PIN VProxy commit/tag>", default-features = false }
+# 【方案 B｜复活的触发条件】VProxy 若拆出独立 parser crate 并发到 crates.io，则用版本号
+# vproxy-parser = "x.y.z"
 ```
 
 > 若 VProxy 不是以库（lib）形式暴露上述模块，或模块依赖 GUI/SQLite feature，则需要：
 > 在 `Cargo.toml` 关闭相关 default-features（如 `default-features = false`）再按需开启；
 > 若仍无法干净拆包，则**只移植必要算法**并保留 MIT 版权/许可证（方案 §3.1 末句），见「风险」。
+> **2026-11-10 实查：正是后一种情况 → 走「只移植必要算法」路线。**
 
 **3. 准备示例 Clash YAML fixture**
 
