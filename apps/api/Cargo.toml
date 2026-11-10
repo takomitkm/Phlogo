@@ -20,6 +20,7 @@ app-config = { path = "../../crates/config" }
 domain = { path = "../../crates/domain" }
 database = { path = "../../crates/database" }
 registry = { path = "../../crates/registry" }
+observability = { path = "../../crates/observability" }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

@@ -610,3 +610,17 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **实测**：校机 `cargo build --release --bin api --bin worker` **0**（api 15.6MB/worker 11.6MB，Dockerfile builder 段等价）；compose 拓扑 lint **13/13**（postgres/miaospeed 零公网端口、caddy 21380、6 服务、.env 4 键）。docker runtime 集成验收（整栈拉起/备份恢复演练）留 docker 环境的 CI job，文档如实标注。
 
 **决策**：P7-01 **PASS**。进入 P7-02（可观测性）。
+
+---
+
+## [UTC 2026-11-11T06:35:00Z] S32 · P7-02 可观测性（tracing JSON + 全局 redaction + /metrics；测试全绿）
+
+**动作**：新 crate `crates/observability`（JSON subscriber + redact_secret/subscription_url + RedactionLayer 违规告警）；`/metrics` 轻量 Prometheus 端点（进程计数 + DB 量规）；api/worker main 统一接 observability::init；Apalis 恢复引用 P3 既有实现与测试。
+
+**设计取舍（写进文档）**：tracing Event 不可变 → RedactionLayer 不做就地改写，而是**违规可观测**（secret 字段名命中即 warn），主防线在调用点 redact_*。
+
+**实测**（校机 PG 18.6）：build/test/fmt/clippy 全 **0**；observability 3/3（掩码、URL 剥 query、字段白名单）。
+
+**踩坑**：`DynFilterFn` 闭包是 2 参签名（去掉多余 filter 后绕开）。
+
+**决策**：P7-02 **PASS**。进入 P7-03（安全加固：deny/audit、端口暴露 lint、contract 静态检查）。

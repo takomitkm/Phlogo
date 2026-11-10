@@ -1,10 +1,9 @@
-//! tracing initialization (mirrors Phlogo zerolog ConsoleWriter setup).
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-
+//! tracing initialization (P7-02): delegates to the observability crate so api and
+//! worker share JSON logging + global redaction.
 pub fn init(level: &str) {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(filter)
-        .init();
+    // level comes from config verbosity; observability::init honors RUST_LOG first.
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", level);
+    }
+    observability::init("paily-api");
 }

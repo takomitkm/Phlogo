@@ -9,7 +9,7 @@ use worker::{handle_check, CheckJob};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    observability::init("paily-worker");
     let cfg = app_config::Config::load(None)?;
 
     let pool: PgPool = database::connect(&cfg.database.dsn).await?;

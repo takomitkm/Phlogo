@@ -129,6 +129,29 @@ Monitor::new()
 `CheckJob` 对应 `internal/checker/handler.go` 的四阶段（事务插入 → 批量存活判定 → 异步评分 → 死源评估+缓存重建），
 其中「迟到结果不能覆盖更新的状态快照」由 `node_status` 按 `node_id+checker_tag` 维护（CONVENTIONS §2.7/§2.9）。
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地**：
+- 新 crate **`crates/observability`**：`init(service)`（tracing JSON subscriber，`RUST_LOG`/默认 info）+ `redact.rs`——
+  `redact_secret`（固定掩码 `[REDACTED]`）、`redact_subscription_url`（保 scheme://host/path，剥 query/fragment——**订阅 URL 里的 token 就在 query**）、
+  `SECRET_FIELD_NAMES` 白名单（secret/password/token/psk/private_key/raw/credential/authorization/cookie/url）。
+  **`RedactionLayer`**：全局 tracing layer，扫描每个 event 的字段名，命中白名单即记 violations 并 `warn!`（defense-in-depth：主防线是调用点用 redact_*，本层让漏网的**可观测**而非静默通过——tracing 的 Event 不可变，无法就地改写，这是该设计的明确取舍，写进文档）。
+- **`/metrics`**（`apps/api/src/handlers/metrics.rs`，根级路由无需认证——与规格 §风险呼应，边界访问控制归 8-03/Caddy）：轻量 Prometheus 文本格式——进程计数器（`http_requests_total`、`subscription_renders_total`）+ DB 量规（`nodes_total/nodes_linked_total/sources_total/check_runs_total`，best-effort 查询不致 500）。
+- api/worker main 接 `observability::init`（api 走 `telemetry.rs` 薄包装保持 config verbose 语义）。
+- **Apalis 恢复**：P3-01 已实现——Postgres-backed storage 天然持久化 Job 状态，worker 重启重认领；`CheckJob` 副作用幂等（`run_id` 键控 `ON CONFLICT`），重放不产生重复行（P3-01/P3-04 集成测试已证）。本页无需新增代码，验收 #4 引用既有测试。
+
+**实测（校机，PG 18.6）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（38.07s） |
+| `cargo test --workspace` | **0**——`observability` 3/3（redacts_secrets / redacts_subscription_url_query / field_whitelist） |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+
+**验收对照**：#1 redaction 单测 ✓；#2 运行期日志无秘密——主防线（redact_*）+ RedactionLayer 违规告警就绪，端到端 grep 演练需 compose 运行时（8-01 同款标注，不夸大）；#3 `/metrics` 200 + 指标存在——路由与 handler 就绪，curl 冒烟随 compose 集成；#4 worker 恢复 ✓（引用 P3-01/P3-04 幂等测试与 PG storage 语义）。
+
+**踩坑**：`tracing_subscriber::DynFilterFn` 闭包签名 2 参（meta, ctx）——非 3 参；RedactionLayer 无需 filter 直接挂 registry。
+
 ### 验收 / Acceptance
 
 1. **redaction 单元测试（最核心，对应阶段验收 #2）**：

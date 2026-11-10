@@ -11,7 +11,7 @@ use utoipa::OpenApi;
 use app_config::Config;
 
 use crate::auth::{require_admin_or_service, AuthState};
-use crate::handlers::{config, node, source};
+use crate::handlers::{config, metrics, node, source};
 use crate::state::AppState;
 
 async fn health() -> &'static str {
@@ -60,11 +60,12 @@ pub fn build(cfg: Config) -> Router {
             auth,
             require_admin_or_service,
         ))
-        .with_state(state);
+        .with_state(state.clone());
 
     Router::new()
         .route("/health", get(health))
         .route("/api-docs/openapi.json", get(openapi_json))
+        .route("/metrics", get(metrics::metrics).with_state(state.clone()))
         .nest("/api/v1", api_v1)
         .fallback(|| async { (StatusCode::NOT_FOUND, "not found") })
 }

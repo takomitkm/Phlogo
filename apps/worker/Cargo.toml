@@ -14,5 +14,6 @@ sqlx.workspace = true
 anyhow.workspace = true
 apalis.workspace = true
 apalis-sql.workspace = true
+observability = { path = "../../crates/observability" }
 app-config = { path = "../../crates/config" }
 database = { path = "../../crates/database" }
