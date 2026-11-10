@@ -11,6 +11,7 @@ members = [
     "crates/checker-miaospeed",
     "crates/lifecycle",
     "crates/scoring",
+    "crates/filter",
     "crates/config",
     "crates/api-contract",
 ]

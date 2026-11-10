@@ -162,6 +162,26 @@ pub fn matches(node: &NodeView, ast: &FilterNode) -> bool { /* 递归 */ }
 - **`node_distribute_filter`**：`configs` 中该键由 expr 字符串改为存 AST JSON（plan §9.2 形状）。分发时读取后走 `parse` → `to_sql` / `matches`，行为等价于原 `filter.EvalBool` 的全局筛选。`configs` 默认种子保持 `node_distribute_filter=""`（空 → 不过滤），见 CONVENTIONS §2.6。
 - **`sponsor`.`filter_expr`**：`sponsors` 表新增 `filter_ast` 列（JSON），原 `filter_expr`（expr 字符串）+ `priority` 迁移为 `filter_ast`。sponsor 匹配：对每个节点用 `eval::matches` 判定，命中且 `priority` 最高者胜出，逻辑等价于 CONVENTIONS §2.3 中 `sponsors`（`name`/`text`/`filter_expr`/`priority`）的用途。
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地**（新 crate `crates/filter`，四模块）：
+- `ast.rs`：`FilterNode{And,Or,Not,Cond}` + `Condition{field,operator,value}` + `CompareOp`（10 白名单运算符）+ `FilterValue{Str,Num,Bool,List}`。**手写 Deserialize**：叶子条件=含 `field` 的对象、逻辑节点=含 `conditions` 的对象，两者由顶层 `operator` 区分——严格贴合 plan §9.2 JSON 形状（serde 的 tag 分派做不到）。
+- `parse.rs`：白名单校验（`FIELD_WHITELIST` 7 字段、未知字段→`UnknownField`、未知运算符→`UnknownOperator`/Json 拒绝）+ 深度 8 / 叶子 32 限制 + `MAX_RESULT_SIZE=1000` 常量导出；空串→`FilterError::Empty`（调用方视为「不过滤」）。
+- `sql.rs`：AST→参数化 SQL。列名固定映射（`health→s.health`、`score→sc.score`、`region/protocol/server→n.*`）；`source_id`→`EXISTS node_sources` 子查询、`unlock`→`EXISTS node_streaming`（`lower()` 大小写无关）；`in/not_in` 展开 `$n` 列表；`is_null` 忽略 value；`$1` 恒为 checker_tag，值全部走占位符，**零字符串拼接**。
+- `eval.rs`：`NodeView`（与白名单一一对应，含 `streaming: HashMap<String,bool>`）+ `matches` 纯函数递归求值。
+
+**实测（校机）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（34.13s） |
+| `cargo test --workspace` | **0**——`filter` **7/7** |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+
+**7 测试（验收 1–7）**：`parse_ok`（and 形状）✓、`rejects_unknown_field`（password 拒绝）✓、`rejects_unknown_operator`（like 拒绝）✓、`generates_parameterized_sql`（`s.health = $2`/`n.region = $3`/`sc.score >= $4::float8` + 参数序列 `[hk, alive, JP, 0.7]`）✓、`limits_enforced`（深度 9→TooDeep、33 叶→TooManyConditions）✓、`eval_matches`（JP/0.8/alive 真、US 假）✓、`empty_and_unlock`（空串→Empty；netflix 大小写无关 contains）✓。
+
+**说明/偏差**：`node_distribute_filter` 与 `sponsors.filter_ast` 的**存储迁移**（expr 字符串→AST JSON）在本步未动 DB——`configs` 键与 `sponsors` 表由 p5-02/p5-03 消费时一并迁移（本 crate 提供 parse/sql/eval 全部能力，消费端只需替换读取路径）；`node_streaming` 表目前尚不存在（unlock 的 SQL 分支为 P5-03 就绪预留，eval 分支已有测试）。命名模板（`naming.go` EvalString）按规格留 p5-03。
+
 ### 验收 / Acceptance
 
 下列命令应在 `crates/filter` 单测下通过（退出码 `0`）：

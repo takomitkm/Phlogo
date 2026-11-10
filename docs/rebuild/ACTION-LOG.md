@@ -539,3 +539,15 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **实测**（校机 PG 18.6）：build/test/fmt/clippy 全 **0**；5/5（golden、不可达最差、6 位舍入、AVG 忽略零分、version/insufficient）。
 
 **决策**：P4-03 **PASS**。**P4 阶段（状态机 / 健康+清理 / 评分）全部完成**。下一步进入 P5（过滤 AST + 订阅输出）。
+
+---
+
+## [UTC 2026-11-11T04:45:00Z] S26 · P5-01 类型化筛选 AST（白名单 + 参数化 SQL + 内存求值；7 测试全绿）
+
+**动作**：新 crate `crates/filter`：`ast.rs`（手写 Deserialize 贴合 plan §9.2 形状）+ `parse.rs`（白名单/深度/叶子数限制）+ `sql.rs`（$n 占位符、零拼接、EXISTS 子查询）+ `eval.rs`（NodeView 纯函数求值）。
+
+**实测**（校机）：build/test/fmt/clippy 全 **0**；`filter` 7/7（解析、双拒绝、参数化 SQL $2/$3/$4、限制、求值、空串+unlock）。
+
+**关键实现点**：serde tag 分派会把叶子包一层 `operator:"cond"`——不符规格形状，改手写 Deserialize（顶层 `operator` 分派叶子/逻辑节点）；`in/not_in` 展开、`is_null` 忽略 value；`$1` 恒为 checker_tag。
+
+**决策**：P5-01 **PASS**。存储迁移（configs/sponsors 列）随 p5-02/p5-03 消费端一并做。进入 P5-02（配额与限流）。
