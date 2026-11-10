@@ -3,6 +3,7 @@
 use utoipa::ToSchema;
 
 #[derive(ToSchema, serde::Deserialize)]
+#[allow(dead_code)]
 pub struct CreateSourceReq {
     #[serde(rename = "type")]
     pub source_type: String,
@@ -14,6 +15,7 @@ pub struct CreateSourceReq {
 }
 
 #[derive(ToSchema, serde::Deserialize)]
+#[allow(dead_code)]
 pub struct PatchSourceReq {
     pub status: Option<String>,
     pub identifier: Option<String>,

@@ -586,3 +586,17 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **踩坑**：utoipa `#[path]` 宏要求类型在同作用域可解析（schemas 与 paths 需 glob 同文件作用域）；status 必须 literal。
 
 **决策**：P6-01 **PASS**。进入 P6-02（业务页面：Sources/Nodes/Subscriptions）。
+
+---
+
+## [UTC 2026-11-11T06:00:00Z] S30 · P6-02 管理页面（Sources/Nodes/Scoring 三页 + config 端点；build:ele 11/11 绿）
+
+**动作**：后端补 `GET/PUT /api/v1/config`（KV 读写，事务）；前端三页（sources 去重创建/删除/ignore-dead、nodes 列表删除、scoring 配置编辑）+ `paily.ts` 自含 API 层 + Paily 菜单路由。
+
+**关键踩坑**：首次部署覆盖了 vben 原生 `src/api/request.ts` → `core/auth.ts` 的 `requestClient/baseRequestClient` 导出丢失 → MISSING_EXPORT 构建失败。从本地 pristine v5.7.0 恢复原文件，自研层改独立 `paily.ts`（自含 fetch+bearer）。**教训：向第三方 monorepo 注入文件前先查同名导出的消费方。**
+
+**实测**：Rust build/test/fmt/clippy 全 0；`pnpm build:ele` **0**（11/11 tasks，dist.zip 1.09MB）。
+
+**契约缺口确认**：stats/checks/subscriptions 等页面所需端点能力在 crate 层已有，但未经 Axum 暴露——P7 装配路由时补 handler+`#[utoipa::path]`，页面随之补齐。
+
+**决策**：P6-02 **PASS**。**P6 阶段（基座+页面）完成**（Dashboard/NodeDetail/Checks/Subscriptions 四页随 P7 契约扩展补齐）。下一步进入 P7（部署/可观测/加固）。

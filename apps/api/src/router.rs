@@ -11,7 +11,7 @@ use utoipa::OpenApi;
 use app_config::Config;
 
 use crate::auth::{require_admin_or_service, AuthState};
-use crate::handlers::{node, source};
+use crate::handlers::{config, node, source};
 use crate::state::AppState;
 
 async fn health() -> &'static str {
@@ -55,6 +55,7 @@ pub fn build(cfg: Config) -> Router {
         .route("/sources/:id/nodes", get(source::nodes))
         .route("/nodes", get(node::list))
         .route("/nodes/:id", get(node::get).delete(node::delete))
+        .route("/config", get(config::get_config).put(config::put_config))
         .layer(middleware::from_fn_with_state(
             auth,
             require_admin_or_service,

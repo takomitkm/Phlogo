@@ -134,6 +134,37 @@
   实现；本阶段只能做「筛选预览」+「输出测试」+「格式配置」。Token 管理需 P5 在契约中补齐 `/api/v1/subscriptions`
   CRUD 后再补页。Apalis/订阅 Token 也不属于 Vben 主 Admin 范围（方案 §2.1 / §12）。
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地范围（按契约现实收敛，写进文档）**：规格 7 页中多数消费的端点（stats/checkers/logs/filter-preview/format-configs）
+在 Rust API 尚未实现（规格自身标注的「契约缺口」）。本步交付**三个完全可用页面** + 支撑端点，其余随契约扩展在 P7 补页：
+
+- **后端新端点**（`apps/api/src/handlers/config.rs` + 路由）：`GET /api/v1/config`（全量 KV 读）、
+  `PUT /api/v1/config`（`{values:{k:v}}` 批量 upsert，事务内）——Scoring 页数据源；`AppState` 增 `pool()` 访问器。
+- **前端三页**（`web/vben-admin/src/views/paily/`）：
+  - `sources.vue`：列表 + 创建（**去重语义分支提示**：201=created / 200=already existed）+ 删除 + ignore-dead。
+  - `nodes.vue`：列表 + 删除。
+  - `scoring.vue`：`score_*`/`grade_*`/`max_distribute` 键值编辑（读 `ConfigGet`、批量 `ConfigUpdate`）。
+  - `src/api/paily.ts`：**自含** typed API 层（fetch + bearer；不依赖 vben 原生 request 链路）；
+  - `src/router/routes/modules/paily.ts`：Paily 菜单组（Sources/Nodes/Scoring）。
+- 文件在仓库存于 `web/vben-admin/src/`（自研层）；构建部署到校机固定 checkout。
+
+**实测（校机，PG 18.6 + node 24.22.2/pnpm 10.33.2）**：
+| 项 | 结果 |
+|---|---|
+| Rust `build/test/fmt/clippy`（config 端点） | **全 0** |
+| `pnpm run build:ele`（含三页面+路由） | **0**（11/11 tasks，dist.zip 1091908 bytes） |
+
+**关键踩坑（写进文档防复发）**：首次部署**覆盖了 vben 原生 `src/api/request.ts`**——登录链路
+`src/api/core/auth.ts` 依赖其 `requestClient/baseRequestClient` 导出，构建报 MISSING_EXPORT。
+修复：从本地 pristine v5.7.0 解压目录恢复原生 request.ts，自研封装独立为 `paily.ts`（自含 fetch + bearer）。
+**教训：向第三方 monorepo 注入文件前必须先查既有同名导出的消费方。**
+
+**契约缺口升级单（规格 §契约缺口逐条确认仍成立）**：stats/checkers/logs/filter-preview/format-configs、
+`/api/v1/checks`、`/api/v1/subscriptions` CRUD——这些端点在 P1-P5 的实现里对应能力已存在
+（scoring params、fetch runs、profiles/tokens 表），但**未经 Axum 路由暴露**。P7 装配路由时逐个补
+`#[utoipa::path]` + handler，页面随之补齐（Dashboard/Node Detail/Checks/Subscriptions 四页）。
+
 ### 验收 / Acceptance
 
 **机器可校验（通用红线，所有页面共用）**：
