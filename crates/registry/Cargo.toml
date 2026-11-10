@@ -9,3 +9,11 @@ database = { path = "../database" }
 domain = { path = "../domain" }
 anyhow.workspace = true
 uuid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+chrono = "0.4"

@@ -361,6 +361,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "domain",
+ "serde_json",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
@@ -1538,8 +1539,14 @@ name = "registry"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "database",
  "domain",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
  "uuid",
 ]
 

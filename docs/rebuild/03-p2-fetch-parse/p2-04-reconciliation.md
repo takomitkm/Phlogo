@@ -148,6 +148,28 @@ pub async fn mark_dead_and_clean(tx, source_id) -> Result<(), Error> {
 }
 ```
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地**：
+- Migration **`0003_node_membership`**：`nodes.membership varchar(16) DEFAULT 'Linked'`、`nodes.orphaned_at`、`nodes.raw_config_reference`（`source_fetch_runs` 与 `sources.fetch_policy` 在 P1 的 0001 已建，无需重复）。
+- `crates/database/src/reconcile.rs`：事务内 SQL 原语——`insert_fetch_run`/`finish_fetch_run`、`source_status`/`fetch_policy_of`、`upsert_node_by_hash`（`ON CONFLICT (identity_hash) DO UPDATE` 保 last_seen/raw）、`link_node_source`（幂等+刷新 last_seen）、`revive_if_orphaned`、`remove_stale_mappings`（`NOT (node_id = ANY($2))` + `RETURNING`）、`remove_source_mappings`、`mark_orphaned_if_lonely`（**原子 `NOT EXISTS`**，对齐 Go 写法）。
+- `crates/registry/src/reconcile.rs`：`reconcile_fetch_result(pool, source_id, success, nodes, error)`——单事务内：记 run(started)→**失败即 failed 保留一切**→**死源/挂起守卫**（`dead|suspended` → noop finished）→逐节点 upsert+link+复活→按 `fetch_policy`（非 `accumulate` 即 Replace，**默认 Replace 保持 Phlogo 行为**）删消失映射并标记孤儿→run finished + counts。另有 `delete_source`（先删映射标孤儿再删源，同一事务）。
+
+**实测（校机，PG 18.6）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（41.67s） |
+| `cargo test --workspace`（含 `DATABASE_URL`） | **0**——`registry::reconcile` **6 场景全过**：`replace_removes_vanished_and_marks_orphaned`、`failed_fetch_keeps_mappings`、`accumulate_keeps_old`、`delete_source_keeps_shared_nodes`、`empty_replace_orphans_all`、`dead_source_is_guarded` |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+
+**验收对照（§验收 1–8）**：1✓（消失映射删除+node2 Orphaned、node1 Linked）2✓（failed 保留两映射、run=failed）3✓（Accumulate 旧映射保留）4✓（删 A 后 B 的映射与 Linked 不动）5✓（空 Replace 全删+`orphaned_at` 非空）6✓（dead 源 upserted=0、旧映射原样）7✓（映射删除与孤儿标记在同一 `pool.begin()/commit()`；失败分支/守卫分支同样单事务）8✓（clippy 0）。
+
+**说明/偏差**：
+- 孤儿**只标记不物理删**（P4 Retired 流程接管物理删除与测活历史清理）——与 Go `removeSourceMappings` 立即 DELETE 的差异已在文档记录。
+- `lifecycle` crate 未单独建（`mark_dead_and_clean` 的条件 UPDATE 语义将由 P4 清理 Job 落地；本页死源守卫已覆盖「迟到结果不改 dead 源」的核心不变量）。
+- 测试用 `std::slice::from_ref(&n)` 替代 `&[n.clone()]`（clippy `cloned_ref_to_slice_refs`）。
+
 ### 验收 / Acceptance
 
 机器可校验项（集成测试，需 Postgres）：**`cargo test --test integration reconciliation`**

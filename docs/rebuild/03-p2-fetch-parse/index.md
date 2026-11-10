@@ -37,14 +37,16 @@
 
 下列清单是 CI 验收的核心种子（逐项可由集成测试证明）：
 
-- [ ] **Replace 成功删除该来源消失节点的关联**：某来源上一轮关联 node1+node2，本轮只返回 node1，则 node2 对该来源的 `node_sources` 映射被删除（node2 若再无其它来源引用则进入 `Orphaned`）。
-- [ ] **失败抓取保留旧关联**：`success=false` 的抓取结果不产生任何 `node_sources` 删除，旧关联原样保留。
-- [ ] **Accumulate 不删除旧关联**：来源上一轮关联 node1，本轮 Accumulate 只返回 node2（node1 未出现），则 node1 与 node2 的映射都保留。
-- [ ] **删除来源不影响其它来源仍引用的节点**：node1 同时被来源 A、B 引用，删除来源 A 后 node1 仍存在且仍与 B 关联。
-- [ ] **无来源引用的节点进入 `Orphaned`**：某 node 的最后一条 `node_sources` 被移除后，其 `membership` 标记为 `Orphaned` 并记录时间（物理删除/历史清理推迟到 P4）。
-- [ ] **SSRF 防护生效**：对 `127.0.0.1`、`169.254.169.254`（云元数据）、以及私网/链路本地地址的抓取返回错误；良性 URL 在本地测试服务器上成功。
-- [ ] **VProxy 类型不渗透数据库层**：`crates/database` 仅依赖 `crates/domain`，不依赖 `crates/vproxy-adapter`；所有入库结构都是 `domain::NormalizedNode` 或下游表结构。
-- [ ] **指纹稳定性**：改名不产生新身份；凭据/端口/服务器变化产生新身份；字段顺序与无意义缺省/空值规范化后身份稳定。
+- [x] **Replace 成功删除该来源消失节点的关联**：某来源上一轮关联 node1+node2，本轮只返回 node1，则 node2 对该来源的 `node_sources` 映射被删除（node2 若再无其它来源引用则进入 `Orphaned`）。（p2-04 集成测试 `replace_removes_vanished_and_marks_orphaned` ✓）
+- [x] **失败抓取保留旧关联**：`success=false` 的抓取结果不产生任何 `node_sources` 删除，旧关联原样保留。（`failed_fetch_keeps_mappings` ✓）
+- [x] **Accumulate 不删除旧关联**：来源上一轮关联 node1，本轮 Accumulate 只返回 node2（node1 未出现），则 node1 与 node2 的映射都保留。（`accumulate_keeps_old` ✓）
+- [x] **删除来源不影响其它来源仍引用的节点**：node1 同时被来源 A、B 引用，删除来源 A 后 node1 仍存在且仍与 B 关联。（`delete_source_keeps_shared_nodes` ✓）
+- [x] **无来源引用的节点进入 `Orphaned`**：某 node 的最后一条 `node_sources` 被移除后，其 `membership` 标记为 `Orphaned` 并记录时间（物理删除/历史清理推迟到 P4）。（`empty_replace_orphans_all` ✓）
+- [x] **SSRF 防护生效**：对 `127.0.0.1`、`169.254.169.254`（云元数据）、以及私网/链路本地地址的抓取返回错误；良性 URL 在本地测试服务器上成功。（p2-01 6 测试 ✓）
+- [x] **VProxy 类型不渗透数据库层**：`crates/database` 仅依赖 `crates/domain`，不依赖 `crates/vproxy-adapter`；所有入库结构都是 `domain::NormalizedNode` 或下游表结构。（`cargo tree -p database` 无 vproxy ✓）
+- [x] **指纹稳定性**：改名不产生新身份；凭据/端口/服务器变化产生新身份；字段顺序与无意义缺省/空值规范化后身份稳定。（p2-03 14 golden ✓）
+
+> **P2 状态：全部完成（2026-11-11，真实 PG 18.6 验证）。**
 
 > 上述「删除来源」「Orphaned」两条依赖 P1 已落地的 `sources` / `nodes` / `node_sources` CRUD 与 `source.fetch_policy` 列（见 [`CONVENTIONS.md`](CONVENTIONS.md) §2.3）。Phlogo 当前**没有** Replace/Accumulate 区分、也**没有** Orphaned/Retired 状态——这是本阶段与 P4 的重点新增（见 [`CONVENTIONS.md`](CONVENTIONS.md) §2.9）。
 

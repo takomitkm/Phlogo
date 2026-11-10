@@ -426,3 +426,23 @@ cargo clippy -p domain --all-targets -- -D warnings
 **修正**：`decode_utf8_lossy` → `decode_utf8()`（非法转义保持原串，对齐 Go `url.PathUnescape` 报错语义）。
 
 **决策**：P2-03 **PASS**。**v1 canonical = type|server|port|auth|transport|tls|network_options**（按方案 §7.3 纳入连接语义参数；Phlogo 四段式记为 version 0 兼容口径，不产出）。进入 P2-04（对账入库 + fetch run 历史）。
+
+---
+
+## [UTC 2026-11-10T16:30:00Z] S18 · P2-04 对账入库（Replace/Accumulate + 死源守卫 + 孤儿标记；6 集成测试全绿）
+
+**动作**：migration `0003_node_membership`；`database::reconcile` 事务原语；`registry::reconcile_fetch_result` + `delete_source`；`registry/tests/reconcile.rs` 6 场景。
+
+**命令**（校机，PG 18.6）：
+```
+cargo build --workspace --all-targets
+DATABASE_URL=postgres://paily:change-me@127.0.0.1:5432/paily cargo test --workspace
+cargo fmt --all / cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+**结果**：`build/test/fmt/clippy` 全 **0**；reconcile 6 场景全过（Replace 删消失+Orphaned、failed 保留、Accumulate 保留、删源不伤共享节点、空 Replace 全孤儿、死源守卫）。
+
+**过程修正**：`database/Cargo.toml` 曾被 edit 拼坏（`}anyhow` 同行）修复；`registry` 补 `serde_json/serde/sqlx/thiserror`；`delete_source` 去掉 anyhow 依赖改直用 SQL；moved value（`error.clone()`）、`explicit_auto_deref`（`&mut *tx`→`&mut tx`）、`cloned_ref_to_slice_refs`（`from_ref`）逐个清掉。
+
+**决策**：P2-04 **PASS**。**P2 阶段（fetch+SSRF / 解析 / 指纹 / 对账）全部完成**。下一步进入 P3（测活 check：icmp/tcp/http 探测、`node_status` 窗口）。

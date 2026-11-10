@@ -28,4 +28,6 @@ pub struct NodeRow {
     pub port: i32,
     pub first_seen_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
+    pub membership: String,
+    pub orphaned_at: Option<DateTime<Utc>>,
 }
