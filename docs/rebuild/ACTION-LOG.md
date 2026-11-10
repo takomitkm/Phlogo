@@ -634,3 +634,15 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **实测**（校机 PG 18.6）：build/test/fmt/clippy 全 **0**（含 P2-01 SSRF 6 测试——验收 #4 引用）；compose lint 13/13。cargo audit 需 crates.io 网络在 CI 跑（校机 rsproxy 不承载 audit DB，如实标注）。
 
 **决策**：P7-03 **PASS**。**P0–P7 全部页面完成**。做整体验收清点后收口。
+
+---
+
+## [UTC 2026-11-11T07:20:00Z] S34 · Podman 优先改造 + 真机冒烟（compose 解析/postgres 拉起/端口语义全过）
+
+**动作**：新增 `scripts/runtime.sh`（podman compose → podman-compose → docker compose 解析链），backup/restore 改 source 它；README 改 podman-first；compose `WEB_IMAGE` 改默认 `nginx:alpine`（不再强制变量）。
+
+**真机验证（本机 podman 6.1.4 + WSL machine）**：装 podman-compose 1.6.0；配 daocloud 镜像源（docker.io 直连超时）后 pull 成功；`podman compose config --services` 六服务识别 0；`up postgres` 0 + `pg_isready` accepting connections；**`compose port postgres 5432` 报错（无宿主映射）——§16.10 端口语义在 podman 下成立**；down 0。
+
+**踩坑**：PS 5.1 无 `utf8NoBOM` Encoding；`podman machine ssh` 的 heredoc 会落到 Windows 侧 `%APPDATA%\containers\`（宿主与 machine 共读该配置目录），TOML 引号被剥导致解析失败——用 .NET WriteAllText 重写。
+
+**决策**：Podman 兼容 PASS（deploy 全套双运行时可用）。

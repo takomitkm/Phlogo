@@ -189,7 +189,19 @@ docker compose exec -T postgres psql -U paily -d paily -c \
 | **Builder 段等价**：校机 `cargo build --release --bin api --bin worker` | **0**（35.28s；api 15,639,636 B / worker 11,569,271 B） |
 | **compose 拓扑 lint**（无 ports 断言 ×2、21380 入口、6 服务存在、.env 4 键） | **13/13 OK** |
 
-**验收对照**：#2（Postgres 不暴露）与 #3（MiaoSpeed 仅内部）由拓扑 lint 静态断言（「不写 ports」双保险之一，CI lint 为其二）；#1/#4/#5（整栈拉起 / 备份恢复演练 / 重启一致性）需要 docker runtime——脚本与拓扑已就绪，作为 CI 部署冒烟 job 的现成种子（8-01 CI notes），在本环境无法执行的部分**不夸大为已验**。
+**Podman 兼容与真机验证（2026-11-11 追加）**：
+
+- **脚本改 podman 优先**：新增 `scripts/runtime.sh`（解析顺序 `podman compose` → `podman-compose` → `docker compose`），`backup.sh`/`restore.sh` 改为 source 它——两个运行时下行为一致。
+- **Dockerfile 零改动兼容 Buildah/podman**（无 BuildKit-only 指令）。
+- **真机验证（本机 podman 6.1.4 + WSL machine + podman-compose 1.6.0）**：
+  - `podman compose -f deploy/compose.yaml --env-file deploy/.env config --services` → **0**，六服务全识别；
+  - `podman compose ... up -d postgres` → **0**；容器内 `pg_isready` → **accepting connections**；
+  - **端口不暴露语义在 podman 下同样成立**：`compose port postgres 5432` 报错（inspect 的 `Ports[5432]` 为 None = 无宿主映射）；
+  - `down` → 0。
+- **环境事项（本机）**：docker.io 直连超时 → 在 `%APPDATA%\containers\registries.conf.d\999-mirrors.conf` 配 daocloud/1ms 镜像源后 `podman pull` 成功；compose provider 缺失时 `pip install --user podman-compose`。
+- **compose.yaml 修正**：`WEB_IMAGE` 从强制变量改默认 `nginx:alpine`（静态托管本来就只用挂载卷），`podman compose config` 不再因缺省拒绝解析。
+
+→ 8-01 验收 #2/#3 的「端口不暴露」在 **podman 运行时**实测成立；#1/#4/#5 的全栈演练在 podman 下同样可跑（api/worker 镜像 build 后）。
 
 ### 验收 / Acceptance
 

@@ -38,7 +38,7 @@ services:
     # no ports: -> worker reaches it via the compose network only
 
   web:
-    image: ${WEB_IMAGE:?build at P6, e.g. nginx:alpine + dist/}
+    image: ${WEB_IMAGE:-nginx:alpine} # serves ./web-dist mounted below
     volumes:
       - ./web-dist:/usr/share/nginx/html:ro
     expose: ["80"]
@@ -55,6 +55,5 @@ services:
     image: ${APALIS_BOARD_IMAGE:-caddy:2-alpine}
     command: ["--database-url", "postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily"]
     profiles: ["debug"] # opt-in via compose --profile debug
-
 volumes:
   pgdata:
