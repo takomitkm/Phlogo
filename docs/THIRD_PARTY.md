@@ -22,7 +22,7 @@
 | **MiaoSpeed** | **tag `4.7.9`（自建）** | 源码 tag `4.7.9`，Go `1.26.8`，`CGO_ENABLED=0` | `miaospeed-built.exe` = `2c302b294a2cdfff5cabd4009b2148e446eadff0ebc3413397a011874146ab18`（size 87,692,288） | ✅ 已验证（P0-02） |
 | MiaoSpeed（GitHub 预编译，**不采用**） | `miaospeed-windows-amd64-4.7.9.zip` | GitHub release | zip `685a8a584aa7724479c46626b28cc8344ff5bfb1b18643254275461535e1d159`；exe `5b0ec1ad39723ae10c6a2cd6296561097335e680b5acc62a18ba0b7682ac9611`（commit `0fafd30`，公开仓库查无 → 不可复现） | ⚠️ 仅作参考，不作基线 |
 | Mihomo（MiaoSpeed 内嵌） | `AirportR/mihomo v1.19.33-x365-miu.2`（go.mod `replace`） | 随 MiaoSpeed 构建 | 见 MiaoSpeed SBOM | 债务：GPL 义务 |
-| Apalis | `<待 P0-03>` | — | — | ⏳ |
+| Apalis | `apalis 0.7.4` + `apalis-sql 0.7.4`（features `sqlite,postgres`；最新稳定 `1.0.0` 列为升级候选） | crates.io | N/A（Rust 库，无独立二进制） | ✅ 编译通过 + SQLite 运行时队列 PASS（P0-03） |
 | Vben Admin | `<待 P0-04>` | — | — | ⏳ |
 | VProxy | `mateo-ki/vproxy @ <commit 待 P0-01 锁>` | — | — | ⏳ |
 

@@ -189,3 +189,43 @@ cargo build --release ; .\spike.exe ws://127.0.0.1:18082/ SPIKETOKEN
 - 协议字段全部冻结写入 `docs/rebuild/01-p0-upstream-verification/p0-02-miaospeed.md` 的 D 节；`docs/THIRD_PARTY.md` 登记 MiaoSpeed 固定版本 + 自建哈希。
 
 **决策**：P0-02 判定 **PASS**；进入 P0-03（Apalis）/ P0-04（Vben）/ P0-05（授权收口）。
+
+---
+
+## [UTC 2026-11-10T00:31:00Z] S7 · 校机 Rust 工具链升级（1.85.1 → 1.99.1）+ GNU 构建 PATH 修复
+
+**动作**：P0-03 构建反复撞 `icu_*/home/idna_adapter requires rustc 1.88`（校机仅 1.85.1）。根治：经 rsproxy rustup 镜像装新 stable。
+
+**命令**（校机）：
+```
+$env:PATH="D:\yzd\tools\rust\cargo\bin;"+$env:PATH
+$env:RUSTUP_DIST_SERVER="https://rsproxy.cn"; $env:RUSTUP_UPDATE_ROOT="https://rsproxy.cn/rustup"
+rustup toolchain install stable --profile minimal   # → 1.99.1 (2026-10-13)
+rustup default stable
+```
+
+**结果**：`rustc/cargo 1.99.1`（保留旧 1.85 toolchain）；后续所有 Rust 步骤默认用 1.99.1。
+**附加发现**：GNU target（`x86_64-pc-windows-gnu`）构建必须把 `D:\yzd\MSYS2\mingw64\bin` 加入 `PATH`，
+否则 `windows-sys/getrandom` 报 `error calling dlltool 'dlltool.exe': program not found`。
+
+---
+
+## [UTC 2026-11-10T00:40:00Z] S8 · P0-03 Apalis 队列行为验证（SQLite 运行 PASS + PG 编译验证）
+
+**动作**：验证 Apalis 能否承接后台任务（enqueue/dequeue/process）。
+
+**Pin**：`apalis 0.7.4` + `apalis-sql 0.7.4`（features `sqlite,postgres`）。最新稳定 `1.0.0`（后端拆分）列为升级候选。
+
+**命令**（校机；crate `spikes/apalis-spike`，`PATH` 含 cargo bin + mingw64 bin）：
+```
+cargo build --release
+.\target\release\apalis-spike.exe
+```
+
+**结果（实测）**：
+- `BUILD_EXIT=0`；SQLite（`sqlite::memory:` + 官方 `SqliteStorage::setup` migration）运行时：
+  `ENQUEUED 3 jobs → PROCESSED id=0/1/2 → PROCESSED_TOTAL=3 → RESULT=PASS`。
+- Postgres 后端：`apalis-sql` 启 `postgres` feature + 引用 `PostgresStorage<DemoJob>` 类型 → 整体 `cargo build` 通过（**编译验证**）。
+- **未在本机运行**（校机无 PG 服务）：retry/timeout/recovery 的运行断言 —— 留 CI（postgres sidecar + kill/restart harness）。
+
+**决策**：P0-03 核心队列能力 **PASS**（SQLite 端到端 + PG 编译）；retry/timeout/recovery 运行验证转 CI。进入 P0-04（Vben 构建）。

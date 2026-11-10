@@ -21,8 +21,13 @@
 
 ### 前置 / Prerequisites
 
-- Rust 工具链 + `apalis` crate 固定为 `<PIN Apalis version>`。
-- PostgreSQL 实例可用（本地或容器），供 spike 连接。
+- Rust 工具链 + `apalis` crate 固定为 **`0.7.4`**（`apalis` + `apalis-sql 0.7.4`，features `sqlite,postgres`）。
+  - 注：crates.io 最新稳定为 **1.0.0**（2026-10-12，后端 crate 拆分为 `apalis-sql`/`apalis-postgres`/`apalis-redis`，
+    `WorkerBuilder` 后端第二参、metadata 改 KV、`apalis-sql` 移除 `Sql*` 前缀等破坏性变更）。本 spike 以**成熟的 0.7.4** 为验证基线；
+    1.0.0 列为升级候选，待 P1 定稿再评估迁移。
+- **校机工具链**：`rustc/cargo 1.99.1`（由 1.85.1 经 `RUSTUP_DIST_SERVER=https://rsproxy.cn` 升级；1.85 低于 `icu_*/home` 要求的 1.88）。
+  GNU target 构建需把 `D:\yzd\MSYS2\mingw64\bin` 加入 PATH（提供 `dlltool.exe`/`ar`/`gcc`，否则 `windows-sys/getrandom` 报 `dlltool not found`）。
+- PostgreSQL 实例可用（本地或容器），供 spike 连接（**校机无 PG，PG 运行时验证见「验证结果」：仅编译验证，运行留 CI**）。
 - Apalis 文档：<https://docs.rs/apalis>（方案 §20）。
 - 已读方案 §3「Apalis」行与 §3.1「Apalis」段；已读方案 §5.1 末句关于「不要在业务表里假设 Apalis 内部任务表名」。
 - 可选：Apalis Board 用于兼容性观测。
@@ -114,6 +119,55 @@ async fn main() -> anyhow::Result<()> {
 
 - 部署/连接 Apalis Board（方案 §2.2 / §12）。
 - 断言：能在 Board 上观测到上述 job 的入队、执行、失败/重试状态。
+
+### 验证结果 / Verified Results（已实测，2026-11-10）
+
+> 环境：校机 `rustc 1.99.1`（`x86_64-pc-windows-gnu`），PATH 含 `D:\yzd\tools\rust\cargo\bin` 与 `D:\yzd\MSYS2\mingw64\bin`；依赖经 `rsproxy` sparse 镜像。
+
+**A. SQLite 后端运行时（真实跑通，无需服务器）** — `spikes/apalis-spike`：
+
+```toml
+apalis = "0.7.4"
+apalis-sql = { version = "0.7.4", features = ["sqlite", "postgres"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio","sqlite","postgres"] }
+```
+
+```rust
+use apalis::prelude::*;
+use apalis_sql::sqlite::SqliteStorage;
+let pool = SqlitePool::connect("sqlite::memory:").await?;
+SqliteStorage::setup(&pool).await?;                 // 官方 migration（不手写表）
+let storage: SqliteStorage<DemoJob> = SqliteStorage::new(pool);
+storage.clone().push(DemoJob{id}).await?;           // enqueue
+Monitor::new().register(
+    WorkerBuilder::new("w").enable_tracing().backend(storage).build_fn(handle) // dequeue+process
+).run().await?;
+```
+
+**实测输出（`cargo build --release` + 运行）**：
+```
+ENQUEUED 3 jobs
+PROCESSED id=0 count=1
+PROCESSED id=1 count=2
+PROCESSED id=2 count=3
+PROCESSED_TOTAL=3
+RESULT=PASS
+```
+→ **入队→取出→执行→完成** 全链路通过（`BUILD_EXIT=0`，二进制运行 `RUN_EXIT=0`）。
+
+**B. PostgreSQL 后端（编译验证通过）**：`apalis-sql` 启用 `postgres` feature，并在代码中引用
+`apalis_sql::postgres::PostgresStorage::<DemoJob>` 类型 → 整个 workspace `cargo build` 成功。
+**未做** PG 运行时（校机无 PG 服务）：enqueue/dequeue/retry/timeout/recovery 的**运行断言留 CI**（postgres sidecar，见 CI 提示）。
+
+**C. 未在本地运行、留 CI 的项（明确标注，不夸大为已验）**：
+- `retry`：Apalis 通过 `WorkerBuilder` 的 retry 层 + 处理器返回 `Err` 触发；运行断言（重试到上限）留 CI。
+- `timeout`：`.timeout(Duration)` 层；运行断言留 CI。
+- `recovery`（kill -9 重启后未完成任务重取）：依赖 PG/sqlite 的 heartbeat/orphaned re-enqueue（`apalis-postgres` 文档明确支持）；需进程重启 harness，留 CI。
+- **Board**：`apalis-board` 兼容性（PG/sqlite/mysql 全支持）记录为可用，未部署实测。
+
+**D. 关键结论**：Apalis 满足后台任务需求（可靠队列、持久化、官方 migration、与业务表可分离）；0.7.4 在本机可复现构建并跑通核心队列；破坏性 API 风险集中在 0.7→1.0 升级，PIN 时需锁版本并加集成测试锁定 retry/timeout/recovery 行为。
 
 ### 验收 / Acceptance
 
