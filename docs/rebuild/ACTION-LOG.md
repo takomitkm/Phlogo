@@ -294,3 +294,24 @@ cargo clippy --workspace --all-targets -- -D warnings
 **结果**：`BUILD_EXIT=0`（33.18s，axum 0.7.9 / sqlx 0.8.6 / utoipa 5.5.0 均编译）、`FMT_EXIT=0`、`CLIPPY_EXIT=0`；`Cargo.lock`（242 包）回传仓库待提交。
 
 **决策**：P1-01 判定 **PASS**。`apalis` 仅占位不 `use`，P3 再启用。进入 P1-02（Axum+分层认证骨架）。
+
+---
+
+## [UTC 2026-11-10T01:34:00Z] S12 · P1-02 Axum API 骨架 + 分层认证（build/test/fmt/clippy 全绿 + 冒烟 200/401/404）
+
+**动作**：`apps/api` 改 lib+bin；实现 Figment 配置（显式 PAILY_ env 覆盖）、auth 中间件、路由装配、OpenAPI JSON 端点。
+
+**命令**（校机 `C:\Users\YiZhidi\phlogo-rs`，PATH 含 cargo+mingw64）：
+```
+cargo build --workspace --all-targets
+cargo test -p api
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+# 运行期冒烟：$env:PAILY_SERVER_PORT=28099; .\target\debug\api.exe & curl 200/401/404
+```
+
+**结果**：`BUILD_EXIT=0`、`TEST_EXIT=0`（4 passed：health/protected-401/unknown-404/openapi-200）、`FMT_EXIT=0`、`CLIPPY_EXIT=0`；
+冒烟 **`health=200 post_sources=401 unknown=404`**（`PAILY_SERVER_PORT` 覆盖生效）。
+
+**偏差**：`utoipa-swagger-ui 8.1.0` build.rs 与 `zip 2.6.1` 不兼容 → 本轮改用 `/api-docs/openapi.json` 提供 OpenAPI JSON（Swagger UI 静态资源后续钉版本再启用）。
+**决策**：P1-02 判定 **PASS**。进入 P1-03（SQLx 迁移 + configs seed；校机无 PG，运行验证拟装便携 PG 或转 CI）。

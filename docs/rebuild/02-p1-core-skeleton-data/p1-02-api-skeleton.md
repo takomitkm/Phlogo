@@ -199,6 +199,30 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+### 验证结果 / Verified Results（已实测，2026-11-10）
+
+> 环境：校机 `rustc 1.99.1`；`PATH` 含 cargo bin + `D:\yzd\MSYS2\mingw64\bin`。
+
+**落地结构**：
+- `apps/api` 改为 **lib + bin**：`src/lib.rs`（`pub mod auth/router/telemetry`）+ 薄 `src/main.rs`（组合根）；测试放 crate 内 `#[cfg(test)] mod smoke`（可访问 axum/tower）。
+- `crates/config`（包名 `app-config`）：`Config`（server/database/auth），`Config::load` = 默认值 → 可选 YAML → **显式 `PAILY_` env 覆盖**（`PAILY_SERVER_PORT`/`PAILY_DATABASE_DSN`/`PAILY_AUTH_*` 等），不依赖 Figment env 分隔符魔法，行为确定。
+- `apps/api/src/auth.rs`：`bearer_token` + `verify_jwt`（HS256、校验 `token_type=="access"`）+ 中间件 `require_admin_or_service`（service bearer **或** admin access JWT）。应用于 `/api/v1/*`。
+- `apps/api/src/router.rs`：`/health` 与 `/api-docs/openapi.json` 公开；`/api/v1/*` 统一挂 `require_admin_or_service`；`fallback` 404。
+- OpenAPI：`/api-docs/openapi.json` 直接输出 utoipa `ApiDoc::openapi().to_json()`。
+
+**实测（校机）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **BUILD_EXIT=0**（34.09s） |
+| `cargo test -p api` | **TEST_EXIT=0**，`4 passed`（health 200 / protected 401 / unknown 404 / openapi 200） |
+| `cargo fmt --all -- --check` | **FMT_EXIT=0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **CLIPPY_EXIT=0** |
+| 运行期冒烟（`PAILY_SERVER_PORT=28099` + `curl`） | **`health=200 post_sources=401 unknown=404`**（env 覆盖生效，服务监听 28099） |
+
+**偏差记录（诚实标注）**：
+- **`utoipa-swagger-ui` 静态 UI 暂缺**：`utoipa-swagger-ui 8.1.0` 的 `build.rs` 与解析到的 `zip 2.6.1` API 不兼容（`ZipError::InvalidArchive` 需 `Cow<'static,str>`），构建失败。**处置**：本轮去掉 swagger-ui 静态资源，改由 `/api-docs/openapi.json` 提供 OpenAPI JSON（文档仍“可访问”）；后续如需 Swagger UI，钉一组兼容的 `utoipa-swagger-ui`+`zip` 版本再启用。
+- **细粒度分层（`/check/*` checker、`/fetch/*` service）未在 P1 拆**：P1-02 对 `/api/v1/*` 统一用 `admin-or-service`（满足 401 验收）；checker/fetch 专属层在 P2/P3 接入时补。
+
 ### 验收 / Acceptance
 
 | 命令 / 行为 | 预期 |
