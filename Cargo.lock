@@ -87,6 +87,7 @@ name = "api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "apalis-sql",
  "api-contract",
  "app-config",
  "axum",
@@ -109,6 +110,7 @@ dependencies = [
  "tracing-subscriber",
  "utoipa",
  "uuid",
+ "worker",
 ]
 
 [[package]]
@@ -3226,14 +3228,20 @@ dependencies = [
  "apalis",
  "apalis-sql",
  "app-config",
+ "axum",
  "database",
+ "domain",
+ "fetch",
+ "lifecycle",
  "observability",
+ "registry",
  "serde",
  "sqlx",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "vproxy-adapter",
 ]
 
 [[package]]

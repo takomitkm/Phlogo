@@ -1,11 +1,13 @@
-//! paily worker binary: Apalis PG storage + CheckJob worker (P3-01).
+//! paily worker binary: Apalis PG storage + Fetch/Check workers + periodic jobs.
 //! Apalis storage lives in its own `paily_jobs` database (official apalis migrations);
 //! business tables (incl. `check_runs`) stay in the main database.
+use std::time::Duration;
+
 use apalis::prelude::*;
 use apalis_sql::postgres::PostgresStorage;
 use sqlx::PgPool;
 
-use worker::{handle_check, CheckJob};
+use worker::{handle_check, handle_fetch, CheckJob, FetchJob};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -17,27 +19,57 @@ async fn main() -> anyhow::Result<()> {
 
     let jobs_dsn = worker::jobs_dsn(&cfg);
     let jobs_pool: PgPool = database::connect(&jobs_dsn).await?;
-    let storage: PostgresStorage<CheckJob> = PostgresStorage::new(jobs_pool.clone());
+    let check_storage: PostgresStorage<CheckJob> = PostgresStorage::new(jobs_pool.clone());
+    let fetch_storage: PostgresStorage<FetchJob> = PostgresStorage::new(jobs_pool.clone());
     PostgresStorage::setup(&jobs_pool)
         .await
         .expect("unable to run apalis postgres migrations (create the jobs database first)");
 
-    let mut producer = storage.clone();
-    let demo = CheckJob {
-        run_id: uuid::Uuid::new_v4(),
-        checker_tag: "default".into(),
-        node_ids: vec![],
-        presets: vec!["idle".into()],
-    };
-    producer.push(demo).await?;
-    tracing::info!(jobs = %jobs_dsn, "worker started; demo CheckJob enqueued");
+    // Periodic scheduling: batch-enqueue fetches for active sources, then run one
+    // lifecycle cleanup tick — both on fixed intervals (plan §2.1 worker loop).
+    let sched_pool = pool.clone();
+    let mut sched_fetch = fetch_storage.clone();
+    tokio::spawn(async move {
+        let mut fetch_tick = tokio::time::interval(Duration::from_secs(300));
+        let mut cleanup_tick = tokio::time::interval(Duration::from_secs(600));
+        loop {
+            tokio::select! {
+                _ = fetch_tick.tick() => {
+                    match worker::fetch_job::enqueue_for_active_sources(&mut sched_fetch, &sched_pool).await {
+                        Ok(n) if n > 0 => tracing::info!(enqueued = n, "fetch batch scheduled"),
+                        Ok(_) => {}
+                        Err(e) => tracing::error!(error = %e, "fetch scheduling failed"),
+                    }
+                }                _ = cleanup_tick.tick() => {
+                    match lifecycle::run_cleanup_cycle(&sched_pool).await {
+                        Ok(r) if r.retired > 0 || r.deleted > 0 => {
+                            tracing::info!(retired = r.retired, deleted = r.deleted, "cleanup tick acted")
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::error!(error = %e, "cleanup tick failed"),
+                    }
+                }
+            }
+        }
+    });
+
+    tracing::info!(jobs = %jobs_dsn, "worker started (fetch + check + scheduler)");
 
     Monitor::new()
         .register({
+            let p = pool.clone();
+            WorkerBuilder::new("paily-fetch-worker")
+                .enable_tracing()
+                .data(p)
+                .backend(fetch_storage)
+                .build_fn(handle_fetch)
+        })
+        .register({
+            let p = pool.clone();
             WorkerBuilder::new("paily-check-worker")
                 .enable_tracing()
-                .data(pool)
-                .backend(storage)
+                .data(p)
+                .backend(check_storage)
                 .build_fn(handle_check)
         })
         .run()

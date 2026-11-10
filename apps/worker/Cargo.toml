@@ -17,3 +17,11 @@ apalis-sql.workspace = true
 observability = { path = "../../crates/observability" }
 app-config = { path = "../../crates/config" }
 database = { path = "../../crates/database" }
+domain = { path = "../../crates/domain" }
+fetch = { path = "../../crates/fetch" }
+registry = { path = "../../crates/registry" }
+vproxy-adapter = { path = "../../crates/vproxy-adapter" }
+lifecycle = { path = "../../crates/lifecycle" }
+
+[dev-dependencies]
+axum.workspace = true

@@ -37,6 +37,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 | **P5** | 筛选与订阅发布 | `06-p5-filter-subscription/` | filter-ast · quota-limit · subscription-output |
 | **P6** | 管理前端 | `07-p6-admin-ui/` | vben-scaffold · pages |
 | **P7** | 生产化 | `08-p7-productionization/` | compose-backup · observability · security-hardening |
+| **收口** | 自补记录 | `09-self-completed-gaps.md` | 收口后自查补齐的缺口（fetch 闭环接线/调度/登录/触发）+ 推迟项 + 换构架评估输入 |
 
 ### 实施状态总览（2026-11-11 收口）
 

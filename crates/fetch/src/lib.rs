@@ -19,12 +19,19 @@ pub struct FetchPolicy {
 
 impl Default for FetchPolicy {
     fn default() -> Self {
+        // Test/dev escape hatch: PAILY_FETCH_ALLOW_LOOPBACK=1 allows loopback targets
+        // (the SSRF guard blocks them by default; production never sets this).
+        let allowlist = if std::env::var("PAILY_FETCH_ALLOW_LOOPBACK").as_deref() == Ok("1") {
+            vec!["127.0.0.0/8".parse().expect("valid cidr")]
+        } else {
+            Vec::new()
+        };
         Self {
             connect_timeout: Duration::from_secs(10),
             total_timeout: Duration::from_secs(60),
             max_response_bytes: 16 * 1024 * 1024,
             max_redirects: 5,
-            allowlist: Vec::new(),
+            allowlist,
         }
     }
 }

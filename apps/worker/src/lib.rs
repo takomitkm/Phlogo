@@ -1,7 +1,12 @@
-//! paily-core-rust worker library: Apalis job definitions + idempotent side effects.
+//! paily-core-rust worker library: Apalis job definitions + idempotent side effects
+//! + the fetch closed loop (P2) and periodic scheduling entry points.
 pub mod check_job;
+pub mod fetch_job;
 
 pub use check_job::{finish_check_run, handle_check, record_check_run, CheckJob};
+pub use fetch_job::{
+    enqueue_for_active_sources, handle_fetch, run_fetch, trigger_fetch_batch, FetchJob,
+};
 
 /// Derive the Apalis (job-queue) DSN from the main DSN unless explicitly provided.
 /// The queue uses its OWN database so apalis's embedded sqlx migrations never share

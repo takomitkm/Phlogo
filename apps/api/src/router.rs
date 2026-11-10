@@ -11,7 +11,7 @@ use utoipa::OpenApi;
 use app_config::Config;
 
 use crate::auth::{require_admin_or_service, AuthState};
-use crate::handlers::{config, metrics, node, source, subscription, subscriptions_admin, views};
+use crate::handlers::{auth, config, fetch_trigger, metrics, node, source, subscription, subscriptions_admin, views};
 use crate::state::AppState;
 
 async fn health() -> &'static str {
@@ -36,7 +36,7 @@ async fn openapi_json() -> impl IntoResponse {
 pub fn build(cfg: Config) -> Router {
     // Lazy pool: no connection until a handler issues a query, so health/auth tests work without DB.
     let pool = database::connect_lazy(&cfg.database.dsn).expect("invalid database dsn");
-    let state = AppState::new(pool);
+    let state = AppState::new(&cfg, pool);
 
     let auth = AuthState {
         service_secret: cfg.auth.service_secret.clone(),
@@ -44,6 +44,8 @@ pub fn build(cfg: Config) -> Router {
     };
 
     let api_v1 = Router::new()
+        .route("/auth/login", post(auth::login))
+        .route("/fetch/trigger", post(fetch_trigger::trigger))
         .route("/sources", get(source::list).post(source::create))
         .route(
             "/sources/:id",
