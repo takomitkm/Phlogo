@@ -1,0 +1,13 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Go / runtime data
+/data/
+*.db
+*.db-shm
+*.db-wal
+
+# env / local
+.env
+.tmp/

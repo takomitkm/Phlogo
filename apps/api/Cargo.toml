@@ -1,0 +1,15 @@
+[package]
+name = "api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+axum.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+api-contract = { path = "../../crates/api-contract" }
+app-config = { path = "../../crates/config" }
+domain = { path = "../../crates/domain" }
+database = { path = "../../crates/database" }

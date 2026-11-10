@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/api",
+    "apps/worker",
+    "crates/domain",
+    "crates/database",
+    "crates/config",
+    "crates/api-contract",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "AGPL-3.0"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# runtime / web
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["macros"] }
+# database
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid", "json"] }
+# observability / config
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+figment = { version = "0.10", features = ["env", "yaml"] }
+# api contract
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "8", features = ["axum"] }
+# auth / ids
+jsonwebtoken = "9"
+uuid = { version = "1", features = ["v4", "serde"] }
+# serialization / errors
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# job queue (enabled at P3; declared only here in P1)
+apalis = { version = "0.7", features = ["postgres"] }

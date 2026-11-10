@@ -1,0 +1,13 @@
+[package]
+name = "worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+domain = { path = "../../crates/domain" }
+database = { path = "../../crates/database" }
+app-config = { path = "../../crates/config" }

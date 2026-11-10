@@ -125,6 +125,30 @@ api-contract        = { path = "../crates/api-contract" }
 # rustflags = ["-D", "warnings"]   # 本地开发不建议常开；CI 用 clippy -D warnings
 ```
 
+### 验证结果 / Verified Results（已实测，2026-11-10）
+
+> 环境：校机 `rustc 1.99.1`（`x86_64-pc-windows-gnu`）；`PATH` 含 `D:\yzd\tools\rust\cargo\bin` + `D:\yzd\MSYS2\mingw64\bin`；`rustfmt`/`clippy` 组件已装（`rustup component add rustfmt clippy --toolchain stable`，rsproxy 镜像）。
+
+**落地结构（仓库根 workspace，遵循 §13）**：
+```
+Cargo.toml (workspace, resolver=2; members: apps/api apps/worker crates/{domain,database,config,api-contract})
+rust-toolchain.toml (channel=stable, components=[rustfmt,clippy])
+.gitignore (target/ 等)
+apps/api|worker/{Cargo.toml,src/main.rs}     # 占位 fn main()
+crates/domain|database|config|api-contract/{Cargo.toml,src/lib.rs}
+```
+> 配置 crate 目录名 `crates/config`，包名 `app-config`（避免与生态 `config` 冲突），依赖键 `app-config`。
+
+**实测（校机）**：
+| 命令 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **BUILD_EXIT=0**，Finished 33.18s；编译 `axum 0.7.9`、`sqlx 0.8.6`、`utoipa 5.5.0`、`tracing`、`figment/serde_yaml` 等 |
+| `cargo fmt --all -- --check` | **FMT_EXIT=0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **CLIPPY_EXIT=0**（0 warning） |
+| `Cargo.lock` | 已生成并回传提交（**242** 个 package，`version = 4`） |
+
+**注**：`apalis` 仅在 `[workspace.dependencies]` 占位声明，**未被任何 crate `use`**，故未进入编译图（P3 再启用）。
+
 ### 验收 / Acceptance
 
 | 命令 | 预期退出码 / 输出 |
