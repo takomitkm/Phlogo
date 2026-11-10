@@ -525,3 +525,17 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **实测**（校机 PG 18.6）：build/test/fmt/clippy 全 **0**；per-tag 独立、dead 不删关联、孤儿保留窗口（新鲜孤儿不动/超期一个 tick 删净含历史）、跨 tag 窗口聚合全过。迟到守卫由 P3-04 场景覆盖（同一 SQL）。
 
 **决策**：P4-02 **PASS**。进入 P4-03（评分引擎：速度分支、jitter 阈值、等级映射、衰减）。
+
+---
+
+## [UTC 2026-11-11T04:30:00Z] S25 · P4-03 评分引擎（EWMA 移植 + golden 0.967722 更正；5 测试全绿；P4 全部完成）
+
+**动作**：新 crate `crates/scoring`：`compute_score` 逐行移植 + `ScoreResult/components/version/InsufficientData`（net-new）+ `node_scores` 落库与 `nodes.score=AVG(score>0)` 回写；migration 0007/0008。
+
+**三个开放决策定稿**：speed 分支按 **Go 代码基线**（始终混合，未测=0）；**jitter 权威阈值=200ms**（seed 值，Go 70 仅代码级 fallback）；取最近 20 条加 **`, id DESC`** tie-break。
+
+**golden 更正**：规格手算 0.967718 有中间舍入误差；独立复算 `ln` 精确值 → `scoreLat=0.916511`、`quality=0.928270`、**score=0.967722**，与移植输出一致，文档与测试同改。
+
+**实测**（校机 PG 18.6）：build/test/fmt/clippy 全 **0**；5/5（golden、不可达最差、6 位舍入、AVG 忽略零分、version/insufficient）。
+
+**决策**：P4-03 **PASS**。**P4 阶段（状态机 / 健康+清理 / 评分）全部完成**。下一步进入 P5（过滤 AST + 订阅输出）。

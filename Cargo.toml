@@ -10,6 +10,7 @@ members = [
     "crates/vproxy-adapter",
     "crates/checker-miaospeed",
     "crates/lifecycle",
+    "crates/scoring",
     "crates/config",
     "crates/api-contract",
 ]

@@ -193,6 +193,36 @@ pub struct ScoreComponents {
 （空记录仅返回 0）。Rust 引入可配置 `score_min_samples`（建议默认如 1 或 3），低于则
 `status = InsufficientData`、`score` 返回 0 或 `None`，不写 `nodes.score`。默认值需在 P4 验收固定。
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**三个开放决策定稿**（规格 §风险全部闭合）：
+1. **speed 分支 = Go 代码基线（始终混合）**：`speed>=0` 恒真，未测速度=0 参与计算（`speedScore=0`）；「缺速度不混合」留迭代项。
+2. **jitter 阈值权威值 = 200ms**（config seed `score_jitter_linear_threshold_ms=200`，`t=0.2`）；Go `loadParams` 的 70 兜底仅作代码级 fallback（`t<=0||t>=1` 时）。
+3. **取最近 20 条加 `, id DESC` tie-break**（`recent_deep_checks`），同毫秒记录顺序确定。
+
+**落地**（新 crate `crates/scoring`）：
+- `engine.rs`：`compute_score` 逐行移植（EWMA、`-1→3000/1000`、对数延迟曲线、jitter 线性/平方衰减、quality 归一、speed 混合、6 位舍入）+ net-new `ScoreResult{version="ewma-v1", status, components}`（分项解释）与 `InsufficientData`（空记录）。
+- `params.rs`：`load_params` 从 `configs` 读 6 键（每次调用读取，替代 Go 1min TTL 缓存——「参数变更下次重算生效」语义保留）；`min_samples`（seed `score_min_samples=1`）。
+- `persist.rs`：`compute_and_update_tag_scores`（写 `node_scores` + `nodes.score = AVG(score>0)` 回写）+ `recent_deep_checks`（alive 结果、newest-first、id DESC）。
+- migration **`0007_node_scores`**（表 + `score_min_samples` seed）与 **`0008_node_score`**（`nodes.score` 列）。
+
+**实测（校机，PG 18.6）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（34.41s） |
+| `cargo test --workspace` | **0**——`scoring` **5/5** |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+
+**5 测试（验收 A–E）**：
+- A `ewma_baseline_fixture` ✓ golden **0.967722**（**更正**：规格初版手算 0.967718 系中间值舍入误差；独立复算 `ln` 精确值确认 `scoreLat=0.916511`、`quality=0.928270`、最终 **0.967722**，已在上方手算块更正——与移植输出一致）。
+- B `unreachable_record_worst_case` ✓（`-1`→3000/1000，quality=0，score=0，无 panic）。
+- C `rounds_to_6_decimals` ✓（1e6 倍为整数；`clamp01` 用 `f64::clamp`）。
+- D `node_avg_ignores_zero_scores` ✓（PG：tagA≈0.9+、tagB=0，`nodes.score==tagA` 而非均值 0.4x）。
+- E `returns_version_and_insufficient_data` ✓（空记录→InsufficientData、version=ewma-v1）。
+
+**说明/偏差**：`score_min_samples` seed=1（>1 的门槛留 P5/P6 运营调参，状态机已支持 `InsufficientData` 不写 `nodes.score`——当前 D 验收用 1 条样本正是该默认值下的行为）；参数缓存 TTL 缓存未保留（每次读库，语义更严格）；`Degraded` 与评分联动仍未定义（P4-02 同款 TODO，等 `LIFECYCLE.md` 冻结）。
+
 ### 验收 / Acceptance
 
 #### A. EWMA 数值复现（移植 compute_score 的黄金 fixture）
@@ -214,13 +244,17 @@ sumW   = 1 + 0.7 + 0.49 = 2.19
 w_lat  = (1*100 + 0.7*200 + 0.49*500)/2.19 = 485/2.19      ≈ 221.461187
 w_jit  = (1*20 + 0.7*40 + 0.49*100)/2.19   = 97/2.19       ≈ 44.292237
 latX   = 221.461187/3000                              ≈ 0.0738204
-scoreLat = 1 - ln(1+0.3*0.0738204)/ln(1.3)            ≈ 0.916499
+scoreLat = 1 - ln(1+0.3*0.0738204)/ln(1.3)            ≈ 0.916511
 jitX   = 44.292237/1000                               ≈ 0.0442922  (<= t=0.2)
 scoreStab = 1 - 0.0442922                             ≈ 0.955708
-quality = 0.916499*0.7 + 0.955708*0.3                 ≈ 0.928262
+quality = 0.916511*0.7 + 0.955708*0.3                 ≈ 0.928270
 speed  = 163840 -> speedX=1 -> scoreSpeed=1
-score  = 0.928262*(1-0.55) + 1*0.55                   ≈ 0.967718
+score  = 0.928270*(1-0.55) + 1*0.55                   ≈ 0.967722
 ```
+
+> **更正（实测）**：本页初版手算的 `scoreLat≈0.916499`/`quality≈0.928262`/`score≈0.967718` 有舍入误差；
+> 独立复算（`ln(1+0.3*0.0738204)/ln(1.3)` 精确求值）确认 `scoreLat=0.916511`、`quality=0.928270`、
+> **最终 `score=0.967722`**，与 Rust 移植的输出一致。验收 A 以 0.967722 为准。
 
 ```bash
 cargo test -p scoring ewma_baseline_fixture
