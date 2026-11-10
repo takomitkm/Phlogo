@@ -125,3 +125,67 @@ GET https://raw.githubusercontent.com/mateo-ki/vproxy/main/Cargo.toml
 1. **不把 vproxy 作为 lib 依赖**——违反方案 §3.1「不让上游类型/依赖渗透」且引入 rhai+sqlite 不需要的攻击面/体积。
 2. 改为「**最小化移植**」路线：仅移植 `parser/fingerprint/export` 必需算法，保留 MIT 版权声明（方案 §3.1 末句授权的路线）。
 3. P0-01 spike 的落地形式从「编译一个依赖 vproxy 的 scratch crate」改为「**在本机把 vproxy clone 下来，定位 parser/fingerprint/export 源文件并评估可移植性**」；`docs/THIRD_PARTY.md` 仍需锁 commit。
+
+---
+
+## [UTC 2026-11-10T00:04:00Z] S4 · P0-02 MiaoSpeed 固定版本：下载/清点/抽 BUILDTOKEN
+
+**动作**：确定 MiaoSpeed 固定版本，取二进制基线，并从二进制抽出签名盐 `BUILDTOKEN`。
+
+**命令**（编辑主机，脚本放 `.tmp/`）：
+```
+# 下载 4.7.9 windows-amd64 资产（Invoke-WebRequest，GitHub 可直连；git 直连超时但 https 下载可用）
+Invoke-WebRequest https://github.com/AirportR/miaospeed/releases/download/4.7.9/miaospeed-windows-amd64-4.7.9.zip
+Get-FileHash -Algorithm SHA256  # zip=685a8a58…e1d159 ; exe=5b0ec1ad…ac9611
+# 校机运行 -version → 4.7.9, commit 0fafd30
+# 扫描 exe 字符串表（ISO-8859-1 视图 + 正则 [A-Za-z0-9_]{2,}(?:\|…){2,}）→ 命中内嵌 BUILDTOKEN
+```
+
+**结果**：
+- 内嵌编译 TOKEN = `MIAOKO4|580JxAo049R|GEnERAl|1X571R930|T0kEN`（与 `miaospeed.sh` 默认一致）。
+- GitHub 预编译 commit `0fafd30` 在公开仓库 **API 返回 422（查无此 SHA）** → 预编译资产不可复现。
+
+**决策**：PIN 采用 **自建（源码 tag `4.7.9`）**，不把预编译资产作供应链基线。
+
+---
+
+## [UTC 2026-11-10T00:16:00Z] S5 · P0-02 协议逆向 + Vendor 签名 quirk（Go 交叉验证）
+
+**动作**：从 4.7.9 源码提取 WS 协议；用 Go 工具链做「标准答案」交叉验证 Rust 签名；发现并定位 `verify=false` 根因。
+
+**命令**（校机 Go：`D:\yzd\magpie-go-toolchain-20261107\go\bin\go.exe`；GOPROXY=`https://goproxy.cn,...`）：
+```
+# a) 复刻 jsoniter+hashMiaoSpeed 的独立验证器（用镜像结构体）→ 与 Rust 逐字节一致
+# b) 关键：在真实 miaospeed 模块内 import interfaces+utils，调 utils.SignRequest() 取真值
+go run ./verifytool   # REAL_JSON 中 "Vendor":"" ；REAL_SIG=fKdMhefuCZz2RmiaQxar5SLkAMnLd5i7D1_ZUYSHCpQykOT_smWDJ-pnhmTgSyOnJl7c97mR90bw6UIe4hMJ9Q==
+```
+
+**关键发现**：
+- 认证=逐请求内联 `Challenge`（`VerifyRequest: req.Challenge == SignRequest(req)`，服务端重序列化解码后的结构体再比对）。
+- **致命 quirk**：`interfaces.SlaveRequest.Clone()` 4.7.9 版**漏拷 `Vendor`**，而 `SignRequest` 对 `Clone()` 结果签名 → 签名恒用 `"Vendor":""`。
+  正确做法：**算签名用 `Vendor=""`，发送用真实 `Vendor`**。此前用 `Local` 算 → `verify=false`；改后 `verify=true`。
+
+**决策**：P3 必须复刻此 quirk；建议 P3 契约测试用 `utils.SignRequest` 交叉验证一条固定样例，防源码行为漂移。
+
+---
+
+## [UTC 2026-11-10T00:24:00Z] S6 · P0-02 自建 4.7.9 + Rust spike 端到端验证（verify=true）
+
+**动作**：从 tag `4.7.9` 源码自建二进制（补齐 embed 占位 + Go 代理镜像），用最小 Rust WS 客户端跑通全链路。
+
+**命令**（校机脚本，`.tmp/p0-02-*.ps1`）：
+```powershell
+$env:PATH="D:\yzd\magpie-go-toolchain-20261107\go\bin;"+$env:PATH
+$env:GOPROXY="https://goproxy.cn,https://goproxy.io,https://rsproxy.cn,direct"; $env:GOSUMDB="off"; $env:CGO_ENABLED="0"
+# 补齐：utils/embeded/BUILDTOKEN.key + preconfigs/embeded/tls/miaoko.{crt,key}
+go build -trimpath -o miaospeed-built.exe .           # sha256=2c302b29…6ab18, size=87,692,288
+# Rust spike（tungstenite0.21 + url=2.5.0 钉旧版避开 icu）
+cargo build --release ; .\spike.exe ws://127.0.0.1:18082/ SPIKETOKEN
+```
+
+**结果**：
+- 服务端日志 `verify=true`；客户端依序收到 `Progress(Queuing)`→`Progress(单节点 InvokeDuration=5001ms, RTT/Conn=0)`→`Result(全量)`。
+- Rust 计算签名 `fKdMhe…hMJ9Q==` 与 Go `utils.SignRequest` **逐字节一致**。`Value=0` 系校机直连 gstatic 超时（环境网络，非协议问题）。
+- 协议字段全部冻结写入 `docs/rebuild/01-p0-upstream-verification/p0-02-miaospeed.md` 的 D 节；`docs/THIRD_PARTY.md` 登记 MiaoSpeed 固定版本 + 自建哈希。
+
+**决策**：P0-02 判定 **PASS**；进入 P0-03（Apalis）/ P0-04（Vben）/ P0-05（授权收口）。
