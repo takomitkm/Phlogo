@@ -134,6 +134,33 @@ pub fn normalize_credential(s: &str) -> String {
 3. 重算后可能出现「不同旧哈希 → 相同新哈希」的合并：用 `ON CONFLICT (identity_hash)` 去重，并迁移其 `node_sources` 关联（`p2-04` 的对账逻辑负责）。
 4. 迁移作为 P1 migration 之后的独立 job 或 `cargo sqlx` 脚本运行，CI 里单独验证「重算后无孤儿关联」。
 
+### 验证结果 / Verified Results（已实测，2026-11-10）
+
+**落地**：`crates/domain/src/fingerprint.rs`（`compute_identity`/`node_auth`/`normalize_credential`/`stamp`/`CURRENT_FINGERPRINT_VERSION=1`）；
+`domain::Credential` 扩为枚举 `Uuid/Password/UsernamePassword/PrivateKey/Psk/Key/Tuic/None`（对齐 `nodeAuth` 的协议分支）。
+
+**canonical 口径（与文档 §7.3 的差异，已定稿）**：
+`v1 = "{protocol}|{server}|{port}|{auth}|{transport}|{tls}|{network_options}"`
+— `auth = normalize_credential(node_auth(...))`（顺序与 Go 相同：**先取主凭据 → 反复 percent-decode → 拼 canonical**）；
+`transport`/`tls` 缺省或全空规范化为 `-`（`null_default` 不变量）；`network_options` 用 `serde_json`（BTreeMap，字段顺序无关 → `field_order` 不变量）。
+Phlogo 的 `type|server|port|auth` 若需要兼容可作为 `fingerprint_version=0`（本代码库不产出）。
+
+**实测（校机）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build -p domain --all-targets` | **0**（11.38s） |
+| `cargo test -p domain` | **0**，**14 passed**（golden 全表：`name_change` 相同；`uuid/password/transport/tls/server/port_change` 不同；`field_order` 相同；`null_default` 相同；`percent_decode_invariant`；`percent_decode_feeds_identity`；`empty_identity_none`；`stamp_sets_version`；node 分离用例） |
+| `cargo fmt -p domain -- --check` | **0** |
+| `cargo clippy -p domain --all-targets -- -D warnings` | **0** |
+
+**过程修正**：
+1. 初版 `decode_utf8_lossy` 会把**非法转义**（如 `%de`）替换成 U+FFFD，导致 `abc%def` != 预期；改为 Go `url.PathUnescape` 语义：**decode 失败（非 UTF-8 字节）时保持原串不变**（`decode_utf8().Err -> break`）。
+2. `Credential` 从 struct 改 enum 后，`from_clash`/`from_singbox` 的 `cred_for` 需同步（P2-02 已适配，复测通过）。
+
+**说明**：
+- `fingerprint_version=1` 的 canonical **包含** transport/tls/network_options（文档 Step 1 的四段 canonical 是 Phlogo 兼容口径；按方案 §7.3「影响连接语义的参数参与指纹」选择包含，故版本定为 1 而非 0）。
+- 算法升级迁移（`recompute_all_identities`）属 P2-04 对账逻辑与 P4 清理职责，签名约定：扫 `fingerprint_version < N` 的行，事务内重算 + `ON CONFLICT (identity_hash)` 合并 `node_sources`。
+
 ### 验收 / Acceptance
 
 机器可校验项（命令 + 预期）：

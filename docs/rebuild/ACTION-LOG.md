@@ -406,3 +406,23 @@ cargo tree -p database | findstr vproxy    # 期望无
 **结果**：全 **0**；`5 passed`（clash/singbox/base64/field_separation + domain identity 分离）；**`cargo tree -p database` 无 vproxy**（类型不渗透约束成立）。
 
 **决策**：P2-02 **PASS**。percent-decode 与身份哈希留 P2-03。进入 P2-03（identity_hash + fingerprint_version + golden）。
+
+---
+
+## [UTC 2026-11-10T03:58:00Z] S17 · P2-03 节点指纹（14 golden 全过；v1 canonical 含 transport/tls）
+
+**动作**：`crates/domain/src/fingerprint.rs`（`node_auth` + `normalize_credential` 反复 decode + sha256 前 16 字节 hex）+ `Credential` 扩枚举。
+
+**命令**（校机）：
+```
+cargo build -p domain --all-targets
+cargo test -p domain
+cargo fmt -p domain -- --check
+cargo clippy -p domain --all-targets -- -D warnings
+```
+
+**结果**：`build/test/fmt/clippy` 全 **0**；**14 passed**（golden 全表 + percent-decode 不变量 + 空值无身份 + 版本字段）。
+
+**修正**：`decode_utf8_lossy` → `decode_utf8()`（非法转义保持原串，对齐 Go `url.PathUnescape` 报错语义）。
+
+**决策**：P2-03 **PASS**。**v1 canonical = type|server|port|auth|transport|tls|network_options**（按方案 §7.3 纳入连接语义参数；Phlogo 四段式记为 version 0 兼容口径，不产出）。进入 P2-04（对账入库 + fetch run 历史）。

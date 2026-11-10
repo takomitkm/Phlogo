@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 pub enum Credential {
     Uuid(String),
     Password(String),
+    UsernamePassword { username: String, password: String },
+    PrivateKey(String),
+    Psk(String),
+    Key(String),
+    Tuic { uuid: String, password: String },
     None,
 }
 
