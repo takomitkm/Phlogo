@@ -110,6 +110,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "utoipa",
+ "uuid",
 ]
 
 [[package]]
@@ -507,8 +508,16 @@ dependencies = [
 name = "distribution"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "filter",
+ "hex",
  "rand 0.8.8",
  "rand_chacha 0.3.1",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "uuid",
 ]
 
 [[package]]
@@ -2797,6 +2806,7 @@ dependencies = [
  "quote",
  "regex",
  "syn 2.0.119",
+ "uuid",
 ]
 
 [[package]]

@@ -573,3 +573,16 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **实测**（校机）：build/test/fmt/clippy 全 **0**；`distribution` 24/24。
 
 **决策**：P5-03 **PASS**。**P5 阶段（Filter AST / 配额选区 / 订阅输出）全部完成**。下一步进入 P6（Vben 管理端：p6-01 脚手架 / p6-02 页面）。
+
+---
+
+## [UTC 2026-11-11T05:40:00Z] S29 · P6-01 Vben 基座与 OpenAPI 契约链路（spec 生成 + TS 类型 + build:ele 复验全绿）
+
+**动作**：
+1. `crates/api-contract` 重写——utoipa 补 7 path + 5 schema（此前空文档），utoipa 加 `uuid` feature；实测 `/api-docs/openapi.json` 200 → 4580 字节 → 落 `api/openapi/spec.json`。
+2. `web/vben-admin/`：`openapi-ts.config.ts` + `src/api/request.ts`（bearer/401/typed client）。**决策：Vben monorepo 不整仓 vendor**，构建用校机固定 checkout（v5.7.0/`63a38dce`，同 P0-04）。
+3. 校机验证：`openapi-typescript@7` → schema.d.ts（12KB）GEN_EXIT=0；`pnpm build:ele` → **0**（11/11 tasks）。
+
+**踩坑**：utoipa `#[path]` 宏要求类型在同作用域可解析（schemas 与 paths 需 glob 同文件作用域）；status 必须 literal。
+
+**决策**：P6-01 **PASS**。进入 P6-02（业务页面：Sources/Nodes/Subscriptions）。

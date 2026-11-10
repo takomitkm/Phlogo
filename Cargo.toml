@@ -34,7 +34,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 figment = { version = "0.10", features = ["env", "yaml"] }
 # api contract
-utoipa = { version = "5", features = ["axum_extras"] }
+utoipa = { version = "5", features = ["axum_extras", "uuid"] }
 utoipa-swagger-ui = { version = "8", features = ["axum"] }
 # auth / ids
 jsonwebtoken = "9"

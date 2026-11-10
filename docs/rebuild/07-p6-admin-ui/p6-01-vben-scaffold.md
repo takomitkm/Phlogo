@@ -167,6 +167,33 @@ pnpm openapi:gen      # 生成 client
 pnpm build            # 产物到 dist/；预期退出码 0
 ```
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地策略（与原计划的偏差，已定稿）**：Vben 5.7.0 是 turbo monorepo（数千文件），**不整仓 vendor 进本仓库**。
+`web/vben-admin/` 存放**版本 pin 说明 + 自研层文件 + 生成产物约定**；实际构建使用校机固定的
+`C:\Users\YiZhidi\p0-04\vue-vben-admin-5.7.0`（tag `v5.7.0`，commit `63a38dce49ba109f61607994e21ba921d8e970e9`，
+与 P0-04 一致），CI 按同 tag 拉 zip 构建（P7 落 CI 种子时执行）。
+
+**本步实测完成的三件事**：
+
+1. **Rust 侧契约补全**（`crates/api-contract` 重写）：utoipa 5 此前只输出 247 字节空文档（paths 未注册）——
+   现在 `#[utoipa::path]` 声明 **7 条 path**（sources 全 CRUD + ignore-dead + nodes、nodes 3 条、health）
+   与 5 个 schema；`utoipa` 加 `uuid` feature（`Uuid: ToSchema` 需要）。`GET /api-docs/openapi.json` 实测 **200**，
+   导出 **4580 字节**完整 OpenAPI 3.1 文档，落 **`api/openapi/spec.json`**（canonical，README 说明再生成方式）。
+2. **前端自研层**：`web/vben-admin/openapi-ts.config.ts`（输入 `../../api/openapi/spec.json`、输出 `src/api/generated`）、
+   `web/vben-admin/src/api/request.ts`（base URL=`VITE_API_BASE_URL ?? '/api'`、Bearer 注入、401 统一处理、
+   `openapi-fetch` typed client 封装 `apiFetch`）。
+3. **生成 + 构建链路验证（校机，node 24.22.2 / pnpm 10.33.2）**：
+   - `npx openapi-typescript@7 spec.json -o apps/web-ele/src/api/generated/schema.d.ts` → **GEN_EXIT=0**（39.3ms，12045 字节，含全部 `/api/v1/*` paths）。
+   - `pnpm run build:ele` → **BUILD_ELE_EXIT=0**（11/11 tasks，1m23.9s，dist.zip 1087549 bytes）——生成的 schema 在 app 内不破坏构建。
+
+**契约现状**：spec.json 覆盖 P1 已落端点（sources/nodes/health）。P3-P5 的 check/subscription 路由尚未
+经 Axum 装配暴露（分发管线目前是纯函数层），其 `#[utoipa::path]` 与路由随 P6-02/P7 装配时补进契约——
+这与 P0-04 发现的「spec 缺 checks/subscriptions path」缺口同因，收口点在路由装配而非文档。
+
+**遗留（诚实标注）**：`request.ts` 引用的 `openapi-fetch` 依赖需在 vben checkout 的 `apps/web-ele/package.json`
+补一条（P6-02 做页面时随 pnpm install 落地）；`pnpm openapi:gen` 脚本同批加入。
+
 ### 验收 / Acceptance
 
 | # | 命令 | 预期 | 说明 |
