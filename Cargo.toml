@@ -40,5 +40,6 @@ serde_json = "1"
 thiserror = "1"
 anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-# job queue (enabled at P3; declared only here in P1)
-apalis = { version = "0.7", features = ["postgres"] }
+# job queue (P3-01: pinned per P0-03 spike; backend lives in apalis-sql 0.7.4)
+apalis = { version = "0.7.4", features = ["tracing"] }
+apalis-sql = { version = "0.7.4", features = ["postgres"] }

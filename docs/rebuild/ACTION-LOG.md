@@ -446,3 +446,23 @@ cargo clippy --workspace --all-targets -- -D warnings
 **过程修正**：`database/Cargo.toml` 曾被 edit 拼坏（`}anyhow` 同行）修复；`registry` 补 `serde_json/serde/sqlx/thiserror`；`delete_source` 去掉 anyhow 依赖改直用 SQL；moved value（`error.clone()`）、`explicit_auto_deref`（`&mut *tx`→`&mut tx`）、`cloned_ref_to_slice_refs`（`from_ref`）逐个清掉。
 
 **决策**：P2-04 **PASS**。**P2 阶段（fetch+SSRF / 解析 / 指纹 / 对账）全部完成**。下一步进入 P3（测活 check：icmp/tcp/http 探测、`node_status` 窗口）。
+
+---
+
+## [UTC 2026-11-11T02:30:00Z] S19 · P3-01 Apalis Check Job（PG 后端真机跑通；幂等副作用）
+
+**动作**：`apps/worker` lib+bin 化：`CheckJob` + 幂等 `record/finish_check_run`（migration 0004 主库）+ Apalis `PostgresStorage` 装配；**Apalis 独立库 `paily_jobs`**。
+
+**关键修正**：apalis 0.7.4 `setup()` 内嵌 migration 与业务 `migrate!` 共用 `_sqlx_migrations` 冲突（`VersionMissing(1)`）→ **队列独立数据库**（`PAILY_DATABASE_JOBS_DSN`，默认派生 `paily_jobs`），同时满足方案 §3.1 分离要求。`postgres` feature 属于 `apalis-sql`。
+
+**命令**（校机，PG 18.6）：
+```
+cargo build --workspace --all-targets
+DATABASE_URL=... cargo test --workspace      # + PAILY_DATABASE_JOBS_DSN=paily_jobs
+cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnings
+# 真机 smoke：起 worker 12s，确认 paily_jobs 内 apalis 表 + 主库 check_runs finished 计数递增
+```
+
+**结果**：`build/test/fmt/clippy` 全 **0**；幂等测试过（重投 4 次仅 1 行）；真机 smoke 中 handler 消费 demo job（`check_runs` 2→3）。
+
+**决策**：P3-01 **PASS**。进入 P3-02（MiaoSpeed WebSocket Adapter：Checker trait、握手/auth 签名、payload 提交）。

@@ -148,6 +148,34 @@ async fn check_job_handler(job: CheckJob, data: Data<AppState>) -> Result<(), Er
 - Phlogo 对照：`PostResults` 用 `checkerTag := middleware.CheckerTagFromCtx(c)` 注入 tag，用 per-tag mutex 串行化；
   Rust 侧改为 Job 携带 `checker_tag`，由 Apalis 天然提供去重与并发控制，无需手搓 mutex。
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+> 依据 P0-03 spike 的 0.7.4 API 实测形态：`PostgresStorage::new(pool)` + `PostgresStorage::setup(&pool)`（官方 migration）+
+> `Monitor::new().register(WorkerBuilder::new(..).enable_tracing().data(...).backend(storage).build_fn(handler))` + `storage.push(job)`。
+> `postgres` feature 在 **`apalis-sql`** 上（`apalis` 0.7.4 本体无此 feature）。
+
+**落地**：
+- `apps/worker` 改 lib+bin：`CheckJob{run_id, checker_tag, node_ids, presets}`（serde，即 Apalis 任务载荷）；
+  `record_check_run`（`INSERT .. ON CONFLICT (id) DO NOTHING`，返回是否首投）与 `finish_check_run`（`WHERE finished_at IS NULL` 单向转移）——**at-least-once 重投全部幂等**；
+  `handle_check` 为 Apalis handler（编排入口，真实 MiaoSpeed 调用留 p3-02+）。
+- migration `0004_check_runs`（主库；`paily_jobs` 承载 Apalis 官方表）。
+- **关键决策：Apalis 用独立数据库 `paily_jobs`**（`PAILY_DATABASE_JOBS_DSN` 覆盖，默认由主 DSN 改库名派生）——
+  apalis 0.7.4 的 `setup()` 内嵌 sqlx migration 与业务 `migrate!` 共用 `_sqlx_migrations` 版本序列会冲突
+  （实测 `Migrate(VersionMissing(1))` panic）；独立库既解决冲突又满足方案 §3.1「业务表与 Apalis 内部表严格分离」。
+
+**实测（校机，PG 18.6）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（42.54s） |
+| `cargo test --workspace` | **0**——`worker::check_job::no_duplicate_work`（重复投递 4 次仅 1 行 `check_runs`、finish 单向转移）+ 既有全部测试 |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+| **worker 真机 smoke（12s）** | `paily_jobs` 中 apalis 官方表建立；主库 `check_runs` 计数 2→**3**（handler 消费了新入队 demo job，`finished_at` 非空） |
+
+**验收对照**：#1 入队并执行 ✓（真机 smoke）；#2/#3 幂等重试/无重复副作用 ✓（集成测试，`run_id` 键控）；#4 worker 重启恢复——由 apalis PG backend 的 at-least-once + 本页幂等副作用保证，进程级 kill/restart harness 留 CI（P0-03 已标注）。
+
+**留待后续**：retry/timeout 层（`.retry()`/`.timeout()`）在 p3-02 接真实 MiaoSpeed 调用时一并配；`node_check_results`/`node_status` 持久化在 p3-04。
+
 ### 验收 / Acceptance
 
 1. **入队并被执行**：
