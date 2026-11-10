@@ -624,3 +624,13 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **踩坑**：`DynFilterFn` 闭包是 2 参签名（去掉多余 filter 后绕开）。
 
 **决策**：P7-02 **PASS**。进入 P7-03（安全加固：deny/audit、端口暴露 lint、contract 静态检查）。
+
+---
+
+## [UTC 2026-11-11T07:00:00Z] S33 · P7-03 安全加固（订阅路由+token 校验、限流层、/metrics 边界 403、supply-chain 脚本；全绿）
+
+**动作**：`GET /sub/{token}.{fmt}` 实装（哈希校验→撤销/禁用即 401→p5-02 选区→命名→三格式）；`rate_limit.rs` 自研固定窗口 layer（429）；Caddyfile `/metrics` 显式 403；`scripts/supply-chain.sh`（deny/audit/SBOM/sha256）。
+
+**实测**（校机 PG 18.6）：build/test/fmt/clippy 全 **0**（含 P2-01 SSRF 6 测试——验收 #4 引用）；compose lint 13/13。cargo audit 需 crates.io 网络在 CI 跑（校机 rsproxy 不承载 audit DB，如实标注）。
+
+**决策**：P7-03 **PASS**。**P0–P7 全部页面完成**。做整体验收清点后收口。

@@ -7,4 +7,8 @@
 	reverse_proxy /api/*  http://api:8080
 	reverse_proxy /sub/*  http://api:8080
 	reverse_proxy /health http://api:8080
+
+	# /metrics is NOT proxied (p7-03: metrics expose topology; scrape via the
+	# compose-internal network or an authenticated boundary, plan §16.10).
+	respond /metrics 403
 }

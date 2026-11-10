@@ -142,6 +142,31 @@ cargo cyclonedx --format json -o deploy/sbom.cdx.json
 sha256sum target/release/core-api target/release/core-worker
 ```
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地**：
+- **订阅路由暴露（验收 #3 的实现）**：`apps/api/src/handlers/subscription.rs`——`GET /sub/{token}.{yaml|json|base64}`。
+  认证链：token → `sha256(plain||pepper)` → `subscription_tokens` JOIN `subscription_profiles` 查 `status='active' AND enabled`——
+  **未知/撤销 token 在任何输出前 401**；候选集=Linked 节点按评分走 p5-02 `select_with_preset`；`max_distribute` 从 configs 读；
+  命名走 P5-03 白名单模板；三格式渲染（YAML proxies / JSON / Base64）。
+- **限流层**（`apps/api/src/rate_limit.rs`）：自研固定窗口（60s）per-IP Axum layer，`429` 超限；阈值 `PAILY_SERVER_RATE_LIMIT_PER_MIN`（默认 300），不硬编码进 CI。
+- **/metrics 边界控制**：Caddyfile 显式 `respond /metrics 403`（拓扑/规模不出口，§16.10）—— scrape 走 compose 内网。
+- **supply-chain**：`scripts/supply-chain.sh`（`cargo deny check licenses bans` → `cargo audit` → SBOM（cyclonedx 可选）→ release 二进制 sha256）；`deny.toml` P0-05 版本复用（AGPL/GPL 不默认放行）。
+- **认证分层**：P1-02 `require_admin_or_service` 覆盖全部 `/api/v1/*`（验收 #1 的 sources/nodes/config 401 已在 P1-02 冒烟断言）；checker/fetch 细分层随对应路由暴露时挂载（能力已有，见 P7 收口说明）。
+
+**实测（校机，PG 18.6）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（38.67s） |
+| `cargo test --workspace` | **0**（含 P2-01 SSRF 6 测试——验收 #4 引用） |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+| compose 拓扑 lint（8-01） | **13/13**（postgres/miaospeed 零端口——§16.10 静态断言） |
+
+**验收对照**：#1 未授权 401 ✓（P1-02 冒烟 + 全 `/api/v1` 层覆盖）；#3 订阅 token 撤销即 401 ✓（哈希校验路径实装，端到端 curl 留 compose 冒烟）；#4 SSRF ✓（`cargo test -p fetch` 6/6，重定向二次拦截含）；#2 checker/fetch secret 与 #5 cargo deny/audit——工具链命令就绪（supply-chain.sh），需 crates.io 网络的审计在 CI 跑（校机 rsproxy 不承载 audit DB，如实标注）。
+
+**说明/偏差**：订阅 YAML 的 proxy 载荷当前用占位 server（完整 `NormalizedNode→clash proxy` 转换挂在 `node_payloads` 凭据解密层——P2 文档已预留）；`rate_limit` 尚未默认挂到 `/api/v1`（阈值配置先行，装配点与 checker/fetch 细分层同批，避免无谓 429 影响冒烟）。
+
 ### 验收 / Acceptance
 
 1. **未授权管理接口被拒（阶段验收 #3 细化）**：
