@@ -659,3 +659,13 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 **修正**：profile `output_format NOT NULL` 由 SQL 缺省 `'base64'`；`logs_fetch` success 改 `(status='finished')`；e2e JSON 体固定走文件。
 
 **决策**：**契约缺口清零**——P6-02 四个待补页面（Dashboard/Checks/NodeDetail/Subscriptions）的数据源全部可用。
+
+---
+
+## [UTC 2026-11-11T08:00:00Z] S36 · 管理页面补齐（规格 7 页全部落地；build:ele 11/11 绿）
+
+**动作**：新增 `dashboard.vue`（统计卡+分布）、`checks.vue`（tags+初筛日志，-1 红标）、`node-detail.vue`（身份+双时间线）、`subscriptions.vue`（profile CRUD+token 签发一次性弹窗/撤销）；`paily.ts` 扩至全部端点；路由七项；Nodes 页加详情入口。
+
+**实测**：校机 `pnpm build:ele` **0**（11/11 tasks，7 页进 dist）。
+
+**决策**：**P6 页面侧全部完成**（规格 7/7）。Go 源码保留为对照基准的决策由用户裁定（清掉需改文档行号锚点）。

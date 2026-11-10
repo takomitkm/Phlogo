@@ -4,11 +4,13 @@
  * Endpoint mapping: NodeList / NodeDelete.
  */
 import { onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 
 import { ElMessage } from 'element-plus';
 
 import { deleteNode, listNodes, type NodeView } from '#/api/paily';
 
+const router = useRouter();
 const rows = ref<NodeView[]>([]);
 const loading = ref(false);
 
@@ -45,8 +47,9 @@ onMounted(refresh);
       <el-table-column prop="port" label="Port" width="90" />
       <el-table-column prop="identity_hash" label="Identity" width="150" show-overflow-tooltip />
       <el-table-column prop="fingerprint_version" label="FP" width="70" />
-      <el-table-column label="Actions" width="110">
+      <el-table-column label="Actions" width="180">
         <template #default="{ row }">
+          <el-button size="small" @click="router.push(`/paily/nodes/${row.id}`)">Detail</el-button>
           <el-button size="small" type="danger" @click="onDelete(row)">Delete</el-button>
         </template>
       </el-table-column>

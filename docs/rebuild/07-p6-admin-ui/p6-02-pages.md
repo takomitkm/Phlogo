@@ -215,7 +215,24 @@
 - 所有读写都收敛到 `api/openapi/spec.yaml` 的 27 路径，取代了上游管理端可能直连 DB 的既有实现
   （本方案硬约束：Vben Admin 不直接访问数据库或 MiaoSpeed，见方案 §2.1）。
 
-### 契约缺口收口（已实测，2026-11-11）
+### 管理页面补齐（已实测，2026-11-11）
+
+契约缺口清零后（见上节），规格 7 页**全部落地**（`web/vben-admin/src/views/paily/`）：
+
+| 页面 | 文件 | 端点 |
+|---|---|---|
+| Dashboard | `dashboard.vue` | stats 统计卡 + NodeList 客户端 region/protocol 分布 + checker tags |
+| Sources | `sources.vue` | 列表/创建（201 vs 200 去重提示）/删除/ignore-dead |
+| Nodes | `nodes.vue` | 列表 + 详情入口 + 删除 |
+| Node Detail | `node-detail.vue` | NodeGet + initial/deep 时间线（latency -1 标 unreachable；deep 显示 avg/jitter/speed/region） |
+| Checks | `checks.vue` | checker tags + 最近初筛日志（-1 红标） |
+| Scoring | `scoring.vue` | 10 个 `score_*`/`grade_*`/`max_distribute` 键编辑 |
+| Subscriptions | `subscriptions.vue` | profile CRUD（更新 bump version）+ token 签发（**明文一次性弹窗**）/撤销/列表 |
+
+路由 `paily.ts` 七项 + NodeDetail `hideInMenu`；`paily.ts` API 层扩至全部端点（typed）。
+
+**实测**：校机 `pnpm build:ele` → **0**（11/11 tasks，dist.zip 1.10MB，7 页全部编译进产物）。
+
 
 **待暴露端点全部落地**（此前标注的「契约缺口」清零）：
 
