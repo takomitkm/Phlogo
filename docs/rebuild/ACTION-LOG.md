@@ -315,3 +315,32 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **偏差**：`utoipa-swagger-ui 8.1.0` build.rs 与 `zip 2.6.1` 不兼容 → 本轮改用 `/api-docs/openapi.json` 提供 OpenAPI JSON（Swagger UI 静态资源后续钉版本再启用）。
 **决策**：P1-02 判定 **PASS**。进入 P1-03（SQLx 迁移 + configs seed；校机无 PG，运行验证拟装便携 PG 或转 CI）。
+
+---
+
+## [UTC 2026-11-10T02:12:00Z] S13 · P1-03 SQLx 迁移 + configs seed（真实 PG 18.6 运行验证 PASS）
+
+**动作**：写初始迁移与 KV seed，接入 `crates/database`，并在校机装 **PostgreSQL 18.6** 做真实运行验证。
+
+**环境**：校机 `pacman -S --noconfirm mingw-w64-x86_64-postgresql`（MSYS2，二进制 `D:\yzd\MSYS2\mingw64\bin`）；PG 18.6。
+
+**命令**（校机）：
+```
+# 迁移文件（SQLx 约定：文件而非目录）：migrations/0001_init.up.sql/.down.sql, 0002_uq_sources.up.sql/.down.sql
+initdb -D C:\Users\YiZhidi\pgdata -U postgres --auth=trust -E UTF8 --locale=C
+Start-Process postgres.exe -D C:\Users\YiZhidi\pgdata -p 5432 -c listen_addresses=127.0.0.1   # 不用 pg_ctl（管道挂起）
+psql -c "CREATE ROLE paily ...; CREATE DATABASE paily OWNER paily;"
+$env:DATABASE_URL=postgres://paily:change-me@127.0.0.1:5432/paily
+cargo run -p database --example migrate
+```
+
+**结果（实测）**：`MIGRATE_OK configs_count=23`；表 `_sqlx_migrations,configs,node_sources,nodes,source_fetch_runs,sources`；
+`configs=23`；`uq_sources_type_content` 存在；`_sqlx_migrations` v1(init)/v2(uq sources) 均 success。
+
+**关键修正**：
+1. **SQLx 不读子目录**——初版 `0001_init/up.sql` 目录形式导致扫到 0 迁移（`relation "configs" does not exist`）；改为 `0001_init.up.sql` 文件形式解决。
+2. `pg_ctl start` 在捕获管道时挂起（postgres 继承 stdout）；改用 `Start-Process postgres.exe`。
+3. `sources` 增唯一索引 `uq_sources_type_content`（`0002`），为 P1-04 竞态安全去重铺路。
+4. seed 实为 **23** 个 KV 键（`filename_*` 3 个独立键），与文档「22」歧义说明已记录。
+
+**决策**：P1-03 判定 **PASS**。进入 P1-04（Source/Node CRUD + 关系 + 集成测试）。

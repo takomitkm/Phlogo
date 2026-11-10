@@ -9,3 +9,6 @@ sqlx.workspace = true
 domain = { path = "../domain" }
 anyhow.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

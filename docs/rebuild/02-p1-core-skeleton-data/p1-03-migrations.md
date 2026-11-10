@@ -42,10 +42,15 @@ DATABASE_URL=postgres://paily:change-me@localhost:5432/paily
 
 > `.env.example` 提交仓库，`DATABASE_URL` 由 CI/部署注入。
 
-**2. 写初始迁移 `migrations/0001_init/up.sql`。** 字段来源：方案 §5.1（P1 涉及表）+ CONVENTIONS §2.3（Phlogo GORM 字段）+ §2.6（config 键）。
+**2. 写初始迁移。**
+
+> **更正（实测）**：SQLx **不读子目录**。迁移必须是**文件**，命名为 `NNNN_<desc>.sql`（单向）或
+> `NNNN_<desc>.up.sql` + `NNNN_<desc>.down.sql`（可逆）。本实现采用可逆文件：
+> `migrations/0001_init.up.sql` / `0001_init.down.sql`、`migrations/0002_uq_sources.up.sql` / `.down.sql`。
+> （初版误写成 `migrations/0001_init/up.sql` 目录形式，导致 sqlx 扫到 0 个迁移——已修正。）
 
 ```sql
--- migrations/0001_init/up.sql
+-- migrations/0001_init.up.sql
 -- ── sources ───────────────────────────────────────────────────────────────
 -- 对应 internal/db/model/source.go + 方案 §5.1（新增 fetch_policy；status 扩展见 §2.9）
 CREATE TABLE sources (
@@ -189,6 +194,38 @@ $env:DATABASE_URL = "postgres://paily:change-me@localhost:5432/paily"
 cargo sqlx prepare            # 生成/更新 sqlx-data.json
 cargo sqlx prepare --check    # CI：校验 sqlx-data.json 是否最新
 ```
+
+### 验证结果 / Verified Results（已实测，2026-11-10）
+
+> 校机装 **PostgreSQL 18.6**（MSYS2 `pacman -S --noconfirm mingw-w64-x86_64-postgresql`，二进制在 `D:\yzd\MSYS2\mingw64\bin`）。
+> 迁移文件按 SQLx 约定落为 `.up.sql`/`.down.sql`（见步骤 2 更正）。
+
+**运行时验证（真实 PG）**：
+```
+initdb -D C:\Users\YiZhidi\pgdata -U postgres --auth=trust -E UTF8 --locale=C
+# 起库用 Start-Process postgres.exe（避免 pg_ctl start 在管道下挂起）；建 role/db：
+CREATE ROLE paily LOGIN PASSWORD 'change-me'; CREATE DATABASE paily OWNER paily;
+cargo run -p database --example migrate     # 应用 migrate! 内嵌迁移
+```
+实测输出：
+```
+MIGRATE_OK configs_count=23
+tables = _sqlx_migrations,configs,node_sources,nodes,source_fetch_runs,sources
+configs count = 23
+uq index = uq_sources_type_content
+_sqlx_migrations: (1, init, success=t) (2, uq sources, success=t)
+```
+→ **迁移可应用 PASS**：5 张业务表 + SQLx 元表；`configs` 种子 **23** 行；`uq_sources_type_content` 唯一索引生效；两条迁移均 success。
+
+**与文档「22」口径的差异说明**：本页步骤 4 的 seed 实际列出 **23** 个键（`filename_clash/singbox/base64` 计 3 个独立键）；
+文档验收里「22 / 20」的说法源于把 `filename_*` 当复合键的歧义。**本实现取 23 个独立 KV 键，实测 `count=23`**。如后续要严格对齐 CONVENTIONS §2.6 的某一种口径，只需删/并相应 seed 行并新增迁移。
+
+**0002 迁移（去重竞态修复）**：`sources` 原无唯一约束，P1-04 去重靠 `SELECT ... FOR UPDATE` 在并发下仍可能双插；
+故新增 `0002_uq_sources`：`CREATE UNIQUE INDEX uq_sources_type_content ON sources (type, content)`，
+配合 `INSERT ... ON CONFLICT (type, content) DO NOTHING` 实现竞态安全去重（对应 p1-04 风险条目）。
+
+**小坑记录**：`pg_ctl start` 在「捕获输出管道」时会因 postgres 继承 stdout 而不返回（挂起）；起库改用
+`Start-Process postgres.exe -PassThru` 或 `cmd /c ... start`（不套管道）。`pg_ctl stop` 正常。
 
 ### 验收 / Acceptance
 
