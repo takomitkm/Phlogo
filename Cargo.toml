@@ -12,6 +12,7 @@ members = [
     "crates/lifecycle",
     "crates/scoring",
     "crates/filter",
+    "crates/distribution",
     "crates/config",
     "crates/api-contract",
 ]

@@ -195,6 +195,31 @@ fn assemble_output(nodes: &[Candidate]) -> Vec<SelectedNode> {
 
 `naming.RegionOrder()` 的顺序在 Rust 侧以常量数组给出（`COMMON_REGIONS` 之外还有完整命名顺序，见 `internal/naming/naming.go` 的 `regionOrder`：`HK,TW,JP,SG,US,UK,GB,KR,DE,FR,AU,CA,NL,RU,IN,BR,TR,TH,MY,PH,ID,VN,AR,MX,IT,ES,PL,SE,NO,FI,CH,AT,BE,DK,PT,CZ,HU,RO,ZA,AE,SA,IL,EG,NG,UA`）。已知地区按该数组索引排，未知地区按字母序排在已知之后。
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地**（新 crate `crates/distribution`，单文件 `lib.rs` 逐函数移植 selector.go）：
+- 常量：`COMMON_REGIONS=["HK","TW","SG","US","JP"]`、`REGION_ORDER`（45 地区完整 naming order）、`MAX_DISTRIBUTE_DEFAULT=200`。
+- `normalise_region`（ToUpper+Trim，空→UN）、`seq_id`（`hk01`）、`sort_regions_by_naming_order`（已知按索引、未知按字母排后）。
+- `compute_quotas`（`avg=target/n`，末位吸收余数）、`select_from_pool`（≤quota 全取 / ≤1.5× top-N / >1.5× 加权抽样）、`select_from_pool_random`（超额均匀随机）。
+- `weighted_sample`：**E-S A-Res**，`w=max(score,0.01)`、`u==0→1e-10`、最小堆保 key 最大的 k 个、输出按原 pool 顺序（f64 无 Ord——手写 `Entry(f64,usize)` 全序包装，key 相同时按索引判定，语义对齐 Go 堆）。
+- `collect_all`（非 UN proportional + UN top-N 补）、`collect_proportional`（deficit 用未选中集 weighted_sample 补）、`collect_common`（三路分流、target=0 回退 `collect_all`、地区平均配额+随机补、仍不足 other→UN 按 score 补）、`assemble_output`（naming order + 组内 score 降序稳定排序 + 编 seq）。
+- `select_with_preset`（`other`→filter_out_common+collect_all；`all`→collect_all；默认→collect_common；`max==0`/空输入→空）。RNG 以参数注入（`impl Rng`），可种子化。
+
+**实测（校机）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（37.67s） |
+| `cargo test --workspace` | **0**——`distribution` **12/12** |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+
+**12 测试（验收 A/B/C 全覆盖）**：A 确定性 1–8（全取/top-N/加权触发/common 均配 4×5/回退同种子等价/other 排除五区/UN 补足/输出序+seq 格式）；B 统计 9–10（1000 种子下 A-Res 高分显著多选中且低分 `f>0` 不排除；均匀随机 10 选 5 频率 43%–57%）；C 端到端 11–12（三 preset 语义、`max=200/37/0` 上限语义）。
+
+**说明/偏差**：
+- 随机分支**不与 Go 逐字节等价**（规格明示不可跨语言断言），以「种子化统计性质」验收；等价性锚点=确定性分支精确相等 + 算法常量逐一一致。
+- `common_fallback` 断言用**同种子**比较集合成员（回退路径同代码，同种子必同结果）——不同种子的随机差异属预期行为，已写进测试注释。
+- `max_distribute` 从 config 注入由 p5-03 订阅路由完成（本 crate 只收参数）。
+
 ### 验收 / Acceptance
 
 下列命令通过即视为等价性达标（退出码 `0`）：

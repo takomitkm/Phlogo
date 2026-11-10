@@ -551,3 +551,15 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **关键实现点**：serde tag 分派会把叶子包一层 `operator:"cond"`——不符规格形状，改手写 Deserialize（顶层 `operator` 分派叶子/逻辑节点）；`in/not_in` 展开、`is_null` 忽略 value；`$1` 恒为 checker_tag。
 
 **决策**：P5-01 **PASS**。存储迁移（configs/sponsors 列）随 p5-02/p5-03 消费端一并做。进入 P5-02（配额与限流）。
+
+---
+
+## [UTC 2026-11-11T05:00:00Z] S27 · P5-02 地区配额与选区算法（selector.go 逐函数移植；12 测试全绿）
+
+**动作**：新 crate `crates/distribution`：common/all/other 三 preset、比例配额（末位吸收余数）、三分支池选择（≤quota/≤1.5×/加权 A-Res）、E-S 加权抽样（`max(score,0.01)`、`u==0→1e-10`、min-heap k）、UN 补足、naming order 输出+seq 编号。
+
+**实测**（校机）：build/test/fmt/clippy 全 **0**；12/12（确定性 8 + 统计 2 + 端到端 2）。
+
+**实现要点**：f64 无 Ord → 手写 `Entry(f64,usize)` 全序包装实现 min-heap；随机分支按规格只做种子化统计验收（不跨语言逐字节等价）；`common_fallback` 用同种子断言回退路径等价。
+
+**决策**：P5-02 **PASS**。进入 P5-03（订阅输出：命名模板、Clash/Base64 渲染、订阅路由）。
