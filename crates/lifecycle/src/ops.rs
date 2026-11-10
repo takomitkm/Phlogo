@@ -91,3 +91,47 @@ pub async fn orphan_retention_days(pool: &PgPool) -> anyhow::Result<i64> {
         .unwrap_or_else(|| "14".to_string());
     Ok(v.parse().unwrap_or(14))
 }
+
+/// One cleanup tick (plan §2.1 LIFE/cleanup): retire expired orphans, then physically
+/// delete retired nodes (guarded). Returns what happened, for logs/metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CleanupReport {
+    pub retired: u64,
+    pub deleted: u64,
+}
+
+pub async fn run_cleanup_cycle(pool: &PgPool) -> anyhow::Result<CleanupReport> {
+    let retention = orphan_retention_days(pool).await?;
+    let retired = retire_expired_orphans(pool, retention).await?;
+    let deleted = delete_retired_nodes(pool).await?;
+    Ok(CleanupReport { retired, deleted })
+}
+
+/// Cross-tag alive materialization (rewrites `batchAliveDecision`):
+/// for each node, ANY tag whose latest snapshot is alive/degraded within the window
+/// makes the node alive. Returns (node_id -> alive) for all nodes having snapshots.
+pub async fn cross_tag_alive_map(
+    pool: &PgPool,
+    window_minutes: i64,
+) -> anyhow::Result<std::collections::HashMap<Uuid, bool>> {
+    let rows: Vec<(Uuid, bool)> = sqlx::query_as(
+        "SELECT node_id, bool_or(health IN ('alive','degraded')) AS alive \
+         FROM node_status \
+         WHERE last_checked_at >= now() - make_interval(mins => $1) \
+         GROUP BY node_id",
+    )
+    .bind(window_minutes as i32)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Read `node_alive_check_window_minutes` (seeded 240 in 0001).
+pub async fn alive_window_minutes(pool: &PgPool) -> anyhow::Result<i64> {
+    let v: String =
+        sqlx::query_scalar("SELECT value FROM configs WHERE key='node_alive_check_window_minutes'")
+            .fetch_optional(pool)
+            .await?
+            .unwrap_or_else(|| "240".to_string());
+    Ok(v.parse().unwrap_or(240))
+}

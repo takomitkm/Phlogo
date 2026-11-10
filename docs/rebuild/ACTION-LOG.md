@@ -515,3 +515,13 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **踩坑**：`make_interval(days => …)` 无 bigint 重载，绑 `i32`。
 
 **决策**：P4-01 **PASS**。进入 P4-02（健康/孤儿清理 Job：跨 tag alive 物化到 nodes、清理调度）。
+
+---
+
+## [UTC 2026-11-11T04:00:00Z] S24 · P4-02 按 Tag 健康与孤儿/退役清理（cleanup cycle + 跨 tag 聚合；4 场景全绿）
+
+**动作**：`lifecycle::ops` 扩展 `run_cleanup_cycle`（retire→delete 同 tick）与 `cross_tag_alive_map`（窗口内 `bool_or` 聚合，替代 `batchAliveDecision`）；`lifecycle/tests/p402.rs` 4 场景。
+
+**实测**（校机 PG 18.6）：build/test/fmt/clippy 全 **0**；per-tag 独立、dead 不删关联、孤儿保留窗口（新鲜孤儿不动/超期一个 tick 删净含历史）、跨 tag 窗口聚合全过。迟到守卫由 P3-04 场景覆盖（同一 SQL）。
+
+**决策**：P4-02 **PASS**。进入 P4-03（评分引擎：速度分支、jitter 阈值、等级映射、衰减）。

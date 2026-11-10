@@ -106,6 +106,32 @@ if existing.is_none_or(|e| new_checked_at >= e.last_checked_at) {
 }
 ```
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+> `node_status` 表与迟到守卫在 P3-04/P4-01 已落地；本步骤补齐**跨 tag 聚合**与**清理 Job 编排**。
+
+**落地**（`crates/lifecycle/src/ops.rs` 扩展）：
+- `run_cleanup_cycle(pool) -> CleanupReport{retired, deleted}`：一个 tick 内 `retire_expired_orphans`（读 `orphan_retention_days=14`）→ `delete_retired_nodes`（`NOT EXISTS` 守卫）。**同周期先退役后删除**——超期孤儿在一个 tick 内走完 Retired→物理删。
+- `cross_tag_alive_map(pool, window)`：重写 `batchAliveDecision` 的聚合部分——`GROUP BY node_id` + `bool_or(health IN ('alive','degraded'))`，仅统计 `last_checked_at >= now()-window` 的快照；返回 `node_id -> alive`（**不回写**旧 `nodes.alive` 单字段，聚合视图由 P5 分发消费）。
+- `alive_window_minutes`：读 `node_alive_check_window_minutes`（0001 seed 默认 240）。
+
+**实测（校机，PG 18.6）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（34.55s） |
+| `cargo test --workspace` | **0**——`lifecycle::p402` **4/4** |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+
+**4 场景（验收 A–D）**：
+- A `per_tag_health_independent` ✓：(N,a)=alive 与 (N,b)=dead 并存互不影响。
+- B `unreachable_node_keeps_source_mapping` ✓：dead 上报后 2 条映射仍在、节点未被物理删。
+- C `orphan_detection_and_retention` ✓：失去最后映射→Orphaned+`orphaned_at` 记录、节点仍在（对照 Phlogo 立即删）；新鲜孤儿不退役（14 天窗口生效）；回溯 30 天后一个 cleanup tick 完成 Retired→物理删，`node_status` 历史随之清零。
+- D 迟到不覆盖：由 P3-04 `node_status_late_write_no_overwrite`（同守卫 SQL）覆盖，本页不重复实现。
+- 附加 `cross_tag_map_window` ✓：窗口内仅 dead→false；任一 tag alive→true。
+
+**说明/偏差**：`Degraded` 派生规则按规格风险条目**留 TODO**（先 Unknown/Alive/Dead 三态跑通，`bool_or` 已把 degraded 计入 alive，规则冻结于 `LIFECYCLE.md` 后只需改派生层）；清理 Job 的 Apalis 定时触发在 P7 compose 装配（本步提供 `run_cleanup_cycle` 可调用入口）。
+
 ### 验收 / Acceptance
 
 #### A. 不同 tag 独立（per-tag independence）
