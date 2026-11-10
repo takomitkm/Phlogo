@@ -21,8 +21,9 @@
 
 ### 前置 / Prerequisites
 
-- Node.js + pnpm（版本以 Vben `web-ele` 固定 tag 的 `package.json` engines 为准，待固定后记录）。
-- Vben Admin 仓库：<https://github.com/vbenjs/vue-vben-admin>（方案 §20），固定为 `<PIN Vben web-ele tag>`。
+- Node.js + pnpm：**校机 `node v24.22.2` / `pnpm 10.33.4`**（满足 Vben v5.7.0 `engines`：node `^22.18.0||^24.0.0`、pnpm `>=10.0.0`）。
+- Vben Admin 仓库：<https://github.com/vbenjs/vue-vben-admin>（方案 §20），固定 **tag `v5.7.0`**（commit `63a38dce49ba109f61607994e21ba921d8e970e9`，2026-05-21）。
+  `web-ele` = monorepo 内 `apps/web-ele`（包名 `@vben/web-ele`）。npm 源：仓库自带 `.npmrc` 已指 `https://registry.npmmirror.com`（校机可达）。
 - 已有 `api/openapi/spec.yaml`（确认存在：`S:\apps\llm\agentwork\repos\Phlogo\api\openapi\spec.yaml`）。
 - 已读方案 §12（页面清单）与 §11（API 初始清单）。
 - OpenAPI→TS 工具：Vben 生态常用 `openapi-ts`（或 Vben 自带 `vben-api-client` 生成脚本）；具体以固定版本为准。
@@ -75,6 +76,39 @@ grep -rl "sources" src/api/   # 示意：确认生成的 client 覆盖关键 pat
 
 - 记录：Node/pnpm 版本、构建命令、构建耗时（用于 CI 缓存策略）、生成 client 的目录与命令。
 - 记录：`api/openapi/spec.yaml` 被成功消费，生成的 TS 类型覆盖预期 path。
+
+### 验证结果 / Verified Results（已实测，2026-11-10）
+
+> 环境：校机 `node v24.22.2` / `pnpm 10.33.4`；Vben tag `v5.7.0`（commit `63a38dce…70e9`），npmmirror 源。
+
+**A. `pnpm install` + `build:ele` 成功（真实跑通）**：
+
+```powershell
+# 解压 v5.7.0 源码到 p0-04\vue-vben-admin-5.7.0；PATH 含 node24 与 pnpm
+pnpm install            # → INSTALL_EXIT=0，2m20s，pnpm v10.33.4（含 postinstall stub/prepare）
+pnpm run build:ele      # = turbo build --filter=@vben/web-ele → vite build --mode production
+```
+
+实测输出（节选）：`Tasks: 11 successful, 11 total`，`vite build ... built in 4.34s`，`BUILD_ELE_EXIT=0`，
+产物 `apps/web-ele/dist/`（`css/ js/ jse/ favicon.ico index.html _app.config.js`，并生成 `dist.zip`）。→ **前端构建链路 PASS**。
+
+**B. OpenAPI → TypeScript 生成（真实跑通）**：
+
+```powershell
+npx -y openapi-typescript@7 spec.yaml -o schema.d.ts
+# → openapi-typescript 7.13.0，spec.yaml(1256 行) → schema.d.ts(2125 行)，72.1ms，OAPI_EXIT=0
+```
+用 **Phlogo 现网 `api/openapi/spec.yaml`** 作为输入，产物 `schema.d.ts` 生成成功，含 `/api/v1/sources`、`/api/v1/nodes`、
+`sources/nodes/checks/sponsors` 等类型。
+
+> 工具选择：本 spike 用 `openapi-typescript` 证明 **spec.yaml 可被消费成 TS 类型**；Vben 生态若需要「带 fetch 封装的 client」
+> 可换 `@hey-api/openapi-ts`（P6 定稿生成器与封装）。两者都以 `spec.yaml` 为唯一契约源，语义一致。
+
+**C. 契约缺口（实测发现，需 P1/P6 补齐）**：当前 `api/openapi/spec.yaml` **不含** 顶层 `/api/v1/checks` 与 `/api/v1/subscriptions` 路径
+（`schema.d.ts` 中无这两个 literal path；`checks`/`subscriptions` 仅以零散字段出现）。与 P6 子代理早前标注的 API 契约缺口一致——
+Rust 侧 utoipa 重写 `spec.yaml` 时须补齐这些 path，前端 client 才能覆盖 Checks/Subscriptions 页面。
+
+**D. 结论**：Vben v5.7.0 `web-ele` 在固定版本下**可构建**（dist 产出）；`spec.yaml → TS` 契约生成链路**可用**；契约缺口已知并在 P1/P6 收口。
 
 ### 验收 / Acceptance
 

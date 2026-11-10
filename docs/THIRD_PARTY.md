@@ -23,7 +23,7 @@
 | MiaoSpeed（GitHub 预编译，**不采用**） | `miaospeed-windows-amd64-4.7.9.zip` | GitHub release | zip `685a8a584aa7724479c46626b28cc8344ff5bfb1b18643254275461535e1d159`；exe `5b0ec1ad39723ae10c6a2cd6296561097335e680b5acc62a18ba0b7682ac9611`（commit `0fafd30`，公开仓库查无 → 不可复现） | ⚠️ 仅作参考，不作基线 |
 | Mihomo（MiaoSpeed 内嵌） | `AirportR/mihomo v1.19.33-x365-miu.2`（go.mod `replace`） | 随 MiaoSpeed 构建 | 见 MiaoSpeed SBOM | 债务：GPL 义务 |
 | Apalis | `apalis 0.7.4` + `apalis-sql 0.7.4`（features `sqlite,postgres`；最新稳定 `1.0.0` 列为升级候选） | crates.io | N/A（Rust 库，无独立二进制） | ✅ 编译通过 + SQLite 运行时队列 PASS（P0-03） |
-| Vben Admin | `<待 P0-04>` | — | — | ⏳ |
+| Vben Admin (web-ele) | tag `v5.7.0`（commit `63a38dce49ba109f61607994e21ba921d8e970e9`） | GitHub tag | N/A（源码构建，产物 `dist.zip`） | ✅ 构建通过 + OpenAPI→TS 生成通过（P0-04） |
 | VProxy | `mateo-ki/vproxy @ <commit 待 P0-01 锁>` | — | — | ⏳ |
 
 > 备注：MiaoSpeed 采用**自建**（源码 tag `4.7.9`）作为供应链基线；GitHub 预编译资产的 commit 不在公开仓库，无法复现同哈希构建，故不作基线。

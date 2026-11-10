@@ -229,3 +229,26 @@ cargo build --release
 - **未在本机运行**（校机无 PG 服务）：retry/timeout/recovery 的运行断言 —— 留 CI（postgres sidecar + kill/restart harness）。
 
 **决策**：P0-03 核心队列能力 **PASS**（SQLite 端到端 + PG 编译）；retry/timeout/recovery 运行验证转 CI。进入 P0-04（Vben 构建）。
+
+---
+
+## [UTC 2026-11-10T00:58:00Z] S9 · P0-04 Vben v5.7.0 构建 + OpenAPI→TS 生成（PASS）
+
+**动作**：固定 Vben `web-ele` 版本，验证 `pnpm install`+`build:ele` 成功，并打通 `api/openapi/spec.yaml → TS` 契约生成。
+
+**Pin**：Vben tag `v5.7.0`（commit `63a38dce49ba109f61607994e21ba921d8e970e9`）；`web-ele`=`apps/web-ele`（`@vben/web-ele`）。
+
+**命令**（校机；`PATH` 含 `D:\yzd\tools\node\node-v24.22.2-win-x64` 与 pnpm；npmmirror 源）：
+```
+Expand-Archive vben.zip ; cd vue-vben-admin-5.7.0
+pnpm install           # INSTALL_EXIT=0, 2m20s, pnpm v10.33.4
+pnpm run build:ele     # BUILD_ELE_EXIT=0, turbo 11 tasks, vite built 4.34s, dist/ 产出
+npx -y openapi-typescript@7 spec.yaml -o schema.d.ts   # OAPI_EXIT=0, 1256行→2125行, 72ms
+```
+
+**结果**：
+- `node v24.22.2` / `pnpm 10.33.4`；`apps/web-ele/dist/`（css/js/jse/index.html/dist.zip）→ **构建 PASS**。
+- `schema.d.ts` 含 `/api/v1/sources`、`/api/v1/nodes` 等；**但缺顶层 `/api/v1/checks` 与 `/api/v1/subscriptions`** → 契约缺口，P1(utoipa)/P6 补齐。
+- 生成器本 spike 用 `openapi-typescript`（证 spec 可消费）；Vben 侧若要 typed client 可在 P6 换 `@hey-api/openapi-ts`。
+
+**决策**：P0-04 判定 **PASS**（构建链路 + 契约生成链路均打通）。进入 P0-05（许可证/供应链收口 + 固化各 PIN）。
