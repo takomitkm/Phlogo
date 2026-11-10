@@ -1,17 +1,18 @@
 //! Router assembly (mirrors `cmd/server/main.go` dispatch tree).
 use axum::{
-    extract::Path,
     http::{header, StatusCode},
     middleware,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
-
-use app_config::Config;
 use utoipa::OpenApi;
 
+use app_config::Config;
+
 use crate::auth::{require_admin_or_service, AuthState};
+use crate::handlers::{node, source};
+use crate::state::AppState;
 
 async fn health() -> &'static str {
     "ok"
@@ -32,41 +33,33 @@ async fn openapi_json() -> impl IntoResponse {
     }
 }
 
-// P1-02 stubs (real handlers land in p1-04): 501 when authenticated.
-async fn stub_list_sources() -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "sources list not implemented (p1-04)",
-    )
-}
-
-async fn stub_create_source() -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "sources create not implemented (p1-04)",
-    )
-}
-
-async fn stub_node_get(Path(_id): Path<String>) -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "node get not implemented (p1-04)",
-    )
-}
-
 pub fn build(cfg: Config) -> Router {
+    // Lazy pool: no connection until a handler issues a query, so health/auth tests work without DB.
+    let pool = database::connect_lazy(&cfg.database.dsn).expect("invalid database dsn");
+    let state = AppState::new(pool);
+
     let auth = AuthState {
         service_secret: cfg.auth.service_secret.clone(),
         jwt_secret: cfg.auth.jwt_secret.clone(),
     };
 
     let api_v1 = Router::new()
-        .route("/sources", get(stub_list_sources).post(stub_create_source))
-        .route("/nodes/:id", get(stub_node_get))
+        .route("/sources", get(source::list).post(source::create))
+        .route(
+            "/sources/:id",
+            get(source::get)
+                .patch(source::patch_source)
+                .delete(source::delete),
+        )
+        .route("/sources/:id/ignore-dead", post(source::set_ignore_dead))
+        .route("/sources/:id/nodes", get(source::nodes))
+        .route("/nodes", get(node::list))
+        .route("/nodes/:id", get(node::get).delete(node::delete))
         .layer(middleware::from_fn_with_state(
             auth,
             require_admin_or_service,
-        ));
+        ))
+        .with_state(state);
 
     Router::new()
         .route("/health", get(health))

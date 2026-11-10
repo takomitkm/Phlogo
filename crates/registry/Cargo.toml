@@ -1,0 +1,11 @@
+[package]
+name = "registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+database = { path = "../database" }
+domain = { path = "../domain" }
+anyhow.workspace = true
+uuid.workspace = true

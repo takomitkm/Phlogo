@@ -1,4 +1,6 @@
-//! paily-core-rust API library: router, auth, telemetry (exposed for unit tests + reuse).
+//! paily-core-rust API library: router, auth, handlers, state, telemetry.
 pub mod auth;
+pub mod handlers;
 pub mod router;
+pub mod state;
 pub mod telemetry;

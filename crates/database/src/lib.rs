@@ -1,5 +1,11 @@
-//! Database layer: PostgreSQL pool + SQLx migrations.
+//! Database layer: PostgreSQL pool + SQLx migrations + repositories.
 //! Migrations live at the repo root `migrations/` (embedded at compile time; no DB needed to build).
+pub mod models;
+pub mod repositories;
+
+pub use models::{NodeRow, SourceRow};
+pub use repositories::{NodeRepository, SourceRepository};
+
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
@@ -11,6 +17,11 @@ pub async fn connect(dsn: &str) -> anyhow::Result<PgPool> {
         .connect(dsn)
         .await?;
     Ok(pool)
+}
+
+/// Create a lazy pool (no connection until first query). Useful for API startup/tests without DB.
+pub fn connect_lazy(dsn: &str) -> anyhow::Result<PgPool> {
+    Ok(PgPoolOptions::new().max_connections(6).connect_lazy(dsn)?)
 }
 
 /// Apply the embedded migrations (`migrations/` at repo root).

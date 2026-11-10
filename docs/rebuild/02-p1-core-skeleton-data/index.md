@@ -24,7 +24,7 @@
 
 ## 阶段级验收 / Phase Acceptance
 
-以下条件**全部满足**才视为 P1 完成（后续均可直接转写为 CI `run:`）：
+以下条件**全部满足**才视为 P1 完成（后续均可直接转写为 CI `run:`）。**状态：已完成，P1 PASS（2026-11-10，真实 PG 18.6 验证）**：
 
 1. **Workspace 可编译**：`cargo build --workspace --all-targets` 退出码 0，`cargo fmt --all -- --check` 与 `cargo clippy --workspace --all-targets -- -D warnings` 均 0 警告。
 2. **迁移可应用**：`cargo sqlx migrate run` 在干净的测试 PostgreSQL 上成功；`SQLX_OFFLINE=true cargo sqlx prepare` 离线编译通过。

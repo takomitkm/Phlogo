@@ -344,3 +344,28 @@ cargo run -p database --example migrate
 4. seed 实为 **23** 个 KV 键（`filename_*` 3 个独立键），与文档「22」歧义说明已记录。
 
 **决策**：P1-03 判定 **PASS**。进入 P1-04（Source/Node CRUD + 关系 + 集成测试）。
+
+---
+
+## [UTC 2026-11-10T02:40:00Z] S14 · P1-04 Source/Node CRUD + 关系（真实 PG 集成测试 + API e2e 全绿）
+
+**动作**：新增 `crates/registry`、`database` 仓库层与模型、`apps/api` handlers + AppState（lazy pool），接入真实路由。
+
+**命令**（校机，PG 18.6 + cargo）：
+```
+cargo build --workspace --all-targets
+DATABASE_URL=postgres://paily:change-me@127.0.0.1:5432/paily cargo test --workspace
+cargo test -p database --test pg_crud
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+# API e2e：起 api(PAILY_AUTH_SERVICE_SECRET=svc-secret) → curl POST /api/v1/sources 两次（同 body）
+```
+
+**结果**：`BUILD/TEST/FMT/CLIPPY` 全 0；`pg_crud` **2 passed**；**e2e `create1=201 create2=200`**（b1 `alreadyExisted=false`、b2 `true`，同一 id），`list_noauth=401`/`list_auth=200`。
+
+**决策/修正**：
+1. 去重竞态：新增 `0002_uq_sources`（`UNIQUE(type,content)`）+ `ON CONFLICT ... DO NOTHING`，并发安全（取代 `FOR UPDATE` 方案）。
+2. `apps/api` 用 `database::connect_lazy` 构建 pool，未连库即可跑 health/401/404 单测。
+3. handler `parse_id` 用 `#[allow(clippy::result_large_err)]`；rustfmt 差异按 `fmt.log` 逐处修正。
+
+**决策**：P1-04 判定 **PASS**。**P1 阶段（骨架+数据层+CRUD）全部完成**。下一步进入 P2（fetch/parse 抓取解析）。

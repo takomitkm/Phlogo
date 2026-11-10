@@ -5,6 +5,7 @@ members = [
     "apps/worker",
     "crates/domain",
     "crates/database",
+    "crates/registry",
     "crates/config",
     "crates/api-contract",
 ]

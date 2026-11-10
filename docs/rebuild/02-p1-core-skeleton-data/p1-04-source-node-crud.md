@@ -189,6 +189,36 @@ async fn node_linked_to_two_sources_one_node_two_relations() {
 }
 ```
 
+### 验证结果 / Verified Results（已实测，2026-11-10）
+
+> 环境：校机 `rustc 1.99.1` + **PostgreSQL 18.6**（MSYS2）；`DATABASE_URL=postgres://paily:change-me@127.0.0.1:5432/paily`。
+
+**落地结构**：
+- 新 crate **`crates/registry`**（`SourceService`/`NodeService`，领域服务，镜像 `internal/source/service.go`、`internal/node/*`）。
+- `crates/database`：`models::{SourceRow,NodeRow}` + `repositories::{source,node}`（`create_dedup`、`list/get/update/delete`、`set_ignore_dead`、`nodes_of_source`、`upsert_by_hash`、`link`、`count_node_sources`）；`connect_lazy`（API 启动/测试无需真库）。
+- `apps/api`：`AppState`（含 lazy `PgPool` + services）+ `handlers/{source,node}`，`router::build` 挂真实路由（`/sources`、`/sources/:id`、`/sources/:id/ignore-dead`、`/sources/:id/nodes`、`/nodes`、`/nodes/:id`），沿用 P1-02 认证层。
+
+**去重竞态（评审结论）**：新增迁移 `0002_uq_sources` 给 `sources` 加 `UNIQUE(type,content)`；`create_dedup` 用
+`INSERT ... ON CONFLICT (type,content) DO NOTHING RETURNING id`，冲突则回查既有 id → **并发安全、无需 `FOR UPDATE`**。
+
+**实测**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0** |
+| `cargo test --workspace` | **0** |
+| `cargo test -p database --test pg_crud` | **0**，`2 passed`（两条不变量） |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+| **API e2e（同 body 两次 POST）** | **`create1=201 create2=200`**；b1 `alreadyExisted=false`，b2 `alreadyExisted=true`，**同一 id** |
+| 鉴权 | `list_noauth=401`、`list_auth=200`（service bearer） |
+
+**不变量验证**：
+1. **去重**：API 两次相同 `type+content` → 201→200，同一 id，`sources` 仅 1 行（e2e + 集成测试双证）。
+2. **关系**：1 node ↔ 2 source → `nodes` 1 行 + `node_sources` 2 行（`pg_crud::node_linked_to_two_sources_one_node_two_relations` 通过）。
+
+**说明/偏差**：P1 未提供建 node 的 API（node 由 P2 fetch 产生），故不变量 #2 用 repository 集成测试验证；`nodes` 的 API 仅 list/get/delete。
+`result_large_err`（handler `parse_id` 返回大 `Response`）用 `#[allow]` 显式标注。
+
 ### 验收 / Acceptance
 
 | 命令 / 行为 | 预期 |

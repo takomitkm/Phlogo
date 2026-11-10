@@ -13,10 +13,13 @@ tracing-subscriber.workspace = true
 serde.workspace = true
 jsonwebtoken.workspace = true
 utoipa.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
 api-contract = { path = "../../crates/api-contract" }
 app-config = { path = "../../crates/config" }
 domain = { path = "../../crates/domain" }
 database = { path = "../../crates/database" }
+registry = { path = "../../crates/registry" }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
