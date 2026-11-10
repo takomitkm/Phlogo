@@ -7,6 +7,7 @@ members = [
     "crates/database",
     "crates/registry",
     "crates/fetch",
+    "crates/vproxy-adapter",
     "crates/config",
     "crates/api-contract",
 ]

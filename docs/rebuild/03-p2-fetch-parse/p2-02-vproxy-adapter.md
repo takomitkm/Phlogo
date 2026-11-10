@@ -130,6 +130,30 @@ proxies:
     alpn: ["h2"]
 ```
 
+### 验证结果 / Verified Results（已实测，2026-11-10）
+
+> 依据 P0-01 结论：**VProxy 不作依赖，最小化移植**。故 `crates/vproxy-adapter` 自实现解析（Clash YAML / Sing-box JSON / Base64），不引入 VProxy/VProxy 类型。
+
+**落地**：
+- `crates/domain/src/node.rs`：`NormalizedNode{protocol,server,port,credentials,transport,tls,network_options | display_name,source_context,raw_config_reference | identity_hash,fingerprint_version}` + `Credential{Enum:Uuid/Password/None}`、`Transport`、`TlsSettings`、`SourceContext`。
+  **`NormalizedNode::identity_material()`**：只序列化**身份字段**（`protocol/server/port/credentials/transport/tls/network_options`），供 p2-03 做哈希；显示/来源字段不参与。
+- `crates/vproxy-adapter`：`parse_subscription(bytes, ctx) -> Vec<NormalizedNode>`。识别顺序 Clash(YAML)→Sing-box(JSON)→Base64(解一层后重试)；`from_clash`/`from_singbox` 逐协议抽 `credentials`（vmess/vless=uuid，trojan/ss=password）、`transport`(ws path/host、grpc service_name)、`tls`(enabled/sni/alpn/reality)。**解析阶段保留原始凭据值**，percent-decode 留到 p2-03，避免双重解码。
+- 不支持的协议（无 `uuid`/`password`）被跳过；仅当无任何可支持节点时返回 `UnrecognizedFormat`。
+
+**实测（校机）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build -p vproxy-adapter -p domain --all-targets` | **0**（8.99s） |
+| `cargo test -p vproxy-adapter -p domain` | **0**：`clash`/`singbox`/`base64`/`field_separation` + `identity_ignores_display_name_but_not_transport`（5 passed） |
+| `cargo fmt -p vproxy-adapter -p domain -- --check` | **0** |
+| `cargo clippy -p vproxy-adapter -p domain --all-targets -- -D warnings` | **0** |
+| **类型不渗透** `cargo tree -p database` 含 `vproxy`? | **NO**（DB 层不依赖 adapter） |
+
+**clash 用例断言**：解析出 3 个节点，`display_name` = `hk-vmess-01/jp-vmess-02/sg-trojan-01`；vmess `credentials=Uuid(1111…)`、ws `path=/ray`、`Host=hk.example.com`；trojan `credentials=Password("s3cr3t-password")`、`alpn=["h2"]`。
+**field_separation**：改名不改 `identity_material()`；改变 `transport.path` 则改变。
+
+**说明**：fixtures 以测试内联字符串实现（等价于 `tests/fixtures/parser/*`，避免运行期路径依赖）；percent-decode 与身份哈希在 p2-03。
+
 ### 验收 / Acceptance
 
 1. **解析样例** —— `cargo test -p vproxy-adapter`：

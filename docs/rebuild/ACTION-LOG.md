@@ -387,3 +387,22 @@ cargo clippy -p fetch --all-targets -- -D warnings
 **结果**：全 **0**；`6 passed`（黑名单表/良性/元数据/重定向元数据/超大/超时）。`reqwest 0.12.28` + `rustls-tls` 在 GNU/Windows 上编译成功（无 aws-lc C 依赖问题）。
 
 **决策**：P2-01 **PASS**。DNS-rebinding 极小窗口以「解析后校验」缓解，彻底版（固定 IP 连接）列 P7 加固。进入 P2-02（VProxy 解析 Adapter → NormalizedNode）。
+
+---
+
+## [UTC 2026-11-10T03:28:00Z] S16 · P2-02 解析 Adapter（domain::NormalizedNode + Clash/Singbox/Base64，5 测试）
+
+**动作**：定义 `domain::NormalizedNode`（身份字段 vs 展示字段分离 + `identity_material()`）；新建 `crates/vproxy-adapter` 自实现解析（P0-01 决定 VProxy 不作依赖）。
+
+**命令**（校机）：
+```
+cargo build -p vproxy-adapter -p domain --all-targets
+cargo test -p vproxy-adapter -p domain
+cargo fmt -p vproxy-adapter -p domain -- --check
+cargo clippy -p vproxy-adapter -p domain --all-targets -- -D warnings
+cargo tree -p database | findstr vproxy    # 期望无
+```
+
+**结果**：全 **0**；`5 passed`（clash/singbox/base64/field_separation + domain identity 分离）；**`cargo tree -p database` 无 vproxy**（类型不渗透约束成立）。
+
+**决策**：P2-02 **PASS**。percent-decode 与身份哈希留 P2-03。进入 P2-03（identity_hash + fingerprint_version + golden）。

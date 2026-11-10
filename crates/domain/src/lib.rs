@@ -1,1 +1,4 @@
-//! Domain layer (entities + domain services). Placeholder for P1-01; filled in p1-04+.
+//! Domain layer: entities + domain services.
+pub mod node;
+
+pub use node::{Credential, NormalizedNode, SourceContext, TlsSettings, Transport};
