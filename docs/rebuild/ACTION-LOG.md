@@ -483,3 +483,13 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **结果**：全 **0**；`7 passed`。
 
 **决策**：P3-02 **PASS**。进入 P3-03（结果解析/单位规范化/迟到重复处理/跨 tag 合并）。
+
+---
+
+## [UTC 2026-11-11T03:25:00Z] S21 · P3-03 结果规范化与映射（迟到不覆盖 + 跨 tag 合并；11 测试全绿）
+
+**动作**：`checker-miaospeed` 新增 `result.rs`（normalize/reconcile：单位缺省、按 node_id 去重、unreported→Unknown）与 `health.rs`（NodeHealth、`should_overwrite` 迟到规则、`cross_tag_alive` 窗口合并）。
+
+**实测**（校机）：build/test(11 passed)/fmt/clippy 全 **0**。4 条验收全过：精准映射、迟到不覆盖、partial/duplicate/reconnect、跨 tag 合并（含 cutoff 边界）。
+
+**决策**：P3-03 **PASS**。进入 P3-04（`check_runs`/`node_check_results`/`node_status` 持久化 + 幂等重试落库）。

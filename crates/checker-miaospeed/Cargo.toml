@@ -14,3 +14,4 @@ sha2 = "0.10"
 base64 = "0.22"
 uuid.workspace = true
 thiserror.workspace = true
+chrono = { version = "0.4", features = ["serde"] }

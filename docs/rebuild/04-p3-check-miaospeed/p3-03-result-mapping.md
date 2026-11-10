@@ -175,6 +175,25 @@ pub fn cross_tag_alive(snapshots: &[PerTagHealth], window: i64 /* minutes */, no
 - **disconnect**：WebSocket 断连（`p3-02`）后 `reconnect`；Adapter 必须能（a）`re-collect` 同一 `job_id`，或（b）`re-submit` 并刷新 vendor_id 映射。
 - **duplicate results**：MiaoSpeed 在重连后可能重复下发同一节点结果；Step 3 的按 `(node_id)` 去重 + Step 4 的「迟到不覆盖」共同保证不产生重复/错误快照。
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地**（`crates/checker-miaospeed` 内两模块）：
+- `result.rs`：`NormalizedCheckResult{node_id, checker_tag, run_id, checked_at, initial, deep, region}`；`normalize`（adapter 已按 `ProxyInfo.Name` 解析出 `internal_node_id`，规范化只补 run/tag/时间戳与单位缺省：`-1`=dead、`0`=未测、空串 region→None）；`reconcile`（按 node_id 去重 first-wins + 未上报节点集合 → Unknown，覆盖 partial/timeout/disconnect/duplicate）。
+- `health.rs`：`NodeHealth{Unknown,Alive,Dead}`（`Degraded` 留 P4 评分层，防与 Phlogo 基线偏离）；`health_from_result`（`latency_ms != -1` 即 alive，对齐 `batchAliveDecision`）；`should_overwrite`（**仅 `incoming.checked_at > existing.last_checked_at` 才覆盖**，迟到即丢）；`cross_tag_alive`（窗口内任一 tag alive 即 alive，默认窗口 240 分钟；含边界：恰在 cutoff 上算 alive）。
+- 输出为待持久化领域对象（`NormalizedCheckResult` + `PerTagHealth`），落库在 p3-04。
+
+**实测（校机）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（33.80s） |
+| `cargo test -p checker-miaospeed` | **0**，**11 passed**（P3-02 的 7 条 + 新 4 条） |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+
+**新 4 条（对应验收 1–4）**：`maps_each_result_to_correct_node_id` ✓、`late_result_does_not_overwrite_newer_snapshot` ✓（迟到丢弃/新者覆盖/首写必胜三态）、`partial_and_duplicate_and_reconnect` ✓（5 投 3 返 + 重复 1 次 → 去重 3 条 + 2 unreported；`-1` 判 Dead）、`cross_tag_alive_merge` ✓（A dead + B alive→alive；双 dead→否；出窗→否；cutoff 边界→是）。
+
+**说明/偏差**：`checked_at` 取自本机 `now`（MiaoSpeed 帧无时间戳，P0-02 D.6 仅有 `InvokeDuration`）；「迟到不覆盖」语义由 `should_overwrite` 纯函数钉死，p3-04 落库时按同规则写 SQL 条件 UPDATE。`DeepResult.region` 的空串过滤即 Phlogo `applyRegionUpdates` 的前置来源。
+
 ### 验收 / Acceptance
 
 1. **每条结果精准映射到 node_id**：
