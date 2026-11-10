@@ -646,3 +646,16 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **踩坑**：PS 5.1 无 `utf8NoBOM` Encoding；`podman machine ssh` 的 heredoc 会落到 Windows 侧 `%APPDATA%\containers\`（宿主与 machine 共读该配置目录），TOML 引号被剥导致解析失败——用 .NET WriteAllText 重写。
 
 **决策**：Podman 兼容 PASS（deploy 全套双运行时可用）。
+
+---
+
+## [UTC 2026-11-11T07:40:00Z] S35 · 契约缺口收口：视图 + 订阅管理端点（端到端全链 PASS）
+
+**动作**：`handlers/views.rs`（stats/checkers/logs/check/logs/fetch、nodes/{id}/checks/{initial,deep}）+ `handlers/subscriptions_admin.rs`（subscriptions CRUD、tokens 签发/撤销/列表）+ 路由挂载。
+
+**端到端实测**（校机真实 PG）：stats/checkers/logs 全 200（真实数据：266 节点/363 源/3 tag）、无认证 401、
+profile 创建 201 → token 签发 201（明文一次性）→ **用该 token 拉 /sub 200**——P5-03 管线与 P7-03 token 路由全链闭环。
+
+**修正**：profile `output_format NOT NULL` 由 SQL 缺省 `'base64'`；`logs_fetch` success 改 `(status='finished')`；e2e JSON 体固定走文件。
+
+**决策**：**契约缺口清零**——P6-02 四个待补页面（Dashboard/Checks/NodeDetail/Subscriptions）的数据源全部可用。

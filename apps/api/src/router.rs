@@ -3,7 +3,7 @@ use axum::{
     http::{header, StatusCode},
     middleware,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use utoipa::OpenApi;
@@ -11,7 +11,7 @@ use utoipa::OpenApi;
 use app_config::Config;
 
 use crate::auth::{require_admin_or_service, AuthState};
-use crate::handlers::{config, metrics, node, source, subscription};
+use crate::handlers::{config, metrics, node, source, subscription, subscriptions_admin, views};
 use crate::state::AppState;
 
 async fn health() -> &'static str {
@@ -55,6 +55,28 @@ pub fn build(cfg: Config) -> Router {
         .route("/sources/:id/nodes", get(source::nodes))
         .route("/nodes", get(node::list))
         .route("/nodes/:id", get(node::get).delete(node::delete))
+        .route("/nodes/:id/checks/initial", get(views::node_initial_checks))
+        .route("/nodes/:id/checks/deep", get(views::node_deep_checks))
+        .route("/stats", get(views::stats))
+        .route("/checkers", get(views::checkers))
+        .route("/logs/check", get(views::logs_check))
+        .route("/logs/fetch", get(views::logs_fetch))
+        .route(
+            "/subscriptions",
+            get(subscriptions_admin::list_profiles).post(subscriptions_admin::create_profile),
+        )
+        .route(
+            "/subscriptions/:id",
+            put(subscriptions_admin::update_profile).delete(subscriptions_admin::delete_profile),
+        )
+        .route(
+            "/subscriptions/:id/tokens",
+            get(subscriptions_admin::list_tokens).post(subscriptions_admin::issue_token),
+        )
+        .route(
+            "/subscriptions/tokens/:id",
+            delete(subscriptions_admin::revoke_token),
+        )
         .route("/config", get(config::get_config).put(config::put_config))
         .layer(middleware::from_fn_with_state(
             auth,

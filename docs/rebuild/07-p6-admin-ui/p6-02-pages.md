@@ -215,10 +215,33 @@
 - 所有读写都收敛到 `api/openapi/spec.yaml` 的 27 路径，取代了上游管理端可能直连 DB 的既有实现
   （本方案硬约束：Vben Admin 不直接访问数据库或 MiaoSpeed，见方案 §2.1）。
 
-### 契约缺口（必须向 API 侧反馈） / Contract gaps to escalate
+### 契约缺口收口（已实测，2026-11-11）
+
+**待暴露端点全部落地**（此前标注的「契约缺口」清零）：
+
+- **视图端点**（`apps/api/src/handlers/views.rs`）：`GET /api/v1/stats`（total/alive nodes、total/dead sources）、
+  `GET /api/v1/checkers`（distinct tag）、`GET /api/v1/logs/check`（node_check_results 时间线，`?node_id=` 过滤）、
+  `GET /api/v1/logs/fetch`（source_fetch_runs 历史，`?source_id=` 过滤）、
+  `GET /api/v1/nodes/{id}/checks/initial` 与 `/checks/deep`（按节点测活时间线）。
+- **订阅管理端点**（`handlers/subscriptions_admin.rs`）：`GET/POST /api/v1/subscriptions`（profile 列表/创建）、
+  `PUT/DELETE /api/v1/subscriptions/{id}`（更新 bump version=缓存失效；删除级联 token）、
+  `GET/POST /api/v1/subscriptions/{id}/tokens`（列表/签发——**明文只在创建响应返回一次**）、
+  `DELETE /api/v1/subscriptions/tokens/{id}`（撤销→`/sub` 立即 401）。
+
+**端到端实测（校机，真实 PG）**：
+```
+create=201  stats=200 {total_nodes:266, alive:32, sources:363, dead:41}
+checkers=200 ["a","b","default"]  logs_check=200  logs_fetch=200  stats_noauth=401
+PROFILE_CREATE=201 {"id":"df259aac…"}  TOKEN_ISSUE=201 {token:…}
+SUB_VALID=200   （签发的 token 拉 /sub/{token}.yaml 成功）
+```
+→ Dashboard/Checks/NodeDetail/Subscriptions 四页的数据源齐了；页面文件随需补（`paily.ts` 加对应调用即可）。
+
+**过程修正**：profile 的 `output_format NOT NULL`（0009）由 insert/update SQL 提供 `'base64'` 缺省；
+`logs_fetch` 的 success 表达式改 `(status='finished')`；e2e 的 JSON 体再次踩 PS 原生命令引号坑——固定走文件 `--data-binary @file`。
+
 
 以下 plan §11/§12 设想的能力在**当前 27 路径契约中不存在**，本页用替代端点实现或暂无法实现：
-
 | 缺失 | plan 出处 | 当前替代 / 影响 |
 |---|---|---|
 | `/sources/{id}/runs`（抓取批次）+ `fetch_policy` 字段 | §11、`SourceSummary/Detail` 无 `fetch_policy` | 抓取历史改用 `LogFetchList?source_id=`；`fetch_policy` (Replace/Accumulate) 无展示/编辑入口，需 P1/P4 补契约 |
