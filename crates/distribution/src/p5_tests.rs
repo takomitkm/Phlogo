@@ -180,8 +180,7 @@ fn random_sample_uniform() {
 /// C11: preset semantics over a representative candidate set.
 #[test]
 fn preset_semantics_end_to_end() {
-    let mut entries = Vec::new();
-    for r in ["HK", "TW", "SG", "US", "JP"] {
+    let mut entries = Vec::new();    for r in ["HK", "TW", "SG", "US", "JP"] {
         for i in 0..6 {
             entries.push(cand(&format!("{r}{i}"), r, 0.3 + (i as f64) * 0.05));
         }
