@@ -1,5 +1,6 @@
 //! Database layer: PostgreSQL pool + SQLx migrations + repositories.
 //! Migrations live at the repo root `migrations/` (embedded at compile time; no DB needed to build).
+pub mod check;
 pub mod models;
 pub mod reconcile;
 pub mod repositories;

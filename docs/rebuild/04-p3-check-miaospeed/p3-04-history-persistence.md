@@ -209,6 +209,29 @@ pub async fn run_check(&self, job: &CheckJob) -> Result<(), CheckerError> {
 }
 ```
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地**：
+- migration **`0005_check_results`**：`node_check_results{id,node_id,check_run_id,checker_tag,metrics jsonb,result_status,checked_at,UNIQUE(node_id,check_run_id,checker_tag)}`（初筛+复筛合并）、`node_status{node_id,checker_tag,health,last_checked_at,PK(node_id,checker_tag)}`（per-tag 快照）、`check_runs` 补 `external_job_id`。`check_runs` 本体在 P3-01 的 0004 已建。
+- `crates/database/src/check.rs`：**不依赖 checker-miaospeed 类型**（用 `CheckResultRow` 平面参数，守住「DB 层不依赖 adapter」分层约束）——`build_metrics`（`latency_ms` + 可选 deep 组 + region 空串过滤）、`result_status_of`（`-1`→dead）、`persist_check_run`（单事务：run upsert + 逐行 `ON CONFLICT DO NOTHING` + unreported→`unknown` 行）、`upsert_node_status`（**`WHERE EXCLUDED.last_checked_at > node_status.last_checked_at` 迟到不覆盖**）。
+
+**实测（校机，PG 18.6）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（34.60s） |
+| `cargo test --workspace` | **0**——`database::check_persist` 2 场景全过 |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+
+**测试覆盖（验收 1–3；#4 migration check 由 `migrate!` 运行时一致性覆盖）**：
+- `check_persistence_idempotent_and_metrics_roundtrip`：3 节点持久化（alive/dead/alive）→ run/results 计数正确；**同 run_id 重跑 `inserted==0` 且行数不变**；metrics JSONB roundtrip 逐字段一致（`speed_kbps=0` 未测保留、`region/streaming/metadata` 原样、`-1`→`dead`）。
+- `node_status_late_write_no_overwrite`：T+10 写 alive → T 迟到写 dead **不生效**（health/last_checked_at 不变）→ T+20 新写 dead 生效。
+
+**说明/偏差**：
+- `nodes.alive` 直写与跨 tag 物化**不在本步骤**（Phlogo `batchAliveDecision` 的两次 UPDATE）；per-tag `node_status` 为唯一事实源，跨 tag 聚合落 P4（沿用 p3-03 `cross_tag_alive`）。
+- `apply_region_updates`（事务外 CASE WHEN 分批）留 P4 评分/健康层一并实现；region 现存于 `metrics->'region'`。
+- ScoringPort/CacheRebuildPort 占位调用按规格省略（P4/P5）。
+
 ### 验收 / Acceptance
 
 1. **集成测试：持久化且幂等**：

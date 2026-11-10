@@ -493,3 +493,13 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **实测**（校机）：build/test(11 passed)/fmt/clippy 全 **0**。4 条验收全过：精准映射、迟到不覆盖、partial/duplicate/reconnect、跨 tag 合并（含 cutoff 边界）。
 
 **决策**：P3-03 **PASS**。进入 P3-04（`check_runs`/`node_check_results`/`node_status` 持久化 + 幂等重试落库）。
+
+---
+
+## [UTC 2026-11-11T03:45:00Z] S22 · P3-04 测活历史持久化（幂等 + 迟到不覆盖落库；P3 全部完成）
+
+**动作**：migration `0005_check_results`（`node_check_results` 合并初筛/复筛 + `node_status` per-tag 快照 + `check_runs.external_job_id`）；`database::check`（平面参数化，DB 层不依赖 adapter crate）。
+
+**实测**（校机 PG 18.6）：build/test/fmt/clippy 全 **0**；`check_persist` 2 场景过——同 run_id 重跑 `inserted==0` 且计数不变、metrics JSONB roundtrip 逐字段一致（`speed_kbps=0` 保留）、`node_status` 迟到写（T+0 vs T+10）不覆盖、新写（T+20）生效。
+
+**决策**：P3-04 **PASS**。**P3 阶段（Apalis Job / WS Adapter / 结果映射 / 历史持久化）全部完成**。下一步进入 P4（生命周期与评分：状态机、MarkDeadAndClean、评分引擎）。
