@@ -503,3 +503,15 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **实测**（校机 PG 18.6）：build/test/fmt/clippy 全 **0**；`check_persist` 2 场景过——同 run_id 重跑 `inserted==0` 且计数不变、metrics JSONB roundtrip 逐字段一致（`speed_kbps=0` 保留）、`node_status` 迟到写（T+0 vs T+10）不覆盖、新写（T+20）生效。
 
 **决策**：P3-04 **PASS**。**P3 阶段（Apalis Job / WS Adapter / 结果映射 / 历史持久化）全部完成**。下一步进入 P4（生命周期与评分：状态机、MarkDeadAndClean、评分引擎）。
+
+---
+
+## [UTC 2026-11-11T03:35:00Z] S23 · P4-01 状态机与事务化清理（lifecycle crate；4 测试全绿）
+
+**动作**：新建 `crates/lifecycle`（四枚举 + 转换规则表 + `ops.rs`：`mark_dead_and_clean` 条件 UPDATE 仅赢家清理、孤儿/退役守卫、物理删除）+ migration `0006_lifecycle`（`retired_at` + `orphan_retention_days=14`）。
+
+**实测**（校机 PG 18.6）：build/test/fmt/clippy 全 **0**；状态机 2/2（Dead 终态、Linked↛Retired 等非法转换拒绝）+ PG 集成 2/2（死源清理幂等、孤儿→Retired→复活幸存）。
+
+**踩坑**：`make_interval(days => …)` 无 bigint 重载，绑 `i32`。
+
+**决策**：P4-01 **PASS**。进入 P4-02（健康/孤儿清理 Job：跨 tag alive 物化到 nodes、清理调度）。

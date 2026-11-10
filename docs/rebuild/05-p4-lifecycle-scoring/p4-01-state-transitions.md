@@ -153,6 +153,27 @@ if affected > 0 {
 `UpsertFromFetchResult` 的**死源保护**（upsert.go:52，`Status == "dead"` 直接跳过）必须保留：
 来源已 `Dead` 时拒收在途 fetch 结果，避免复活僵尸映射。
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地**：
+- 新 crate **`crates/lifecycle`**：`state.rs`（`SourceStatus{Active,Suspended,Dead}` / `FetchPolicy{Replace,Accumulate}` / `NodeHealth{Unknown,Alive,Degraded,Dead}` / `NodeMembership{Linked,Orphaned,Retired}`，全部带 `as_str()`）+ `transitions.rs`（规则表 + `can_transition_*` + `transition_*` 校验 + `TransitionError`）+ `ops.rs`（事务化 DB 清理）。
+- migration **`0006_lifecycle`**：`nodes.retired_at` + config seed `orphan_retention_days=14`（规格建议复用窗口或新增 seed——选择新增专用键，默认 14 天，P4-02 的清理 Job 用同一读取路径）。
+- `ops.rs`：`mark_dead_and_clean`（**条件 UPDATE `status <> 'dead'`，仅赢家清理**，同事务内删映射+标孤儿）、`mark_orphaned_if_lonely`（原子 `NOT EXISTS` 守卫）、`retire_expired_orphans`（`make_interval(days => $1)`，写 `retired_at`）、`delete_retired_nodes`（`NOT EXISTS node_sources` 守卫，复活节点幸存）。
+
+**实测（校机，PG 18.6）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（35.41s） |
+| `cargo test --workspace` | **0**——`transitions` 2/2（全部合法/非法转换断言）+ `lifecycle::p401` 2/2 |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+
+**PG 集成 2 场景**：`mark_dead_and_clean_is_idempotent`（共享节点仍 Linked、独占节点 Orphaned、二次调用 skip、映射清零、status=dead）✓；
+`orphan_retire_delete_lifecycle`（孤儿 → 回溯 30 天 → Retired → 复活重链 → 物理删守卫下幸存且 Linked）✓。
+
+**验收对照**：状态机断言（Active↔Suspended 可逆、Dead 终态、Linked→Orphaned→Retired、Orphaned/Retired→Linked 复活、Linked↛Retired）全过；死源保护沿用 P2-04 的 `reconcile_fetch_result` 守卫（dead/suspended 拒收，已在 P2 实测）；事务幂等即 `mark_dead_and_clean` 集成场景。
+`make_interval` 参数用 `i32` 绑定（PG 的 `days => int` 无 bigint 重载，实测踩坑）。
+
 ### 验收 / Acceptance
 
 状态机测试套件（建议放在 `crates/lifecycle/tests/transitions.rs`）：

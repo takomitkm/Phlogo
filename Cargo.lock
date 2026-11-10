@@ -1214,6 +1214,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lifecycle"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "database",
+ "serde",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "litemap"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

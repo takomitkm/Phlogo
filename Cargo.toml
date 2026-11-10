@@ -9,6 +9,7 @@ members = [
     "crates/fetch",
     "crates/vproxy-adapter",
     "crates/checker-miaospeed",
+    "crates/lifecycle",
     "crates/config",
     "crates/api-contract",
 ]
