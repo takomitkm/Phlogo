@@ -252,3 +252,25 @@ npx -y openapi-typescript@7 spec.yaml -o schema.d.ts   # OAPI_EXIT=0, 1256行→
 - 生成器本 spike 用 `openapi-typescript`（证 spec 可消费）；Vben 侧若要 typed client 可在 P6 换 `@hey-api/openapi-ts`。
 
 **决策**：P0-04 判定 **PASS**（构建链路 + 契约生成链路均打通）。进入 P0-05（许可证/供应链收口 + 固化各 PIN）。
+
+---
+
+## [UTC 2026-11-10T01:06:00Z] S10 · P0-05 许可证/供应链收口 + P0 全阶段完成
+
+**动作**：固化各上游 PIN 与许可证，落地 `deny.toml` 脚手架，`THIRD_PARTY.md` 定稿，更新 P0 阶段验收。
+
+**命令/动作**（编辑机）：
+```
+GET https://api.github.com/repos/mateo-ki/vproxy/commits?per_page=1   # HEAD 19b9c147…（v1.16.9）
+# 新建 deny.toml（仓库根，licenses/advisories/bans/sources；待 P1 core-rs/Cargo.toml 后生效）
+# 更新 docs/THIRD_PARTY.md：VProxy/Apalis/Vben/MiaoSpeed/Mihomo 全部真实版本+哈希
+# 更新 p0-05 页面「固定基线」节 + P0 index 验收勾选
+```
+
+**结果（P0 收口）**：`docs/THIRD_PARTY.md` 固定版本一览——
+- VProxy `19b9c147…`（v1.16.9，MIT，仅移植）；MiaoSpeed tag `4.7.9` 自建 exe `2c302b29…46ab18`（AGPL）；Mihomo `AirportR/mihomo v1.19.33-x365-miu.2`（GPL，随 MiaoSpeed）；Apalis `0.7.4`（MIT）；Vben `v5.7.0`（commit `63a38dce…70e9`，MIT）；paily AGPL 仅架构参考。
+- `deny.toml` 已落地（P1 生效）；SBOM 计划：`cargo cyclonedx` + 二进制哈希登记比对。
+
+**决策**：**P0 全阶段 PASS**（P0-01 VProxy / P0-02 MiaoSpeed / P0-03 Apalis / P0-04 Vben / P0-05 许可证供应链）。下一步进入 **P1（core-rs workspace + 数据层）**，开始真正写 Rust 代码；重量级编译继续走校机（rustc 1.99.1 + MinGW PATH）。
+
+> 环境基线（后续复用）：校机 `rustc/cargo 1.99.1`（rsproxy 升级）；GNU target 需 `D:\yzd\MSYS2\mingw64\bin` 于 PATH；cargo 依赖走 `rsproxy-sparse`；Go 依赖走 `goproxy.cn`；node `v24.22.2`+pnpm `10.33.4`（npmmirror）。

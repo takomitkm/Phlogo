@@ -24,7 +24,7 @@
 | Mihomo（MiaoSpeed 内嵌） | `AirportR/mihomo v1.19.33-x365-miu.2`（go.mod `replace`） | 随 MiaoSpeed 构建 | 见 MiaoSpeed SBOM | 债务：GPL 义务 |
 | Apalis | `apalis 0.7.4` + `apalis-sql 0.7.4`（features `sqlite,postgres`；最新稳定 `1.0.0` 列为升级候选） | crates.io | N/A（Rust 库，无独立二进制） | ✅ 编译通过 + SQLite 运行时队列 PASS（P0-03） |
 | Vben Admin (web-ele) | tag `v5.7.0`（commit `63a38dce49ba109f61607994e21ba921d8e970e9`） | GitHub tag | N/A（源码构建，产物 `dist.zip`） | ✅ 构建通过 + OpenAPI→TS 生成通过（P0-04） |
-| VProxy | `mateo-ki/vproxy @ <commit 待 P0-01 锁>` | — | — | ⏳ |
+| VProxy | `mateo-ki/vproxy @ 19b9c147631ca0ddfd9e1d214fc2ed9244cd5340`（v1.16.9） | GitHub main | N/A（仅移植算法，不链接/分发其二进制） | ✅ 决策：最小化移植（非依赖，P0-01） |
 
 > 备注：MiaoSpeed 采用**自建**（源码 tag `4.7.9`）作为供应链基线；GitHub 预编译资产的 commit 不在公开仓库，无法复现同哈希构建，故不作基线。
 > MiaoSpeed 构建需补齐 `utils/embeded/BUILDTOKEN.key` 与 `preconfigs/embeded/tls/*`（详见 `01-p0-upstream-verification/p0-02-miaospeed.md` 步骤 A）。

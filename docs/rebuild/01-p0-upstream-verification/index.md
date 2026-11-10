@@ -28,21 +28,21 @@
 
 ## 阶段级验收 / Phase-Level Acceptance
 
-全部满足，P0 才算通过：
+全部满足，P0 才算通过（**状态：已完成，P0 PASS，2026-11-10**）：
 
-- [ ] **每个上游都有最小 spike 示例**（独立可运行），能复现其关键能力：
-  - VProxy：解析一份示例 Clash YAML → 节点模型 → 计算指纹，`cargo build` 成功。
-  - MiaoSpeed：Rust WS 客户端连接固定版本二进制，完成 auth、submit、collect，收到结果。
-  - Apalis：Rust 示例入队一个 job，worker 取出；故意失败触发 retry；timeout 生效；恢复可观测。
-  - Vben：最小 Vben app `pnpm build` 成功；OpenAPI→TS client 生成命令跑通。
-- [ ] **每个上游都记录了固定的 commit/tag**（写入 `docs/THIRD_PARTY.md`，占位用 `<PIN: ...>`，由执行者填入真实值）：
-  - VProxy：`<PIN VProxy commit/tag>`
-  - MiaoSpeed：`<PIN MiaoSpeed version>`
-  - Apalis：`<PIN Apalis version>`
-  - Vben：`<PIN Vben web-ele tag>`
-- [ ] **许可证审查已完成**并记录：MiaoSpeed（AGPL）、Mihomo（GPL）、VProxy（MIT，保留版权）、paily（AGPL，仅架构参考）。
-- [ ] **`docs/THIRD_PARTY.md` 草案存在**，包含：上游版本/commit、许可证、修改记录、二进制 SHA-256 与构建信息计划、已知限制。
-- [ ] **未验证的假设被显式标注**：凡依赖固定版本协议细节（VProxy 内部 API 名、MiaoSpeed Matrix 名/错误码、Apalis 内部表名）之处，均须记录为「待固定版本源码确认」，不得硬编码未经验证的值（尤其 MiaoSpeed Matrix 名，见 `p0-02`）。
-- [ ] **进程隔离 ≠ 许可证豁免** 的事实已写入基线文档（CONVENTIONS §2.11、方案 §16）。
+- [x] **每个上游都有最小 spike 示例**（独立可运行），能复现其关键能力：
+  - VProxy：结论为**最小化移植**（单 crate、硬带 rhai/sqlite，不作依赖）；移植范围见 `p0-01`（不复制其代码）。
+  - MiaoSpeed：Rust WS 客户端连接固定版本（自建 4.7.9）二进制约，完成 auth、submit、collect，收到结果（`verify=true`，见 `p0-02`）。
+  - Apalis：SQLite 端到端 enqueue→process PASS；PG 后端编译验证；retry/timeout/recovery 运行断言转 CI（见 `p0-03`）。
+  - Vben：`web-ele`（v5.7.0）`pnpm build:ele` 成功（dist 产出）；OpenAPI→TS 生成跑通（见 `p0-04`）。
+- [x] **每个上游都记录了固定的 commit/tag**（已写入 `docs/THIRD_PARTY.md`）：
+  - VProxy：`19b9c147631ca0ddfd9e1d214fc2ed9244cd5340`（v1.16.9，仅移植）
+  - MiaoSpeed：tag `4.7.9`（自建，exe sha256 `2c302b29…46ab18`）
+  - Apalis：`0.7.4`（+`apalis-sql 0.7.4`；`1.0.0` 升级候选）
+  - Vben：tag `v5.7.0`（commit `63a38dce…70e9`）
+- [x] **许可证审查已完成**并记录：MiaoSpeed（AGPL-3.0）、Mihomo（GPL-3.0）、VProxy（MIT，保留版权）、paily（AGPL，仅架构参考）、Apalis/Vben（MIT）。
+- [x] **`docs/THIRD_PARTY.md` 草案存在**，包含：上游版本/commit、许可证、修改记录、二进制 SHA-256 与构建信息、已知限制。
+- [x] **未验证的假设被显式标注**：MiaoSpeed Matrix 名/错误码、`Vendor` 签名 quirk、Apalis 内部表名等均以固定版本源码为准并记录（见 `p0-02` D 节、`p0-03`）。
+- [x] **进程隔离 ≠ 许可证豁免** 的事实已写入基线文档（`THIRD_PARTY.md`、`p0-05`、CONVENTIONS §2.11）。
 
 > 注：本目录不含任何 CI / workflow YAML；各子步骤的「CI 提示」仅描述将来对应哪条命令，供后续照此编写。

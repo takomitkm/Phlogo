@@ -128,6 +128,26 @@ echo "MiaoSpeed <PIN MiaoSpeed version> built from <commit>" >> build-artifacts/
 - VProxy 内部 API 以固定版本为准（见 P0-01）。
 ```
 
+### 固定基线（已落地）/ Pinned Baseline (finalized, 2026-11-10)
+
+> `docs/THIRD_PARTY.md` 已按下列真实值填写（本页只汇总；以 THIRD_PARTY.md 为准）。
+
+| 组件 | 固定版本 | commit/tag | 许可证 | 集成方式 | 基线产物 |
+|---|---|---|---|---|---|
+| VProxy | v1.16.9 | `19b9c147631ca0ddfd9e1d214fc2ed9244cd5340` | MIT（保留版权） | **仅移植算法**（非依赖，P0-01） | 保留 MIT 版权声明 |
+| MiaoSpeed | tag `4.7.9`（**自建**） | tag `4.7.9`（GitHub 预编译 commit 不可复现） | AGPL-3.0 | 独立二进制，**WebSocket 进程边界** | 自建 exe SHA-256 `2c302b29…46ab18`（87,692,288 B） |
+| Mihomo | `AirportR/mihomo v1.19.33-x365-miu.2` | 随 MiaoSpeed `go.mod replace` | GPL-3.0 | MiaoSpeed 内部依赖（不链接进 Core） | 见 MiaoSpeed SBOM |
+| Apalis | `0.7.4`（+`apalis-sql 0.7.4`；`1.0.0` 为升级候选） | crates.io | MIT | Rust 依赖 | 编译+SQLite 队列 PASS |
+| Vben Admin web-ele | tag `v5.7.0` | `63a38dce49ba109f61607994e21ba921d8e970e9` | MIT | 独立前端 | `dist.zip`，OpenAPI→TS 生成 PASS |
+| paily-core / paily-fetch | 参考 `openpaily/*`（归档） | Phlogo fork `takomitkm/Phlogo` | AGPL-3.0 | **仅架构参考，不复制代码** | — |
+
+**`deny.toml` 脚手架**：已在仓库根 `deny.toml` 落地（licenses/advisories/bans/sources），
+**待 P1 建起 `core-rs/Cargo.toml`（Rust workspace）后正式生效**（当前无 Rust manifest，`cargo deny` 无对象可查）。
+
+**SBOM 计划**：Rust 侧 `cargo cyclonedx`（CycloneDX）产出 `bom.xml`；第三方二进制（MiaoSpeed 自建 exe、Vben `dist.zip`、Mihomo 随 MiaoSpeed）登记到 `THIRD_PARTY.md` + SBOM 附件。CI 构建后 `sha256sum` 并与 `THIRD_PARTY.md` 登记值比对（防篡改）。
+
+**再次确认**：**进程隔离不是许可证豁免**——MiaoSpeed（AGPL）、Mihomo（GPL）即使独立进程运行，分发时仍须提供对应源码/保留版权文本（方案 §16、CONVENTIONS §2.11）。
+
 ### 验收 / Acceptance
 
 可机器校验：
