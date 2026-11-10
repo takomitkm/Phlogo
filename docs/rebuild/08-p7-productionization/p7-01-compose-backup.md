@@ -175,6 +175,22 @@ docker compose exec -T postgres psql -U paily -d paily -c \
    SELECT 'node_sources',count(*) FROM node_sources;"
 ```
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地**：`deploy/` 全套 + `scripts/` 备份恢复——
+- `Dockerfile.api` / `Dockerfile.worker`：多阶段 Rust（`rust:1.83-slim` builder → `debian:bookworm-slim` runtime），依赖清单先行缓存层；runtime 携带 `migrations/`（启动即迁移）。**bin 名按实际 `apps/{api,worker}`**（规格里的 `core-api/core-worker` 是方案占位名）。
+- `compose.yaml`：postgres/api/worker/miaospeed/web/caddy 六服务 + `apalis-board`（`--profile debug` 选启）；**postgres/miaospeed 零公网端口**（§16.10），caddy 21380 唯一入口；环境变量用本实现的真实形状（`PAILY_*` 而非规格占位的 `DATABASE__DSN`）；worker 走独立 `paily_jobs` 库（P3-01 决策）。
+- `Caddyfile`：静态 UI + `/api/*`、`/sub/*`、`/health` 反代。
+- `scripts/backup.sh`（`pg_dump -Fc`）与 `scripts/restore.sh`（down -v → pg_restore → 行数校验）。
+
+**实测（docker 不可用环境的等价验证；宿主 docker 集成留待有 docker 的机器，如实标注）**：
+| 项 | 结果 |
+|---|---|
+| **Builder 段等价**：校机 `cargo build --release --bin api --bin worker` | **0**（35.28s；api 15,639,636 B / worker 11,569,271 B） |
+| **compose 拓扑 lint**（无 ports 断言 ×2、21380 入口、6 服务存在、.env 4 键） | **13/13 OK** |
+
+**验收对照**：#2（Postgres 不暴露）与 #3（MiaoSpeed 仅内部）由拓扑 lint 静态断言（「不写 ports」双保险之一，CI lint 为其二）；#1/#4/#5（整栈拉起 / 备份恢复演练 / 重启一致性）需要 docker runtime——脚本与拓扑已就绪，作为 CI 部署冒烟 job 的现成种子（8-01 CI notes），在本环境无法执行的部分**不夸大为已验**。
+
 ### 验收 / Acceptance
 
 机器可校验清单（命令 + 预期）：

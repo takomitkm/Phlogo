@@ -1,0 +1,10 @@
+:80 {
+	# Static admin UI (Vben build output, mounted from ./web-dist)
+	root * /srv/web
+	file_server
+
+	# Management + subscription API
+	reverse_proxy /api/*  http://api:8080
+	reverse_proxy /sub/*  http://api:8080
+	reverse_proxy /health http://api:8080
+}

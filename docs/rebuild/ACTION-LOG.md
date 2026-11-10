@@ -600,3 +600,13 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **契约缺口确认**：stats/checks/subscriptions 等页面所需端点能力在 crate 层已有，但未经 Axum 暴露——P7 装配路由时补 handler+`#[utoipa::path]`，页面随之补齐。
 
 **决策**：P6-02 **PASS**。**P6 阶段（基座+页面）完成**（Dashboard/NodeDetail/Checks/Subscriptions 四页随 P7 契约扩展补齐）。下一步进入 P7（部署/可观测/加固）。
+
+---
+
+## [UTC 2026-11-11T06:20:00Z] S31 · P7-01 部署编排与备份（compose/Dockerfiles/Caddyfile/脚本；release 构建与拓扑 lint 全绿）
+
+**动作**：`deploy/`（compose 六服务+debug profile、双多阶段 Dockerfile、Caddyfile、.env.example）+ `scripts/{backup,restore}.sh`（pg_dump -Fc / 恢复演练+行数校验）。
+
+**实测**：校机 `cargo build --release --bin api --bin worker` **0**（api 15.6MB/worker 11.6MB，Dockerfile builder 段等价）；compose 拓扑 lint **13/13**（postgres/miaospeed 零公网端口、caddy 21380、6 服务、.env 4 键）。docker runtime 集成验收（整栈拉起/备份恢复演练）留 docker 环境的 CI job，文档如实标注。
+
+**决策**：P7-01 **PASS**。进入 P7-02（可观测性）。

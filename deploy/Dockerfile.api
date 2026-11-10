@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1
+# Multi-stage Rust build: api binary (p7-01). Worker shares the builder shape.
+FROM rust:1.83-slim AS builder
+WORKDIR /src
+# Cache dependencies: manifests first
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+# Workspace members needed to resolve the full dep graph
+COPY crates ./crates
+COPY apps ./apps
+COPY migrations ./migrations
+RUN cargo build --release --bin api
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /src/target/release/api /app/api
+COPY migrations /app/migrations
+ENV PAILY_DATABASE_DSN=postgres://paily:change-me@postgres:5432/paily
+EXPOSE 8080
+ENTRYPOINT ["/app/api"]

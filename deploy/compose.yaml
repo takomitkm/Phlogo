@@ -1,0 +1,60 @@
+# Paily deployment topology (p7-01, plan §2.2/§13).
+# Constraints: postgres/miaospeed have NO public ports (plan §16.10);
+# caddy is the single ingress on the legacy 21380.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: paily
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: paily
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # no ports: -> compose-internal only
+
+  api:
+    build: { context: .., dockerfile: deploy/Dockerfile.api }
+    environment:
+      PAILY_DATABASE_DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily
+      PAILY_AUTH_SERVICE_SECRET: ${SERVICE_SECRET:?set in .env}
+      PAILY_AUTH_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set in .env}
+      PAILY_AUTH_JWT_SECRET: ${JWT_SECRET:?set in .env}
+      PAILY_SERVER_PORT: "8080"
+    depends_on: [postgres]
+    expose: ["8080"]
+
+  worker:
+    build: { context: .., dockerfile: deploy/Dockerfile.worker }
+    environment:
+      PAILY_DATABASE_DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily
+      PAILY_DATABASE_JOBS_DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily_jobs
+      PAILY_AUTH_SERVICE_SECRET: ${SERVICE_SECRET:?set in .env}
+    depends_on: [postgres]
+
+  miaospeed:
+    image: ghcr.io/miaokobot/miaospeed:latest # PIN at deploy time (P0-02 tag 4.7.9 self-built)
+    command: ["server", "-bind", "ws://0.0.0.0:65432", "-mtu", "8500"]
+    expose: ["65432"]
+    # no ports: -> worker reaches it via the compose network only
+
+  web:
+    image: ${WEB_IMAGE:?build at P6, e.g. nginx:alpine + dist/}
+    volumes:
+      - ./web-dist:/usr/share/nginx/html:ro
+    expose: ["80"]
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "21380:80" # the only published ingress
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on: [api, web]
+
+  apalis-board:
+    image: ${APALIS_BOARD_IMAGE:-caddy:2-alpine}
+    command: ["--database-url", "postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily"]
+    profiles: ["debug"] # opt-in via compose --profile debug
+
+volumes:
+  pgdata:
