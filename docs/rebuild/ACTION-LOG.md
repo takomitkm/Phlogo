@@ -466,3 +466,20 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **结果**：`build/test/fmt/clippy` 全 **0**；幂等测试过（重投 4 次仅 1 行）；真机 smoke 中 handler 消费 demo job（`check_runs` 2→3）。
 
 **决策**：P3-01 **PASS**。进入 P3-02（MiaoSpeed WebSocket Adapter：Checker trait、握手/auth 签名、payload 提交）。
+
+---
+
+## [UTC 2026-11-11T03:10:00Z] S20 · P3-02 MiaoSpeed WS Adapter（P0-02 协议可执行化；golden 签名逐字节一致；7 测试全绿）
+
+**动作**：新建 `crates/checker-miaospeed`：`protocol.rs`（jsoniter 字节级序列化 + hashMiaoSpeed + Vendor="" quirk）+ `adapter.rs`（Checker trait over WS，按 `ProxyInfo.Name` 回映射）+ 协议忠实 mock + 4 条验收测试。
+
+**关键实现**：
+- golden 签名测试与 P0-02 Go 交叉验证值**逐字节一致**（`fKdMhefu…9Q==`）——jsoniter 形态（字段序/内嵌/零值/`[]`）与 D.5 quirk 均被钉死。
+- `serde_json` 全仓 `preserve_order`（协议需要插入序）→ P2-03 指纹 `canon_net` 改递归键排序 canonical JSON，`field_order` golden 保持通过。
+- mock 用与服务端相同的验签路径（Vendor="" 克隆比对），错误 token → `{"Error":"cannot verify..."}` → `CheckerError::Auth`。
+
+**命令**（校机）：`cargo build --workspace --all-targets` / `cargo test -p checker-miaospeed` / `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings`。
+
+**结果**：全 **0**；`7 passed`。
+
+**决策**：P3-02 **PASS**。进入 P3-03（结果解析/单位规范化/迟到重复处理/跨 tag 合并）。

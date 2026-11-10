@@ -124,10 +124,38 @@ fn canon_tls(t: &Option<TlsSettings>) -> String {
     }
 }
 
+/// Canonical JSON text with object keys recursively sorted, so identity is independent of
+/// insertion order regardless of serde_json's map backend (BTreeMap vs preserve_order IndexMap).
+fn canonical_json(v: &serde_json::Value) -> String {
+    use serde_json::Value;
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let inner: Vec<String> = keys
+                .iter()
+                .map(|k| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(k).unwrap_or_default(),
+                        canonical_json(&map[*k])
+                    )
+                })
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
+        Value::Array(items) => {
+            let inner: Vec<String> = items.iter().map(canonical_json).collect();
+            format!("[{}]", inner.join(","))
+        }
+        other => other.to_string(),
+    }
+}
+
 fn canon_net(v: &Option<serde_json::Value>) -> String {
     match v {
         None => "-".to_string(),
-        Some(v) => serde_json::to_string(v).unwrap_or_default(),
+        Some(v) => canonical_json(v),
     }
 }
 

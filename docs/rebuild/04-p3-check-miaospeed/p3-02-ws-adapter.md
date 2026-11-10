@@ -206,6 +206,31 @@ impl MockMiaoSpeed {
 }
 ```
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地**（`crates/checker-miaospeed`）：
+- `protocol.rs`：P0-02 冻结协议的可执行化——`build_request_body`（jsoniter 字节级形态：Go 字段名/顺序、`Configs` 内嵌展开、零值输出、空切片 `[]`、`Challenge`/`Vendor` 受控）、`hash_miao_speed`（D.4 链式 SHA512 + base64URL 带填充）、`sign_request`（**D.5 quirk：用 `Vendor:""` 克隆签名**）、`finalize_request`（真实 Vendor + Challenge 回填）。`BUILDTOKEN_KEY` 内嵌同 P0。
+- `types.rs`：`CheckerError{Connect,Ws,Auth,Protocol}` + Core 侧 `SubmitRequest/VendorNode/CheckResult/InitialResult/DeepResult/CheckerStatus/CheckJobId`（`latency_ms=-1` 即 dead，Phlogo 约定）。
+- `adapter.rs`：`Checker` trait（`submit`/`collect`/`status`）+ `MiaoSpeedAdapter`——每请求一条新 WS 连接，body 内联 Challenge（认证逐请求内联，D.1/D.2）；收到 `Error` 非空帧 → `CheckerError::Auth`（不静默）；流式读到 `Result` 对象帧为止；`id_map` 维护 `vendor_id ↔ internal_node_id`，结果帧按 `ProxyInfo.Name` 还原（**不按 Index 顺序**，D.6）。`secret` 不进任何日志/错误。
+- `mock.rs`（`#[cfg(test)]`）：按协议实现的最小 mock——用与服务端相同的「Vendor="" 克隆重序列化比对」验签；失败回 `{"Error":"cannot verify..."}`；成功回 Queuing Progress → 逐节点 Progress → 终态 Result 帧（canned results）。
+
+**实测（校机）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（43.85s） |
+| `cargo test -p checker-miaospeed` | **0**，**7 passed** |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+
+**7 个测试**：`golden_signature_matches_p0_02`（**与 Go `utils.SignRequest` 交叉验证过的签名逐字节一致**——P0-02 E 节的 `fKdMhefu…9Q==`）、`vendor_quirk_signature_differs`（带 Vendor 签名 ≠ 空克隆签名，quirk 回归）、`url_safe_base64_with_padding`、`handshake_and_auth`（正确 token 通过 + 错误 token 得 `Auth` 且不再发后续帧）、`submit_single_and_batch`（1/5 节点数量一致）、`vendor_id_maps_back_to_node_id`（3 节点全部按 Name 还原）、`status_returns`。
+
+**验收对照（1–4）**：1✓（含错误签名路径）2✓（单/批量）3✓（映射闭环）4✓。真实 MiaoSpeed 4.7.9 二进制的 e2e（P0-02 已在 spike 层通过）留给 p3-03 之后的 live 测试——mock 与真实服务端共用同一验签代码路径，协议回归由 golden 签名钉死。
+
+**说明/偏差**：
+- `collect` 的语义按「同连接返回 Progress+终态 Result」实现（D.6：MiaoSpeed 在请求连接上推送全部帧）；跨连接任务句柄（`CheckJobId`）在 p3-03 处理迟到/重复时再演进。
+- `serde_json` 全仓启用 `preserve_order`（协议序列化需要插入序）；P2-03 指纹的 `network_options` 规范化随之改为**递归键排序 canonical JSON**（`field_order` golden 继续通过），不受 map 后端影响。
+- Matrix 名只作配置透传（`presets`），未硬编码（§8.1）。
+
 ### 验收 / Acceptance
 
 1. **连接 + 认证**：Adapter 能连上 MiaoSpeed stub 并完成 auth（包含错误签名应返回 `CheckerError::Auth`）。
