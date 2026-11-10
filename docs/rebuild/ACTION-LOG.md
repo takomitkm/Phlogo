@@ -563,3 +563,13 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 **实现要点**：f64 无 Ord → 手写 `Entry(f64,usize)` 全序包装实现 min-heap；随机分支按规格只做种子化统计验收（不跨语言逐字节等价）；`common_fallback` 用同种子断言回退路径等价。
 
 **决策**：P5-02 **PASS**。进入 P5-03（订阅输出：命名模板、Clash/Base64 渲染、订阅路由）。
+
+---
+
+## [UTC 2026-11-11T05:20:00Z] S28 · P5-03 订阅输出与 Token（三格式生成器 + 白名单命名模板 + token 哈希；24 测试全绿；P5 全部完成）
+
+**动作**：`crates/distribution` 扩展 `token.rs`（sha256+pepper、明文不入库）、`naming.rs`（grade/flag/`{{field}}` 白名单模板——expr 命名模板的安全替代）、`output.rs`（mihomo YAML 模板填充 / **sing-box 独立转换器** / base64）、`subscription.rs`（AST 筛选→preset 选区→命名→渲染纯函数管线）；migration `0009_subscriptions`（profiles+tokens，仅存哈希）。
+
+**实测**（校机）：build/test/fmt/clippy 全 **0**；`distribution` 24/24。
+
+**决策**：P5-03 **PASS**。**P5 阶段（Filter AST / 配额选区 / 订阅输出）全部完成**。下一步进入 P6（Vben 管理端：p6-01 脚手架 / p6-02 页面）。

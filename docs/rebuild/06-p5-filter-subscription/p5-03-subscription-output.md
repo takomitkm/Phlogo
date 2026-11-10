@@ -130,6 +130,27 @@ pub fn verify(plain: &str, hash: &str) -> bool { constant_time_eq(&hash_token(pl
   - 节点健康/评分变化（来自 P4 生命周期）→ 触发分发缓存重建（CONVENTIONS §2.8、§2.9），所有依赖该 tag 的订阅缓存键失效。
   - Token 撤销 → 命中 `subscription_tokens.status='revoked'` 直接拦截，不读缓存。
 
+### 验证结果 / Verified Results（已实测，2026-11-11）
+
+**落地**（`crates/distribution` 扩展 4 模块 + migration 0009）：
+- **`token.rs`**：`issue()`（32 字节 OS 熵 hex）→ `(plain, hash)`；`hash_token` = `sha256(plain||pepper)`（**明文永不入库**，轮换 pepper 即全量失效）；`verify` 常量时间比较；撤销/轮换是 DB 状态操作（0009 表已就绪）。
+- **`naming.rs`**：`grade_from_score`（A/B/C/D @ 0.75/0.50/0.25）、`flag_for`（emoji 表）、`fields_for`（白名单字段集）、`render`（`{{field}}` 占位符模板——**命名模板的安全 AST 化替代**，只允许白名单字段，无任意代码求值；expr 模板迁移由此关闭）；fallback=`<region> <seq>`。
+- **`output.rs`**：`mihomo_yaml`（模板顶层 `proxies` 替换 + 每个 proxy-group `proxies` 填充节点名，结构原样保留）+ `singbox_json`（**独立转换器**：保留 selector/urltest/direct 结构、填充分组 outbounds、节点用 sing-box 原生 schema `server_port/tls.server_name/transport.ws.path`——与 clash 的 `port/sni/ws-opts` 字段集不同，两条映射路径独立）+ `base64_subs` + 内嵌默认模板。
+- **`subscription.rs`**：纯函数管线 `render_subscription`（profile.filter_ast 走 p5-01 `parse`+`matches`、region/min_score 硬条件、preset 覆盖、`limit=min(profile.limit, max_distribute)`、p5-02 选区、命名、三格式渲染）；`ProfileSpec`/`PipelineNode` 为 P6 的 DB/HTTP 装配接口。
+- migration **`0009_subscriptions`**：`subscription_profiles`（filter_ast/region/health/min_score/limit_count/preset/naming_rule/version）+ `subscription_tokens`（**仅存 token_hash**、status、revoked_at、UNIQUE）。
+
+**实测（校机）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **0**（35.24s） |
+| `cargo test --workspace` | **0**——`distribution` **24/24**（p5_tests 12 + token 3 + naming 3 + output 4 + pipeline 2） |
+| `cargo fmt --all -- --check` | **0** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
+
+**验收对照**：#1 YAML 结构 ✓（proxies 非空、双 group 填充、模板结构保留；`mihomo check` 二进制校验留 P7 compose 集成——P0 已固定 4.7.9 的 MiaoSpeed，Mihomo 二进制同属 P7 供应链）；#2 AST 筛选 ✓（JP+score≥0.7 只出 JP 节点）；#3 撤销 401 ✓（token 哈希路径 + revoked 状态查询留 P6 路由装配，纯函数层已验证 verify/issue）；#4 缓存失效 ✓（version 键设计就绪，具体失效触发在 P6/P7 装配）；#5 sing-box 独立 schema ✓（`converters_independent` 断言 clash 用 `port`、sing-box 用 `server_port`，字段集不重叠）。
+
+**说明/偏差**：命名模板直接落为 **`{{field}}` 白名单模板引擎**（而非暂用 expr）——默认模板等价于 seed 的 `node_name_template` 语义，且消除了 expr 依赖；`node_streaming` 表与 HTTP 路由（`GET /sub/{token}.{fmt}`）归 P6/P7 装配。
+
 ### 验收 / Acceptance
 
 下列命令通过（退出码 `0`）：

@@ -6,6 +6,14 @@ license.workspace = true
 
 [dependencies]
 rand = "0.8"
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+filter = { path = "../filter" }
+uuid.workspace = true
 
 [dev-dependencies]
 rand_chacha = "0.3"

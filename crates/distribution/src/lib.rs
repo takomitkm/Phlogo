@@ -352,5 +352,10 @@ pub fn select_with_preset(
     assemble_output(&raw)
 }
 
+pub mod naming;
+pub mod output;
+pub mod subscription;
+pub mod token;
+
 #[cfg(test)]
 mod p5_tests;
