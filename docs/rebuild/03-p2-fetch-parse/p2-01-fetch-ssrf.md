@@ -138,6 +138,27 @@ pub async fn fetch(url: &str, policy: &FetchPolicy) -> Result<bytes::Bytes, Fetc
 }
 ```
 
+### 验证结果 / Verified Results（已实测，2026-11-10）
+
+> 环境：校机 `rustc 1.99.1`。
+
+**落地**：新 crate `crates/fetch`（`ssrf.rs` + `lib.rs`），`reqwest 0.12.28`（`rustls-tls`，**在 GNU/Windows 上编译成功**，走 `hyper-rustls`/`tokio-rustls`，未触发 aws-lc C 构建问题），`ipnetwork 0.20`。
+- `ssrf::check_ip`：黑名单含 `0.0.0.0/8,127/8,10/8,172.16/12,192.168/16,100.64/10,169.254/16,192.0.0.170/32,::/128,::1/128,fe80::/10,fc00::/7,::ffff:0:0/96`。
+- `ssrf::guard`：字面 IP 直接校验；主机名经 `tokio::net::lookup_host` 解析，**所有**解析结果都须通过（否则拒绝）；`FetchPolicy.allowlist` 可放行特定网段（测试用 loopback）。
+- `fetch()`：`redirect(Policy::none())` 手动逐跳、每跳先 `guard`；流式累加并 `max_response_bytes` 截断；`total_timeout`→`FetchError::Timeout`。
+
+**实测（校机）**：
+| 项 | 结果 |
+|---|---|
+| `cargo build -p fetch --all-targets` | **0**（29.27s） |
+| `cargo test -p fetch` | **0**，`6 passed`：`blocks_dangerous_and_allows_public`、`benign_fetch_ok`、`metadata_literal_blocked`、`redirect_to_metadata_blocked`、`response_too_large`、`timeout_hit` |
+| `cargo fmt -p fetch -- --check` | **0** |
+| `cargo clippy -p fetch --all-targets -- -D warnings` | **0** |
+
+→ 覆盖验收 1–6：IP 黑名单表、良性 fetch、云元数据拦截（**不发出真实请求**）、302→元数据被复核拦截、超大/超时、lint。
+
+**残留风险（诚实标注）**：`guard` 在“发请求前解析并校验全部 IP”，但 `reqwest` 实际连接时会**再次解析**，仍存在极小的 DNS-rebinding 时间窗。彻底消除需「连接固定 IP + SNI/Host 头」自定义 dialer（P7 加固项）。
+
 ### 验收 / Acceptance
 
 机器可校验项（命令 + 预期）：

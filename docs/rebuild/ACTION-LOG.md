@@ -369,3 +369,21 @@ cargo clippy --workspace --all-targets -- -D warnings
 3. handler `parse_id` 用 `#[allow(clippy::result_large_err)]`；rustfmt 差异按 `fmt.log` 逐处修正。
 
 **决策**：P1-04 判定 **PASS**。**P1 阶段（骨架+数据层+CRUD）全部完成**。下一步进入 P2（fetch/parse 抓取解析）。
+
+---
+
+## [UTC 2026-11-10T03:05:00Z] S15 · P2-01 抓取 + SSRF 防护（crates/fetch，测试 6/6）
+
+**动作**：新建 `crates/fetch`：SSRF 黑名单 + 受控 fetch（手动重定向逐跳复核、大小/超时限制、allowlist）。
+
+**命令**（校机）：
+```
+cargo build -p fetch --all-targets
+cargo test -p fetch
+cargo fmt -p fetch -- --check
+cargo clippy -p fetch --all-targets -- -D warnings
+```
+
+**结果**：全 **0**；`6 passed`（黑名单表/良性/元数据/重定向元数据/超大/超时）。`reqwest 0.12.28` + `rustls-tls` 在 GNU/Windows 上编译成功（无 aws-lc C 依赖问题）。
+
+**决策**：P2-01 **PASS**。DNS-rebinding 极小窗口以「解析后校验」缓解，彻底版（固定 IP 连接）列 P7 加固。进入 P2-02（VProxy 解析 Adapter → NormalizedNode）。
