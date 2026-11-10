@@ -38,6 +38,24 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 | **P6** | 管理前端 | `07-p6-admin-ui/` | vben-scaffold · pages |
 | **P7** | 生产化 | `08-p7-productionization/` | compose-backup · observability · security-hardening |
 
+### 实施状态总览（2026-11-11 收口）
+
+**P0–P7 全部子步骤已实现、验证并推送**（实现 + 各页「验证结果」实测记录 + ACTION-LOG S05–S33）。
+关键决策与偏差均写入对应页面：
+
+- **P0**：VProxy 最小化移植（不作依赖）；MiaoSpeed 自建 `4.7.9`（sha256 记录）；Apalis `0.7.4` PG backend；Vben `v5.7.0`。
+- **P1**：workspace + Axum/SQLx/utoipa 骨架；迁移按 sqlx 文件约定（`.up/.down`）；`configs` seed 23 键；Source/Node CRUD + 真实 PG 集成测试。
+- **P2**：SSRF 守卫（6 测试）；Clash/Singbox/Base64 解析（DB 层不依赖 adapter）；指纹 v1（canonical 含 transport/tls，14 golden）；Replace/Accumulate 对账 + 孤儿标记（6 场景）。
+- **P3**：Apalis CheckJob（**独立 `paily_jobs` 库**——setup 内嵌 migration 与业务迁移冲突的解法）；MiaoSpeed WS Adapter（**golden 签名与 Go 逐字节一致**）；结果规范化（迟到不覆盖/跨 tag 合并）；历史持久化（幂等重跑、JSONB roundtrip）。
+- **P4**：状态机 + 事务化清理（仅赢家清理）；cleanup cycle + 跨 tag 聚合；EWMA 评分（**golden 0.967722 更正规格手算误差**；speed 分支/jitter 阈值/tie-break 三决策定稿）。
+- **P5**：类型化 Filter AST（白名单 + 参数化 SQL + 手写反序列化）；selector.go 逐函数移植（E-S A-Res 加权抽样，统计验收）；订阅输出（三格式 + **白名单命名模板**替代 expr + token 哈希）。
+- **P6**：OpenAPI 契约（utoipa 实 paths）+ spec.json；Vben 三页面（Sources/Nodes/Scoring）+ `build:ele` 绿（vben monorepo 不 vendor，构建用固定 checkout）。
+- **P7**：compose 六服务拓扑 + 双 Dockerfile + 备份/恢复脚本（release 构建 + 拓扑 lint 绿；docker runtime 集成留 CI）；observability（JSON 日志 + redaction + `/metrics`）；`/sub/{token}` 订阅路由（哈希校验/撤销即 401）+ 限流层 + supply-chain 脚本。
+
+**已知收口项**（后续迭代/CI，非阻塞）：stats/checkers/logs/filter-preview 等 API 端点的 Axum 暴露（对应管理页补齐）、
+`mihomo check`/compose 全栈/备份恢复演练（docker 环境 CI job）、`cargo audit`（需 crates.io 网络）、
+`node_payloads` 凭据加密存储（订阅 proxy 载荷现用占位）。
+
 实施顺序严格遵循：**P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7**。P0 未通过前不锁定 Cargo 依赖。
 完整验收清单见方案 §15；各阶段验收见对应 `index.md`。
 
