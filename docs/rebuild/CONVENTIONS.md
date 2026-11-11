@@ -25,9 +25,9 @@
 2. **目标 / Goal** — 这一步要达成什么（一句话 + 3~5 条要点）。
 3. **范围 / Scope** — 新建/修改哪些 crate、文件、表；明确**不做**什么（与 MVP 不做项对齐）。
 4. **前置 / Prerequisites** — 依赖的上一步产物、工具链版本、外部服务。
-5. **步骤 / Steps** — 有序、可执行。每条尽量给具体命令或 Rust 代码片段；引用 Phlogo 现有文件时用相对路径 `internal/...`。
+5. **步骤 / Steps** — 有序、可执行。每条尽量给具体命令或 Rust 代码片段；引用 fork 源的 Go 文件时用相对路径 `internal/...`（原文见根提交 `dda4e6f2`）。
 6. **验收 / Acceptance** — 可机器校验的清单（命令 + 预期输出/退出码）。这是 CI 的核心输入。
-7. **与 Phlogo 现状对照 / Mapping from current Phlogo** — 指出对应的现有 Go 文件与需要改写的逻辑。
+7. **与 fork 源对照 / Mapping to the fork source** — 指出对应的上游 Go 文件与被改写的逻辑。**对照基准**：Go 源码已于收口后从工作树移除，引用以 fork 根提交 `dda4e6f2` 为准（`git show dda4e6f2:<path>` 查原文）。
 8. **CI 提示 / CI notes** — 这一步将来在 CI 里对应哪条 job/命令；**只描述，不落地 YAML**。
 9. **风险 / Risks** — 已知坑、需要 P0 验证的假设。
 

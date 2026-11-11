@@ -191,7 +191,9 @@ echo "exit=$?"   # 期望 0，stdout 含 "processed job 1"
 - 确认使用了**官方 migration**（非手写表结构），并记录「业务代码不引用 Apalis 内部表名」。
 - （建议）Board 能观测到任务状态。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 | Phlogo 现状（Go） | 重构目标（Rust） | 本页动作 |
 |---|---|---|

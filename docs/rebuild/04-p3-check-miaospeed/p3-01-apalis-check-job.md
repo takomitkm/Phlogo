@@ -201,7 +201,9 @@ async fn check_job_handler(job: CheckJob, data: Data<AppState>) -> Result<(), Er
 4. **Worker 重启可恢复**：kill worker 进程后重启，未完成的 CheckJob 在超时/恢复窗口内被重新领取并执行完成。
    预期：退出码 0；`check_runs` 中出现对应 `finished_at` 非空行。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 | Phlogo | Rust（本步骤） |
 |---|---|

@@ -21,7 +21,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 - `web`：Vben Admin 静态前端。
 
 本目录把方案里的 **P0–P7 八个阶段**再拆成更细的子步骤，每个子步骤一页，含目标、范围、步骤、验收、
-与 Phlogo 现状对照、CI 提示、风险。
+与 fork 源对照、CI 提示、风险。
 
 ---
 

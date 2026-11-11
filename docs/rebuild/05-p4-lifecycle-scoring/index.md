@@ -68,7 +68,9 @@
 - 订阅输出不得包含 `Retired` 节点（由 P5 订阅生成消费 `NodeMembership`，此处只保证状态正确）。
 - `Job` 重试幂等：不重复创建来源关联、不重复触发删除（见 p4-01 事务 + 条件 UPDATE）。
 
-## 与 Phlogo 现状对照 / Mapping from current Phlogo
+## 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 | 概念 | Phlogo 现状 | Rust 重构（net-new 标记） |
 |---|---|---|

@@ -192,7 +192,9 @@ pub async fn fetch(url: &str, policy: &FetchPolicy) -> Result<bytes::Bytes, Fetc
 
 6. **Lint** —— `cargo clippy -p fetch --all-targets -- -D warnings` 退出码 `0`。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 - **`internal/fetcher/handler.go`**：`PostResults` 处理 `POST /api/v1/fetch/results`，目前是**被动接收**外部 `paily-fetch` 推送的结果（记录 `source_fetch_histories` → `UpsertFromFetchResult` → 评估死源）。**抓取动作本身不在 core 里，因此没有任何 SSRF 逻辑**。Rust 侧把抓取收进 `core-worker`（方案 §2 的 `FW` 节点），防护必须新建。
 - 方案 §16.9 明确把「Fetch 防 SSRF」列为安全要求，且 Phlogo 的 `Source.Content` 就是订阅 URL，是 SSRF 攻击面，所以 `crates/fetch` 是这一防护的唯一合理落点。

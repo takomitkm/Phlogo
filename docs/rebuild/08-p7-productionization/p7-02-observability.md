@@ -188,7 +188,9 @@ Monitor::new()
    预期：日志显示 worker 重启后重新认领（resume/enqueue）了先前未完成的 Job，且最终 `check_runs` 行数等于入队次数
    （无重复计数，证明幂等），`SELECT count(*) FROM check_runs;` 不自增产生重复。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 - `main.go` 第 44 行 `log.Output(zerolog.ConsoleWriter...)` → 本页 Step 1 的 `tracing-subscriber` JSON 初始化。
 - `internal/checker/handler.go`：多处 `log.Info()/Warn()/Error()`（如 `PostResults` 的 `run_id`、`result.count`）

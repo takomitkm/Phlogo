@@ -221,7 +221,9 @@ pub fn cross_tag_alive(snapshots: &[PerTagHealth], window: i64 /* minutes */, no
    预期：tag A dead（latency=-1）、tag B alive 且 `checked_at` 在窗口内 → `cross_tag_alive == true`；
    两 tag 都 dead 或 alive 超出窗口 → `false`。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 | Phlogo | Rust（本步骤） |
 |---|---|

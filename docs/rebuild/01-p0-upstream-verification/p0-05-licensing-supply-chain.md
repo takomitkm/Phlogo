@@ -169,7 +169,9 @@ test -f docs/THIRD_PARTY.md && echo "THIRD_PARTY exists"  # 期望打印
 - **二进制 SHA-256 与构建信息捕获计划**已记录（至少 MiaoSpeed；Vben dist、可选 Mihomo 同样规划）。
 - 文档中明确写出：**进程隔离 ≠ 许可证豁免**（方案 §16、CONVENTIONS §2.11）。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 | Phlogo 现状（Go） | 重构目标（Rust/多进程） | 本页动作 |
 |---|---|---|

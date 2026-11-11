@@ -210,7 +210,9 @@ pnpm build            # 产物到 dist/；预期退出码 0
 > 用 `curl` 自测：`curl -X POST localhost:8080/api/v1/auth/login -H 'content-type: application/json' -d '{"password":"<ADMIN_PASSWORD>"}'`
 > 预期 `200` + `LoginResponse{token,refresh_token}`。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 - 当前 `Phlogo` 仓库**没有前端**（`cmd/server/main.go` 是 Go 单体，无 `web/`、无 `.vue`）。本步骤是整个管理前端的起点。
 - 取代对象：上游 paily-core 的既有管理端（能力见 `docs/configuration-and-api.md` 与 `docs/*.md`），但实现改为

@@ -130,7 +130,9 @@ test -d dist && echo "dist exists"   # 期望打印 dist exists
 - **OpenAPI → TS client 生成命令跑通**，产物可被页面 import，且类型覆盖 `api/openapi/spec.yaml` 的关键 path（如 `/api/v1/sources`、`/api/v1/nodes`、`/api/v1/checks`）。
 - 记录：固定 tag/commit、Node/pnpm 版本、构建与生成命令、产物位置。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 | Phlogo 现状（Go） | 重构目标（Rust/Vue） | 本页动作 |
 |---|---|---|

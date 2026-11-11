@@ -243,7 +243,9 @@ docker compose exec -T postgres psql -U paily -d paily -c \
    ```
    预期：重启前后 `nodes` 行数不变；`apalis` 任务无 `Running` 永久卡死（worker 重启后重新认领 `Pending`/`Running`）。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 - `Dockerfile`（单二进制 `paily-core`，`EXPOSE 21380`，SQLite `./data/data.db`）
   → 拆为 `deploy/Dockerfile.api` / `deploy/Dockerfile.worker`（方案 §2.2 双二进制；CONVENTIONS §3 映射

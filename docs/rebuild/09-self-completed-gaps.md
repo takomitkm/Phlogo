@@ -57,7 +57,7 @@
 |---|---|---|---|
 | B1 | **CheckJob 未接 MiaoSpeed 真测** | Adapter（P3-02）已验证可连真实 MiaoSpeed，但校机跑 MiaoSpeed 常驻 + 网络出站受限； handler 目前仅记账（幂等 run 记录），真实测活调用点已预留（`handle_check` 内注释标注） | 有可出站访问 MiaoSpeed WS 的环境；接口形状（`submit/collect`）已冻结，接入是纯装配 |
 | B2 | **订阅 proxy 载荷用占位 server** | 真实载荷需 `node_payloads` 凭据加密层（方案 §7；P2 文档预留）——明文凭据入库违反 §16.8 | 加密层设计定稿（建议 AGE/XChaCha20 + `PAILY_PAYLOAD_KEY`）；转换函数本身已写好（P5-03 `clash_proxy_from`） |
-| B3 | **Go 源码清除** | 用户裁定项：Go 代码是文档「行为对照」的行号锚点 | 用户确认后一次性删除 + 文档锚点改描述性引用 |
+| B3 | ~~**Go 源码清除**~~ ✅ **已完成（2026-11-11）** | —（用户裁定执行） | — 已完成：`internal/`、`cmd/`、`go.mod/go.sum/Dockerfile/oapi-codegen.yaml/config.example.yaml` 从工作树移除；35 处文档对照标题改为「与 fork 源对照」+ 基准注释（fork 根提交 `dda4e6f2`，`git show dda4e6f2:<path>` 查原文）；CONVENTIONS §1 模板同步更新 |
 | B4 | **Docker/CI 运行时演练** | 本机 podman 已验（compose 解析/postgres/端口语义），全栈（api/worker 镜像 build）+ `cargo audit` 需网络 | 有外网 CI runner；deploy/ 全套就绪 |
 | B5 | **utoipa 契约未覆盖新端点** | 本轮优先打通行为（11 端点只有代码无 `#[utoipa::path]`）；`spec.json` 落后于实际路由 | 下次动 `api-contract` 时批量补（机械工作，与 A 批次同模式） |
 | B6 | **`/api/v1/nodes/search`、`sources/search` 高级搜索** | p5-01 Filter AST 的 SQL 生成已就绪，但 Phlogo 的 expr 语义映射（`NodeSearchRequest.expr`）未定义 | 需要时把 expr 字符串 → AST 的兼容层做掉（或前端直接产 AST JSON——**推荐后者**，已无 expr 依赖） |

@@ -34,7 +34,9 @@
    - 用**完全相同 `type+content`** 连续创建两个 source，第二次返回**已存在的那条**（HTTP 200，`alreadyExisted=true`），不产生第二条 `sources` 行。
    - 创建一个 node 并把它关联到**两个 source**，结果只有 **1 行 `nodes`** 与 **2 行 `node_sources`**（`#![cfg(test)]` 或 `#[tokio::test]` 集成测试覆盖）。
 
-## 与 Phlogo 现状对照 / Mapping
+## 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 | P1 交付物 | 对应 Phlogo（Go）代码 |
 |---|---|

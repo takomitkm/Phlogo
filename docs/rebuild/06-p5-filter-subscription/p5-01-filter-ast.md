@@ -223,7 +223,9 @@ cargo test -p filter
 
 预期输出：`test result: ok. N passed; 0 failed`（N ≥ 7）。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 | Phlogo 现状 | 重构后 |
 |---|---|

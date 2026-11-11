@@ -46,7 +46,9 @@
 3. **前端可独立构建与部署**：`pnpm build` 产出静态 `dist/`，可被 Caddy/Nginx 作为静态资源服务并反代 `/api`。
    - 机器校验：`Test-Path dist/index.html` 为 `True`。
 
-## 与 Phlogo 现状对照 / Mapping from current Phlogo
+## 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 - 当前 `Phlogo` 仓库（`S:\apps\llm\agentwork\repos\Phlogo`）**没有任何前端代码**：顶层只有
   `api/`、`cmd/`、`internal/`、`server/`、`docs/` 与 Go 源文件，无 `web/` 目录，也无 `.vue` / `.tsx` 文件。

@@ -294,7 +294,9 @@ cargo test -p scoring returns_version_and_insufficient_data
 #  (2) 样本数 < score_min_samples 时 status == InsufficientData 且不写 nodes.score。
 ```
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 - `internal/scoring/scoring.go` `computeScore`（scoring.go:113）：纯计算函数 → 移植为 `compute_score`。
 - `internal/scoring/scoring.go` `ComputeAndUpdateTagScore`（scoring.go:59）：写 `node_tag_scores` +

@@ -203,7 +203,9 @@
 
 > 截图采集建议用一个无头浏览器脚本（Playwright）登录后逐页截图，命令留作 CI 种子，但本目录不写该脚本本身。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 - 当前 `Phlogo` 仓库**无前端**（见 `index.md` 映射节）。本页描述的 7 个页面是**全新实现**，对应
   `docs/*.md` 中上游 paily-core 管理端的能力：

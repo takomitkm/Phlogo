@@ -167,7 +167,9 @@ echo "exit=$?"   # 期望 0（或仅出现已审批的 allow 列表内许可证�
 - `cargo tree` 输出与许可证审查结论已写入 `docs/THIRD_PARTY.md` 的 VProxy 章节。
 - 记录结论：**VProxy 的 `Node` 类型未被用作 Core DB 类型**；已规划到 `NormalizedNode` 的转换。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 | Phlogo 现状（Go） | 重构目标（Rust） | 本页动作 |
 |---|---|---|

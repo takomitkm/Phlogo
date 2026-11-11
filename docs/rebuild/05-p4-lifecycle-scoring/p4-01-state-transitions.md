@@ -212,7 +212,9 @@ cargo test -p registry --test source_delete_idempotent
 # 第二次 delete 对孤儿节点的 NOT EXISTS 守卫不应再删任何行。
 ```
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 - `internal/source/service.go`：`Status active/dead`、`ignore_dead`、`MarkDeadAndClean`
   （条件 UPDATE 防并发重复清理，service.go:182）→ 映射为 `SourceStatus` + `FetchPolicy` + 事务化清理。

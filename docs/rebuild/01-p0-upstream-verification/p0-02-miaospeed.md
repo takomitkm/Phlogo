@@ -232,7 +232,9 @@ panel 回 `ReverseAck{Type:"ack",Protocol,Sign=hashMiaoSpeed(token,hello.Sign),.
 - [ ] `docs/MIAOSPEED_PROTOCOL.md` 独立成档（从本页 D 抽出具名契约；P3 前完成）。
 - [ ] `docs/THIRD_PARTY.md` 登记 MiaoSpeed 固定版本 + 自建二进制哈希（P0-05 统一维护，本页先给出值）。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 | Phlogo 现状（Go） | 重构目标（Rust） | 本页动作 |
 |---|---|---|

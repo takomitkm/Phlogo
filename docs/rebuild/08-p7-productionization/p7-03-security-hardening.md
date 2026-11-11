@@ -209,7 +209,9 @@ sha256sum target/release/core-api target/release/core-worker
    ```
    预期：三条命令退出码均为 `0`（`cargo deny` 无 license/advisory 违例；`cargo audit` 无未忽略公告）。
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 - `cmd/server/main.go` 第 113–141 行（`ServiceBearerMiddleware`/`AdminJWTMiddleware`/`AdminOrServiceMiddleware`
   + `CheckerTagMiddleware` 的 dispatch）→ Step 1 的 Axum 认证中间件集合（CONVENTIONS §3 映射

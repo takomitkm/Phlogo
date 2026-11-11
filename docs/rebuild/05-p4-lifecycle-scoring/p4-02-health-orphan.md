@@ -170,7 +170,9 @@ cargo test -p checker-miaospeed late_result_no_overwrite
 # 断言 node_status(N,tag).health=Alive 且 last_checked_at=t1（未被 t0 覆盖）。
 ```
 
-### 与 Phlogo 现状对照 / Mapping from current Phlogo
+### 与 fork 源对照 / Mapping to the fork source
+> **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
+> 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 - `internal/checker/handler.go` `batchAliveDecision`（handler.go:303）：跨 tag 存活合并 → 重写为
   per-tag `node_status` 快照 + 跨 tag 聚合；per-tag mutex 与 `checked_at DESC` 语义保留。
