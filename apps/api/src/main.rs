@@ -10,6 +10,11 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(%addr, "paily-core-rust api starting");
     let app = router::build(cfg);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    // ConnectInfo gives the rate limiter the real peer address (XFF is not trusted).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

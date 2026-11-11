@@ -15,7 +15,7 @@ use std::time::{Instant, Duration};
 #[derive(Clone)]
 pub struct RateLimitState {
     pub per_minute: u32,
-    windows: Arc<Mutex<HashMap<SocketAddr, (u32, Instant)>>>,
+    windows: Arc<Mutex<HashMap<std::net::IpAddr, (u32, Instant)>>>,
 }
 
 impl RateLimitState {
@@ -32,16 +32,17 @@ pub async fn rate_limit(
     req: Request,
     next: Next,
 ) -> Response {
-    // Identity: peer address from connect info when available, else a shared bucket.
-    let key: SocketAddr = req
+    // Identity: peer IP only (strip the ephemeral port) so connection rotation cannot
+    // evade the bucket; X-Forwarded-For is never read (spoofable at the edge).
+    let ip = req
         .extensions()
         .get::<SocketAddr>()
-        .copied()
-        .unwrap_or_else(|| "0.0.0.0:0".parse().expect("valid addr"));
+        .map(|a| a.ip())
+        .unwrap_or_else(|| "0.0.0.0".parse().expect("valid ip"));
     let decision = {
         let mut map = st.windows.lock().expect("rate windows poisoned");
         let now = Instant::now();
-        let entry = map.entry(key).or_insert((0u32, now));
+        let entry = map.entry(ip).or_insert((0u32, now));
         if now.duration_since(entry.1) >= Duration::from_secs(60) {
             *entry = (0, now);
         }

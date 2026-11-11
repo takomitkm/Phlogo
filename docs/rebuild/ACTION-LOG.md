@@ -691,3 +691,17 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 **踩坑**：PS 5.1 UTF-8 无 BOM .ps1 中文乱码（脚本改 Python）；scp 传 bare clone 无工作树（audit 需普通 checkout）；release 下 `cfg(debug_assertions)` 诊断静默；scp 只传了 db 没传改过的 crate（旧二进制跑三遍才定位）。
 
 **决策**：B3/B4 关闭。**B5（契约批量补）/B6（高级搜索二选一方案）已写明做法**，等需要时做。
+
+---
+
+## [UTC 2026-11-12T03:05:00Z] S39 · 旧评审交叉审查入库 + P0 安全修复（权限矩阵收紧 + 登录限流；全套测试真实 PG 全绿）
+
+**文档**：`docs/rebuild/10-review-crosscheck.md`——旧 Go 评审逐节对照（§1–§9），区分已实现（附证据）/部分/缺口/被新架构取代；ErrorResponse+分页等契约改进**独立 P1**（用户裁定不混入本轮）。
+
+**P0-01 权限矩阵**：`auth_kind(method,path)`（代码化矩阵，fail-closed AdminOnly）+ `require_api_auth` 替换整罩式层。**关键发现（实证）**：nest 内 middleware 收到剥 `/api/v1` 前缀的路径——无凭据 GET /stats 曾直接 200 吐数据（旧整罩层不查 path 所以掩盖至今）。修复=路径归一化。ServiceBearer 打管理写→403（区别 401）；合法服务面保留（GET 读、POST sources intake、POST fetch/trigger）。
+
+**P0-02 登录限流**：login 挂 nest 外 + 独立 route_layer（10/min 默认）+ 桶键改 peer **IP**（原 SocketAddr 键换连接即绕过——实测发现修复）+ XFF 从不读 + `into_make_service_with_connect_info`。
+
+**验证**：auth_matrix 7/7、login_limit 4/4（真 TCP 触发/XFF/并发/其他端点不受扰）、**全套 workspace 测试（真实 PG）EXIT=0**、fmt/clippy 0。**附带修复**：p402 测试绝对日期跨日出窗（改相对 now）。
+
+**决策**：P0-01/P0-02 **关闭**。ErrorResponse+分页等 P1 待办见 10-review-crosscheck §5。

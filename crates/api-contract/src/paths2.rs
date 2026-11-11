@@ -2,7 +2,6 @@
 //! node check timelines, subscriptions admin. HTTP wiring in `router.rs` must stay
 //! in sync; schemas are inline JSON (Value) so no ToSchema components needed here.
 //! NOTE: these use `body = Value` — typed schemas land with the next contract pass.
-use utoipa::OpenApi;
 
 /// Documented view routes.
 pub mod views {

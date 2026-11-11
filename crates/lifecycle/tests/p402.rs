@@ -1,5 +1,5 @@
 //! P4-02 integration tests (require DATABASE_URL; skipped otherwise).
-use chrono::{DateTime, Duration, TimeZone, Utc};
+use chrono::{DateTime, Duration, Utc};
 use database::check::upsert_node_status;
 use lifecycle::{cross_tag_alive_map, run_cleanup_cycle};
 use sqlx::PgPool;
@@ -45,7 +45,9 @@ async fn link(pool: &PgPool, node: Uuid, source: Uuid) {
 }
 
 fn t(offset_min: i64) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 11, 11, 0, 0, 0).unwrap() + Duration::minutes(offset_min)
+    // Relative to now: absolute dates would silently age out of the 240-min window
+    // when the test runs on a later day.
+    Utc::now() + Duration::minutes(offset_min)
 }
 
 /// Acceptance A: per-tag independence — (N,A)=Alive and (N,B)=Dead coexist.

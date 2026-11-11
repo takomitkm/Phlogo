@@ -10,7 +10,7 @@ use utoipa::OpenApi;
 
 use app_config::Config;
 
-use crate::auth::{require_admin_or_service, AuthState};
+use crate::auth::{require_api_auth, AuthState};
 use crate::handlers::{auth, config, fetch_trigger, metrics, node, source, subscription, subscriptions_admin, views};
 use crate::state::AppState;
 
@@ -43,8 +43,23 @@ pub fn build(cfg: Config) -> Router {
         jwt_secret: cfg.auth.jwt_secret.clone(),
     };
 
+    // P0-02: login-specific limiter (tight threshold, peer-addr keyed; XFF is not trusted).
+    // Login lives OUTSIDE /api/v1 so the matrix middleware doesn't wrap it; the limiter
+    // is applied via route_layer on this mini-router only.
+    let login_limit = std::env::var("PAILY_LOGIN_RATE_LIMIT_PER_MIN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let login_state = crate::rate_limit::RateLimitState::new(login_limit);
+    let login = Router::new()
+        .route("/api/v1/auth/login", post(auth::login))
+        .route_layer(middleware::from_fn_with_state(
+            login_state,
+            crate::rate_limit::rate_limit,
+        ))
+        .with_state(state.clone());
+
     let api_v1 = Router::new()
-        .route("/auth/login", post(auth::login))
         .route("/fetch/trigger", post(fetch_trigger::trigger))
         .route("/sources", get(source::list).post(source::create))
         .route(
@@ -80,17 +95,21 @@ pub fn build(cfg: Config) -> Router {
             delete(subscriptions_admin::revoke_token),
         )
         .route("/config", get(config::get_config).put(config::put_config))
+        .with_state(state.clone())
+        // P0-01: matrix-enforcing auth (fail-closed AdminOnly for unmatched routes).
+        // Applied AFTER with_state so the middleware stack isn't reset by the
+        // state remap (axum 0.7 quirk observed: layer-then-with_state dropped it).
         .layer(middleware::from_fn_with_state(
             auth,
-            require_admin_or_service,
-        ))
-        .with_state(state.clone());
+            require_api_auth,
+        ));
 
     Router::new()
         .route("/health", get(health))
         .route("/api-docs/openapi.json", get(openapi_json))
         .route("/metrics", get(metrics::metrics).with_state(state.clone()))
         .route("/sub/:spec", get(subscription::sub))
+        .merge(login)
         .nest("/api/v1", api_v1)
         .fallback(|| async { (StatusCode::NOT_FOUND, "not found") })
         .with_state(state)
@@ -123,12 +142,19 @@ mod smoke {
 
     #[tokio::test]
     async fn protected_without_token_returns_401() {
-        let req = Request::builder()
-            .method("POST")
-            .uri("/api/v1/sources")
+        let get_req = Request::builder()
+            .uri("/api/v1/stats")
             .body(Body::empty())
             .unwrap();
-        assert_eq!(status_of(req).await, StatusCode::UNAUTHORIZED);
+        let resp = build(Config::default()).oneshot(get_req).await.unwrap();
+        let (parts, body) = resp.into_parts();
+        let bytes = axum::body::to_bytes(body, 8192).await.unwrap_or_default();
+        assert_eq!(
+            parts.status,
+            StatusCode::UNAUTHORIZED,
+            "GET /stats body={}",
+            String::from_utf8_lossy(&bytes)
+        );
     }
 
     #[tokio::test]
