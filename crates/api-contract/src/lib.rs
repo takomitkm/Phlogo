@@ -2,6 +2,7 @@
 //! the exported document is the single source for the Vben TS client (p6-01).
 //! Schema structs live in `schemas.rs` and are glob-imported here because utoipa's
 //! `#[path]`/`#[openapi]` macros resolve type names in the enclosing scope.
+mod paths2;
 mod schemas;
 
 use schemas::*;
@@ -168,6 +169,21 @@ pub mod health_path {
         node_paths::get,
         node_paths::delete,
         health_path::health,
+        paths2::views::stats,
+        paths2::views::checkers,
+        paths2::views::logs_check,
+        paths2::views::logs_fetch,
+        paths2::views::node_initial_checks,
+        paths2::views::node_deep_checks,
+        paths2::subscriptions_admin::list_profiles,
+        paths2::subscriptions_admin::create_profile,
+        paths2::subscriptions_admin::update_profile,
+        paths2::subscriptions_admin::delete_profile,
+        paths2::subscriptions_admin::list_tokens,
+        paths2::subscriptions_admin::issue_token,
+        paths2::subscriptions_admin::revoke_token,
+        paths2::misc::login,
+        paths2::misc::trigger,
     ),
     components(schemas(
         CreateSourceReq,
