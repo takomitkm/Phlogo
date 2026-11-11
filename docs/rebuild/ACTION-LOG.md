@@ -679,3 +679,15 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 **端到端验证**：`fetch_loop_end_to_end` **PASS**（本地订阅服务器 → SSRF allowlist → 抓取 → 解析 2 节点 → 指纹 → 对账 → run 记录 → 二次幂等）——P2 四段第一次真正串起来跑通。
 
 **决策**：自补完成，记录页落 `09-self-completed-gaps.md`。
+
+---
+
+## [UTC 2026-11-11T08:55:00Z] S38 · Go 源清除 + fork 源对照基准 + B4 audit 校机跑通
+
+**Go 清除**：`internal/`(47) + `cmd/`(1) + `go.mod/go.sum/Dockerfile/oapi-codegen.yaml/config.example.yaml` 移除（-11,667 行，94 文件）；35 处文档「与 Phlogo 现状对照」改名「与 fork 源对照」+ 基准注释（**fork 根提交 `dda4e6f2`**，`git show dda4e6f2:<path>` 查原文）；CONVENTIONS 模板同步。对照语义不变——原文永存于 git 历史。
+
+**B4 audit**：校机装 `cargo-audit 0.23` 但 advisory-db 硬编码 github（被墙，三种绕法实测失败）→ 自写 `audit-offline` 匹配器（scratch crate，`semver` 权威匹配）+ 本机 clone advisory-db 传入 → **校机 Rust 实跑 4 命中**（libsqlite3-sys[不可达]/ring[no-patch]/rsa[低危]/unsafe-libyaml[换 serde_yaml 1.0 可消]）。**校机实测无容器运行时**——compose 演练仍需容器环境。
+
+**踩坑**：PS 5.1 UTF-8 无 BOM .ps1 中文乱码（脚本改 Python）；scp 传 bare clone 无工作树（audit 需普通 checkout）；release 下 `cfg(debug_assertions)` 诊断静默；scp 只传了 db 没传改过的 crate（旧二进制跑三遍才定位）。
+
+**决策**：B3/B4 关闭。**B5（契约批量补）/B6（高级搜索二选一方案）已写明做法**，等需要时做。
