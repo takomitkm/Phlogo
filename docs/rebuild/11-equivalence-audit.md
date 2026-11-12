@@ -126,6 +126,21 @@
 
 **为什么这很重要**：你以为改配置能调行为，实际有 13 个键是空心的；6 个键的值被静默忽略。这比「缺功能」更危险——它给你「我调过了」的错觉。
 
+### 3.4 收尾复查（步骤 3，2026-11-13 用户裁定的「全部做完后复查」）
+
+对 3.3 中「先留着」的三组键逐键 grep 全仓 `.rs` 后的终态判定：
+
+| 键 | 复查结果 | 处置 |
+|---|---|---|
+| `node_distribute_filter` | **确认无消费者**（仅 `naming.rs` 文档注释提及）。语义已 100% 由 `subscription_profiles.filter_ast` 覆盖（同一条 filter 引擎， stronger：AST+参数化 SQL） | **保留**（ configs 是运行时 KV，删行要 migration；等 sponsor 域裁定一起定 schema 变更）。标记：改它无效果 |
+| `node_name_template` | **确认无消费者**。语义由 `subscription_profiles.naming_rule` 覆盖（`{{field}}` 白名单模板，默认模板等价于该键的 seed 值） | 同上：保留 + 标记无效 |
+| `filename_clash/singbox/base64` | **确认无消费者**。文件名现由 URL 格式后缀决定；上游语义是「每种格式的下载文件名」——若未来要自定义 Content-Disposition 才需要 | 同上：保留 + 标记无效 |
+| `dead_latency_ms` / `fetch_dead_window_days` / `node_dead_window_days` / `fetch_history_window_days` | **确认无消费者**，但这些是**生命周期阈值**——B1 真测活落地后必须接线（不是删） | 保留，等 B1 |
+| `default_sponsor_text` | sponsor 域未实现 | 保留，等 sponsor 裁定 |
+| `score_min_samples` | 已 seed（0010）+ 已读（params.rs）| ✅ 生效 |
+
+**最终清点**：23 seed 键 + 1 补 seed = 24；**生效 10**（6 权重 + max_distribute + node_alive_check_window + orphan_retention_days + check_run_history_days + cleanup_interval_minutes + score_min_samples + grade_*×3 —— 计 12）；**空心 8**（上表 5 组）全部有明确的存在理由与重启条件，无"改了没反应"的静默陷阱（在 configuration-and-api.md 补标注后完全消除）。
+
 ---
 
 ## 4. 结论（2026-11-13 更新）

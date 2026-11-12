@@ -38,59 +38,60 @@ Paily 主服务的配置分为两层：
 
 动态配置可在管理界面的「运行时配置」页面修改，首次启动时会写入缺失的键。
 
-| 分类 | 键 | 默认值 | 说明 |
-| --- | --- | ---: | --- |
-| 分发 | `max_distribute` | `200` | 单次订阅最多输出的节点数。 |
-| 分发 | `node_distribute_filter` | 空 | 命中表达式的节点不进入分发缓存。 |
-| 存活 | `node_alive_check_window_minutes` | `240` | 最新初筛的存活窗口，单位分钟。 |
-| 评分 | `score_decay_alpha` | `0.7` | 评分的时间衰减系数。 |
-| 评分 | `score_weight_latency` | `0.7` | 延迟权重。 |
-| 评分 | `score_weight_stability` | `0.3` | 稳定性权重。 |
-| 评分 | `score_weight_speed` | `0.55` | 有测速数据时的速度混合权重。 |
-| 评分 | `score_latency_curve_k` | `0.3` | 延迟曲线参数。 |
-| 评分 | `score_jitter_linear_threshold_ms` | `200` | 抖动分段阈值，单位毫秒。 |
-| 命名 | `grade_a_min` | `0.75` | A 等级下限。 |
-| 命名 | `grade_b_min` | `0.50` | B 等级下限。 |
-| 命名 | `grade_c_min` | `0.25` | C 等级下限，低于此值为 D。 |
-| 历史 | `fetch_dead_window_days` | `7` | 抓取失效判定窗口，单位天。 |
-| 历史 | `node_dead_window_days` | `4` | 节点测活失效判定窗口，单位天。 |
-| 历史 | `fetch_history_window_days` | `7` | 抓取历史基础保留天数。 |
-| 历史 | `check_run_history_days` | `7` | 测活历史基础保留天数。 |
-| 历史 | `cleanup_interval_minutes` | `30` | 清理间隔，单位分钟。 |
-| 文件名 | `filename_clash` | `Paily Connect.yaml` | Clash 下载文件名。 |
-| 文件名 | `filename_singbox` | `Paily Connect.json` | Sing-box 下载文件名。 |
-| 文件名 | `filename_base64` | `Paily Connect.txt` | Base64 下载文件名。 |
+> **当前实现状态（2026-11-13 复核）**：✅ = 修改即生效；⏸ = 键已存在但暂无消费者（改它没效果，存在理由见表）。
 
-`dead_latency_ms` 会写入默认配置，但当前不参与存活判定；不可达以初筛的延迟 `-1` 表示。
+| 分类 | 键 | 默认值 | 说明 | 状态 |
+| --- | --- | ---: | --- | --- |
+| 分发 | `max_distribute` | `200` | 单次订阅最多输出的节点数。 | ✅ |
+| 分发 | `node_distribute_filter` | 空 | 命中表达式的节点不进入分发缓存。 | ⏸ 语义由订阅档案的 `filter_ast` 覆盖；键保留待清理 |
+| 存活 | `node_alive_check_window_minutes` | `240` | 最新初筛的存活窗口，单位分钟。 | ✅ |
+| 评分 | `score_decay_alpha` | `0.7` | 评分的时间衰减系数（小数或整数百分数均可）。 | ✅ |
+| 评分 | `score_weight_latency` | `0.7` | 延迟权重。 | ✅ |
+| 评分 | `score_weight_stability` | `0.3` | 稳定性权重。 | ✅ |
+| 评分 | `score_weight_speed` | `0.55` | 有测速数据时的速度混合权重。 | ✅ |
+| 评分 | `score_latency_curve_k` | `0.3` | 延迟曲线参数（须 < 2，≥ 2 会被当百分数）。 | ✅ |
+| 评分 | `score_jitter_linear_threshold_ms` | `200` | 抖动分段阈值，单位毫秒。 | ✅ |
+| 评分 | `score_min_samples` | `1` | 参与评分的最少样本数。 | ✅ |
+| 命名 | `grade_a_min` | `0.75` | A 等级下限（订阅渲染消费）。 | ✅ |
+| 命名 | `grade_b_min` | `0.50` | B 等级下限。 | ✅ |
+| 命名 | `grade_c_min` | `0.25` | C 等级下限，低于此值为 D。 | ✅ |
+| 生命周期 | `orphan_retention_days` | `14` | 孤儿节点保留天数，超期 Retired 后物理删除；`0` = 永不删。 | ✅ |
+| 历史 | `fetch_dead_window_days` | `7` | 抓取失效判定窗口，单位天。 | ⏸ 待 B1 真测活后接线 |
+| 历史 | `node_dead_window_days` | `4` | 节点测活失效判定窗口，单位天。 | ⏸ 同上 |
+| 历史 | `fetch_history_window_days` | `7` | 抓取历史基础保留天数。 | ⏸ 抓取历史清理暂未实现 |
+| 历史 | `check_run_history_days` | `14` | 测活明细保留天数（A5）；`0` = 永不删。 | ✅ 清理周期删除超期记录 |
+| 历史 | `cleanup_interval_minutes` | `30` | 清理间隔，单位分钟。 | ✅ worker 调度消费 |
+| 命名 | `node_name_template` | （expr 模板） | 节点命名模板。 | ⏸ 由订阅档案的 `naming_rule` 覆盖；键保留待清理 |
+| 文件名 | `filename_clash` | `Paily Connect.yaml` | Clash 下载文件名。 | ⏸ 现由 URL 格式后缀决定；键保留待清理 |
+| 文件名 | `filename_singbox` | `Paily Connect.json` | Sing-box 下载文件名。 | ⏸ 同上 |
+| 文件名 | `filename_base64` | `Paily Connect.txt` | Base64 下载文件名。 | ⏸ 同上 |
+| sponsor | `default_sponsor_text` | 空 | 无 sponsor 命中时的默认文案。 | ⏸ sponsor 域未实现 |
+| 判死 | `dead_latency_ms` | `3000` | 判死延迟门限。 | ⏸ 当前不参与存活判定；不可达以初筛延迟 `-1` 表示 |
 
 ## 筛选引擎
 
-筛选引擎基于 [expr-lang](https://expr-lang.org/)，用于管理端的节点与来源搜索、表达式预览、分发缓存过滤和 sponsor text 匹配。布尔表达式应返回 `true` 或 `false`。
+筛选已从上游的 expr-lang 字符串表达式迁移为**类型化 Filter-AST JSON**（字段/运算符双白名单 + 参数化 SQL，杜绝注入）。用于节点/来源搜索（`POST /api/v1/nodes/search`、`POST /api/v1/sources/search`）、筛选预览（`POST /api/v1/filter/preview`）和订阅档案的 `filter_ast`。
 
-```text
-# 排除未知地区或低评分节点
-Region == "UN" || Score < 0.35
+AST 形状（逻辑节点带 `operator: and|or|not`，叶子是条件对象）：
 
-# 匹配 VLESS 且评分较高的节点
-Protocol == "vless" && Score >= 0.7
+```json
+{"operator":"and","conditions":[
+  {"field":"protocol","operator":"eq","value":"vless"},
+  {"field":"score","operator":"gte","value":0.7},
+  {"field":"region","operator":"ne","value":"UN"}
+]}
 ```
 
-节点表达式中可读取以下字段：
+节点字段白名单：`health, region, score, protocol, server, source_id, unlock`。
+来源字段白名单：`id, identifier, type, status, info`。
+运算符白名单：`eq, ne, gt, gte, lt, lte, in, not_in, contains, is_null`。
+限制：AST 深度 ≤ 8、条件数 ≤ 32；未知字段/运算符返回 400。
 
-```text
-Server, Protocol, Password, Hash, Region, Alive, Score,
-SourceIDs, Sources, RawConfig, Streaming
-```
-
-来源表达式中可读取以下字段：
-
-```text
-ID, Identifier, Info, Status, Type
-```
+已知限制：`unlock`（流媒体解锁）条件在 SQL 下推中恒为假（`node_streaming` 表随 deep-check 接线后启用）。
 
 ## 节点命名与 Sponsor
 
-`node_name_template` 是返回字符串的表达式模板，默认输出形如：
+节点命名由订阅档案的 `naming_rule`（`{{field}}` 白名单模板，可用字段 `grade/region/region_flag/seq/unlock_flags/sponsor`）驱动，默认输出形如：
 
 ```text
 [解锁服务] 等级 - 国旗 地区 序号 Sponsor 文案
@@ -98,11 +99,11 @@ ID, Identifier, Info, Status, Type
 
 序号按地区内评分排序后单独编号，例如 `hk01`、`hk02`、`tw01`。解锁标记仅在指定了流媒体筛选且满足显示条件时出现。
 
-Sponsor 依据 `priority` 从小到大依次匹配，后匹配项覆盖前项，因此数值更大的 priority 最终获胜。没有任何匹配时使用 `default_sponsor_text`。
+Sponsor（赞助商文案注入）域在当前 Rust 实现中**尚未实现**（上游 `sponsors` 表 + priority 匹配 + `default_sponsor_text` 兜底）；是否恢复待定（见 `docs/rebuild/11-equivalence-audit.md`）。
 
 ## 格式配置
 
-管理界面的「格式配置」页面可管理 `clash`、`singbox`、`base64` 各自的 JSON 配置。Paily 主服务将这些内容视为由格式生成器定义的不透明 JSON，修改前建议读取并备份当前配置。格式生成能力来自 Paily Fetch 的格式模块；Clash 与 Sing-box 的模板编写方法见 [订阅模板](templates.md)。
+`GET/PUT /api/v1/format-configs[/{format}]` 管理 `clash`、`singbox`、`base64` 各自的 JSON 配置（`format_configs` 表）。**写入时服务端会用渲染同款解析器校验模板**（坏模板当场 400，不会等到订阅请求 500）；未存储覆盖时使用内嵌默认模板。Clash 与 Sing-box 的模板编写方法见 [订阅模板](templates.md)。
 
 ## API 与权限
 

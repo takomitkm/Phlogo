@@ -803,3 +803,21 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 `server contains drill`=1、`protocol eq trojan`=1、`score gte 0`=0（NULL 三值逻辑，正确）、`health is_null`=1、`and` 组合=1、no-match=0、unlock=0、坏字段=400。校机全套测试 + fmt + clippy 全绿。
 
 **踩坑记录**：① 首版 GROUP BY+HAVING 形态列引用歧义，改为内联视图 + WHERE；② contains 首版落默认分支变 `=`；③ 内存复检错杀——**教训：两个求值器并存时必须二选一作为权威**；④ podman `--no-cache` 重建遇网络死结，改 `down/up` 换镜像（本演练中"镜像未更新"与"内存复检"两个因素叠加，靠 psql 手动跑同形 SQL 定位到是代码而非部署）。
+
+---
+
+## [UTC 2026-11-13T07:00:00Z] S45 · 步骤3：空键收尾复查 + configuration 文档去陈旧
+
+**逐键 grep 复查（用户裁定的收尾项）**：
+- `node_distribute_filter` / `node_name_template` / `filename_*`×3：**确认无消费者**（仅注释提及）；语义分别由 `subscription_profiles.filter_ast` / `naming_rule` / URL 格式后缀覆盖 → 按裁定**保留**（不删行，避免无谓 migration），在配置文档标注"改它无效果"；
+- `dead_latency_ms` / `*_dead_window_days`×2 / `fetch_history_window_days`：确认无消费者，但属**生命周期阈值**——B1 落地后必须接线（不是删）；
+- `default_sponsor_text`：等 sponsor 域裁定；
+- 最终清点：**12 键生效**（6 权重 + max_distribute + node_alive_check_window + orphan_retention_days + check_run_history_days + cleanup_interval_minutes + score_min_samples + grade_*×3）、**8 键空心但全有标注的存在理由**——"改了没反应"的静默陷阱在文档层面完全消除。
+
+**`docs/configuration-and-api.md` 去陈旧**（该文档还是 expr-lang 时代写的）：
+- 动态配置表加**状态列**（✅ 生效 / ⏸ 无消费者 + 原因），补 `score_min_samples`/`orphan_retention_days`；`check_run_history_days` 默认值改 14；
+- 「筛选引擎」整节重写：expr-lang 字符串 → **Filter-AST JSON**（白名单字段/运算符/限制/已知 unlock 限制）；
+- 「节点命名与 Sponsor」：`node_name_template` → `naming_rule`；**明确标注 sponsor 域未实现**（原来读起来像已实现）；
+- 「格式配置」：改为实际的 `/api/v1/format-configs` 端点 + 写入时校验。
+
+**决策**：三步全部完成（B4 演练 / SQL 下推 / 空键复查）。遗留待用户裁定：A1 已做（PROXY protocol）；sponsor 域恢复与否；B1 测活宿主机选择。
