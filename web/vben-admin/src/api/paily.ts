@@ -232,3 +232,54 @@ export async function issueToken(profileId: string): Promise<{ id: string; token
 export async function revokeToken(tokenId: string): Promise<void> {
   await expectOk(await send(`/api/v1/subscriptions/tokens/${tokenId}`, 'DELETE'));
 }
+
+// ---------- sponsors (B3 gap #2, restored) ----------
+
+export interface SponsorView {
+  id: string;
+  name: string;
+  text: string;
+  filter_ast: unknown | null;
+  priority: number;
+}
+
+export interface SponsorUpsert {
+  name: string;
+  text: string;
+  filter_ast?: unknown | null;
+  priority?: number;
+}
+
+export interface SponsorListResponse {
+  data: SponsorView[];
+  pagination: { page: number; limit: number; total: number; total_pages: number };
+}
+
+export async function listSponsors(page = 1, limit = 50): Promise<SponsorListResponse> {
+  return getJson<SponsorListResponse>(`/api/v1/sponsors?page=${page}&limit=${limit}`);
+}
+
+export async function createSponsor(body: SponsorUpsert): Promise<SponsorView> {
+  const res = await send('/api/v1/sponsors', 'POST', body);
+  await expectOk(res);
+  return (await res.json()) as SponsorView;
+}
+
+export async function updateSponsor(id: string, body: Partial<SponsorUpsert>): Promise<SponsorView> {
+  const res = await send(`/api/v1/sponsors/${id}`, 'PATCH', body);
+  await expectOk(res);
+  return (await res.json()) as SponsorView;
+}
+
+export async function deleteSponsor(id: string): Promise<void> {
+  await expectOk(await send(`/api/v1/sponsors/${id}`, 'DELETE'));
+}
+
+/** Build a Filter-AST condition from simple form fields (server whitelist enforces it). */
+export function simpleCondition(
+  field: 'region' | 'protocol' | 'server' | 'score' | 'health',
+  operator: 'eq' | 'ne' | 'contains' | 'gte' | 'lte',
+  value: string | number,
+): unknown {
+  return { field, operator, value };
+}

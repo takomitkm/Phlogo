@@ -56,6 +56,12 @@ const routes: RouteRecordRaw[] = [
         path: 'subscriptions',
         component: () => import('#/views/paily/subscriptions.vue'),
       },
+      {
+        meta: { title: 'Sponsors' },
+        name: 'PailySponsors',
+        path: 'sponsors',
+        component: () => import('#/views/paily/sponsors.vue'),
+      },
     ],
   },
 ];

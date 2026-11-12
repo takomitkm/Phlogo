@@ -842,3 +842,14 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 **B1 宿主机决策记录**：校机跑 MiaoSpeed + mihomo 代理出站——worker 连校机 MiaoSpeed WS（校园网内可达），MiaoSpeed 经 mihomo 出墙测活。待实施（纯部署配置：校机起 mihomo + MiaoSpeed `-proxy` 参数或系统代理）。
 
 **等价性终态**：26 条上游路径 25/26 通过，唯一剩余 `auth/refresh`（单管理员重新登录覆盖，暂不做）。
+
+---
+
+## [UTC 2026-11-13T07:55:00Z] S47 · sponsor 管理前端页面（p6 增补）+ `build:ele` 绿
+
+**新增**（照 subscriptions.vue 既有惯例：Element Plus 表格 + 对话框表单 + typed API 层）：
+- `web/vben-admin/src/api/paily.ts` 补 sponsor 段（`SponsorView/SponsorUpsert/listSponsors/createSponsor/updateSponsor/deleteSponsor` + `simpleCondition` AST 构造辅助）；
+- **`views/paily/sponsors.vue`**：分页表格（priority 可排序 / 注入文案 / AST 预览）+ 新建/编辑对话框——表单把「字段+运算符+值」三个简单控件拼成 **Filter-AST 单叶条件**（空值 = 匹配全部节点），提交前本地构造、服务端白名单兜底；删除带确认；
+- 路由 `PailySponsors`（`/paily/sponsors`）。
+
+**校机构建**：checkout 实际在 `C:\Users\YiZhidi\p0-04\vue-vben-admin-5.7.0`（根下那个不存在）；node v22.22.2 在 `C:\Users\YiZhidi\shortcuts-verify\`、pnpm 10.33.4 只有 `.tools\pnpm\10.33.4\bin\pnpm.CMD`（无全局 exe）——PATH 组合后 **`build:ele` 11/11 successful**（1m04s）。
