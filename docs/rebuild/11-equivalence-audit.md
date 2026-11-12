@@ -63,7 +63,7 @@
 |---|---|---|
 | **B6 高级搜索 + 预览** | `nodes/search`、`sources/search`、`filter/preview` | ✅ **已补齐**：`apps/api/src/handlers/search.rs`（AST JSON body + 分页 ≤200 + 预览 ≤100）；filter crate 扩 `parse_with` / `matches_source` / `SOURCE_FIELD_WHITELIST`；权限矩阵纳入（读面 AdminOrService） |
 | **format-configs** | 每格式模板可自定义 | ✅ **已补齐**：`apps/api/src/handlers/format_config.rs` + `format_configs` 表（migration 0010）；写入前用渲染同款解析器校验（坏模板在门口被拒，不在每次订阅时 500） |
-| **sponsors** | 整个 sponsor 域（表 + CRUD + 注入订阅） | ⏸ **仍缺，待用户裁定**（是否还需要该功能）；`naming.rs` 的 `sponsor` 字段已预留 |
+| **sponsors** | 整个 sponsor 域（表 + CRUD + 注入订阅） | ✅ **已补齐**（用户裁定恢复，2026-11-13）：`migrations/0011_sponsors`（`filter_ast` JSONB 替代上游 expr 字符串）+ `crates/registry/src/sponsor.rs`（priority 升序、后命中覆盖、`default_sponsor_text` 兜底——上游 `Service::Match` 语义逐条对齐）+ `apps/api/src/handlers/sponsor_admin.rs`（CRUD，AdminOnly 面）+ 订阅渲染注入（`/sub` 命名带 sponsor 文案）；`default_sponsor_text` 键随之生效 |
 
 ### 已补齐部分的已知限制（诚实记录）
 
@@ -143,12 +143,13 @@
 
 ---
 
-## 4. 结论（2026-11-13 更新）
+## 4. 结论（2026-11-13 最终更新，sponsor 恢复后）
 
-- **不是完全等价**；按用户口径（有一条等价路径即算），**25/26 通过**，**只剩 3 条真缺失**（`auth/refresh` + sponsors×2）。
+- **等价性收口**：26 条上游路径 **25/26 通过**，唯一剩余 `auth/refresh`（单管理员场景重新登录即可覆盖，暂不做）。
 - 架构取代的 4 条（fetch/check 服务端点）**不再需要补**：能力已由 worker 闭环 + MiaoSpeed WS 实现，且上游那套要求外部服务持有全量节点凭据（安全更差）。
-- **配置面已从"13 键空心 + 6 键被忽略"修到"4 键已接线 + 5 键待定"**：评分权重（6 键）✅、分级阈值（3 键）✅、测活保留期 ✅、清理周期 ✅、`score_min_samples` ✅；仍空心的是 `dead_latency_ms` / `*_dead_window_days` / `fetch_history_window_days`（等 B1 真数据）、`default_sponsor_text`（等 sponsor 域）、`node_distribute_filter` / `node_name_template` / `filename_*`（语义已由 profile 字段覆盖，键本身空心）。
-- **优先建议**：① 修 `auth/refresh` 或明确不做（单管理员场景可只靠重新登录）→ ② sponsor 域要不要恢复（**待裁定**）→ ③ B1 真测活落地后按实际分布定 `dead_latency_ms` / `*_dead_window_days` → ④ 节点量级变大后把搜索从内存过滤换成 SQL 下推。
+- 配置面：**12 键生效、8 键空心但有标注**（见 §3.4）——`default_sponsor_text` 随 sponsor 域恢复而生效；`node_distribute_filter`/`node_name_template`/`filename_*` 保留待清理；`dead_latency_ms` 等生命周期阈值等 B1 真数据。
+- sponsor 语义与上游逐条对齐：priority 升序遍历、后命中覆盖前者、无命中落 `default_sponsor_text`；差异仅在存储（AST JSON 替代 expr 字符串，与全仓筛选引擎统一）。
+- 搜索已在 SQL 下推（S44），比上游的内存全量过滤更强。
 
 ---
 

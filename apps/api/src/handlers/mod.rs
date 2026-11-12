@@ -7,6 +7,7 @@ pub mod metrics;
 pub mod node;
 pub mod search;
 pub mod source;
+pub mod sponsor_admin;
 pub mod subscription;
 pub mod subscriptions_admin;
 pub mod views;

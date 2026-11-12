@@ -12,8 +12,8 @@ use app_config::Config;
 
 use crate::auth::{require_api_auth, AuthState};
 use crate::handlers::{
-    auth, config, fetch_trigger, format_config, metrics, node, search, source, subscription,
-    subscriptions_admin, views,
+    auth, config, fetch_trigger, format_config, metrics, node, search, source, sponsor_admin,
+    subscription, subscriptions_admin, views,
 };
 use crate::state::AppState;
 
@@ -101,6 +101,16 @@ pub fn build(cfg: Config) -> Router {
             delete(subscriptions_admin::revoke_token),
         )
         .route("/config", get(config::get_config).put(config::put_config))
+        .route(
+            "/sponsors",
+            get(sponsor_admin::list).post(sponsor_admin::create),
+        )
+        .route(
+            "/sponsors/:id",
+            get(sponsor_admin::get)
+                .patch(sponsor_admin::update)
+                .delete(sponsor_admin::delete),
+        )
         .route(
             "/format-configs",
             get(format_config::list),

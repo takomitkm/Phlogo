@@ -200,6 +200,59 @@ pub mod search {
     pub fn format_config_update() {}
 }
 
+/// Documented sponsor routes (B3 gap #2, restored).
+pub mod sponsors {
+    #[utoipa::path(
+        operation_id = "SponsorList",
+        get,
+        path = "/api/v1/sponsors",
+        responses((status = 200, description = "paginated sponsors (priority asc)", body = serde_json::Value))
+    )]
+    #[allow(dead_code)]
+    pub fn list() {}
+
+    #[utoipa::path(
+        operation_id = "SponsorCreate",
+        post,
+        path = "/api/v1/sponsors",
+        request_body = serde_json::Value,
+        responses((status = 201, description = "created", body = serde_json::Value))
+    )]
+    #[allow(dead_code)]
+    pub fn create() {}
+
+    #[utoipa::path(
+        operation_id = "SponsorGet",
+        get,
+        path = "/api/v1/sponsors/{id}",
+        params(("id" = super::Uuid, Path)),
+        responses((status = 200, description = "one sponsor", body = serde_json::Value))
+    )]
+    #[allow(dead_code)]
+    pub fn get() {}
+
+    #[utoipa::path(
+        operation_id = "SponsorUpdate",
+        patch,
+        path = "/api/v1/sponsors/{id}",
+        params(("id" = super::Uuid, Path)),
+        request_body = serde_json::Value,
+        responses((status = 200, description = "updated", body = serde_json::Value))
+    )]
+    #[allow(dead_code)]
+    pub fn update() {}
+
+    #[utoipa::path(
+        operation_id = "SponsorDelete",
+        delete,
+        path = "/api/v1/sponsors/{id}",
+        params(("id" = super::Uuid, Path)),
+        responses((status = 204, description = "deleted"))
+    )]
+    #[allow(dead_code)]
+    pub fn delete() {}
+}
+
 /// Documented auth + fetch-trigger routes.
 pub mod misc {
     #[utoipa::path(

@@ -66,6 +66,22 @@ pub fn render_subscription(
     unlock_flags: &str,
     format: &str,
 ) -> Result<RenderedSubscription, String> {
+    render_subscription_with_sponsor(nodes, profile, preset_override, max_distribute, thresholds, unlock_flags, format, None)
+}
+
+/// Like [`render_subscription`] but with a per-node sponsor text resolver
+/// (B3 gap #2: the upstream sponsor match, wired into naming).
+#[allow(clippy::too_many_arguments)]
+pub fn render_subscription_with_sponsor(
+    nodes: &[PipelineNode],
+    profile: &ProfileSpec,
+    preset_override: Option<&str>,
+    max_distribute: usize,
+    thresholds: &GradeThresholds,
+    unlock_flags: &str,
+    format: &str,
+    sponsor: Option<&dyn Fn(&PipelineNode) -> String>,
+) -> Result<RenderedSubscription, String> {
     // 1) Hard conditions + AST filter (profile.filter_ast + region/min_score).
     let ast = if profile.filter_ast.trim().is_empty() {
         None
@@ -105,14 +121,18 @@ pub fn render_subscription(
         return Err("no nodes matched the profile".into());
     }
 
-    // 3) Name + build outputs.
+    // 3) Name + build outputs. Sponsor text is per-node (upstream `Service::Match`):
+    // the caller supplies a resolver so this pure function stays DB-free.
     let mut outputs = Vec::with_capacity(selected.len());
     for sel in &selected {
         let node = nodes
             .iter()
             .find(|n| n.id == sel.candidate.id)
             .ok_or("selected node vanished")?;
-        let f = fields_for(sel, thresholds, unlock_flags);
+        let mut f = fields_for(sel, thresholds, unlock_flags);
+        if let Some(resolve) = sponsor {
+            f.sponsor = resolve(node);
+        }
         let name = match &profile.naming_rule {
             Some(t) => render(t, &f),
             None => render(crate::naming::DEFAULT_TEMPLATE, &f),

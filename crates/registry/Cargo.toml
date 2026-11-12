@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 database = { path = "../database" }
 domain = { path = "../domain" }
+filter = { path = "../filter" }
 anyhow.workspace = true
 uuid.workspace = true
 serde.workspace = true

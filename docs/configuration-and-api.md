@@ -65,7 +65,7 @@ Paily 主服务的配置分为两层：
 | 文件名 | `filename_clash` | `Paily Connect.yaml` | Clash 下载文件名。 | ⏸ 现由 URL 格式后缀决定；键保留待清理 |
 | 文件名 | `filename_singbox` | `Paily Connect.json` | Sing-box 下载文件名。 | ⏸ 同上 |
 | 文件名 | `filename_base64` | `Paily Connect.txt` | Base64 下载文件名。 | ⏸ 同上 |
-| sponsor | `default_sponsor_text` | 空 | 无 sponsor 命中时的默认文案。 | ⏸ sponsor 域未实现 |
+| sponsor | `default_sponsor_text` | 空 | 无 sponsor 命中时的默认文案。 | ✅ sponsor 匹配落空时使用 |
 | 判死 | `dead_latency_ms` | `3000` | 判死延迟门限。 | ⏸ 当前不参与存活判定；不可达以初筛延迟 `-1` 表示 |
 
 ## 筛选引擎
@@ -99,7 +99,7 @@ AST 形状（逻辑节点带 `operator: and|or|not`，叶子是条件对象）�
 
 序号按地区内评分排序后单独编号，例如 `hk01`、`hk02`、`tw01`。解锁标记仅在指定了流媒体筛选且满足显示条件时出现。
 
-Sponsor（赞助商文案注入）域在当前 Rust 实现中**尚未实现**（上游 `sponsors` 表 + priority 匹配 + `default_sponsor_text` 兜底）；是否恢复待定（见 `docs/rebuild/11-equivalence-audit.md`）。
+**Sponsor（赞助商文案注入）已实现**：`GET/POST /api/v1/sponsors`、`GET/PATCH/DELETE /api/v1/sponsors/{id}`（AdminOnly）。每条 sponsor 带 `text`、`filter_ast`（同筛选引擎的 AST JSON）和 `priority`。匹配规则与上游一致：**priority 升序依次求值，后命中覆盖前者，数值更大的 priority 最终获胜**；没有任何命中时使用 `default_sponsor_text`（默认空 = 不加文案）。命中的文案注入节点名的 `{{sponsor}}` 字段。
 
 ## 格式配置
 

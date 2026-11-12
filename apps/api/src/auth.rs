@@ -100,6 +100,8 @@ pub fn auth_kind(method: &str, path: &str) -> AuthKind {
         // config
         ("GET", Some("config"), _, _) => AdminOrService,
         ("PUT", Some("config"), _, _) => AdminOnly,
+        // sponsors: admin surface (upstream adminMW); match engine reads directly from DB
+        (_, Some("sponsors"), _, _) => AdminOnly,
         // format templates: read for any service identity, write is admin-only
         ("GET", Some("format-configs"), _, _) => AdminOrService,
         ("PUT", Some("format-configs"), _, _) => AdminOnly,

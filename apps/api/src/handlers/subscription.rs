@@ -92,10 +92,31 @@ pub async fn sub(State(st): State<AppState>, Path(spec): Path<String>) -> Respon
         Ok(t) => t,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")),
     };
+    // Sponsor text per node (B3 gap #2): priority-ascending match over the sponsors
+    // table, `default_sponsor_text` fallback. The view mirrors what the sponsor
+    // filter can reference (health unknown until checks run; no streaming yet).
+    let mut sponsor_of: std::collections::HashMap<String, String> = Default::default();
+    for s in &selected {
+        let view = filter::NodeView {
+            health: "unknown".into(),
+            region: Some(s.candidate.region.clone()),
+            score: s.candidate.score,
+            protocol: String::new(),
+            server: String::new(),
+            source_id: None,
+            streaming: Default::default(),
+        };
+        // DB error degrades to the default text, never fails the subscription.
+        let text = registry::sponsor::match_text(st.pool(), &view)
+            .await
+            .unwrap_or_default();
+        sponsor_of.insert(s.candidate.id.clone(), text);
+    }
     let lines: Vec<String> = selected
         .iter()
         .map(|s| {
-            let f = distribution::naming::fields_for(s, &thresholds, "");
+            let mut f = distribution::naming::fields_for(s, &thresholds, "");
+            f.sponsor = sponsor_of.get(&s.candidate.id).cloned().unwrap_or_default();
             format!("{}://node/{}", s.candidate.id, distribution::naming::render(distribution::naming::DEFAULT_TEMPLATE, &f))
         })
         .collect();
@@ -105,7 +126,8 @@ pub async fn sub(State(st): State<AppState>, Path(spec): Path<String>) -> Respon
             let proxies: Vec<serde_json::Value> = selected
                 .iter()
                 .map(|s| {
-                    let f = distribution::naming::fields_for(s, &thresholds, "");
+                    let mut f = distribution::naming::fields_for(s, &thresholds, "");
+                    f.sponsor = sponsor_of.get(&s.candidate.id).cloned().unwrap_or_default();
                     let name = distribution::naming::render(distribution::naming::DEFAULT_TEMPLATE, &f);
                     serde_json::json!({
                         "name": name,

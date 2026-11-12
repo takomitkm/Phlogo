@@ -821,3 +821,24 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 - 「格式配置」：改为实际的 `/api/v1/format-configs` 端点 + 写入时校验。
 
 **决策**：三步全部完成（B4 演练 / SQL 下推 / 空键复查）。遗留待用户裁定：A1 已做（PROXY protocol）；sponsor 域恢复与否；B1 测活宿主机选择。
+
+---
+
+## [UTC 2026-11-13T07:25:00Z] S46 · sponsor 域恢复（用户裁定）+ B1 宿主机决策记录 + 演练栈 down
+
+**用户三项裁定**：① sponsor 域**恢复**；② 校机走 mihomo 代理可当 B1 测活宿主；③ 演练栈 down。
+
+**演练栈已 down**（`podman compose down`，pgdata 卷保留可复用）。
+
+**sponsor 域实现**（B3 gap #2 关口）：
+- **migration 0011**：`sponsors` 表（`filter_ast` JSONB 替代上游 expr 字符串；priority 索引）；
+- **`crates/registry/src/sponsor.rs`**：CRUD + `match_text`——**上游 `Service::Match` 语义逐条对齐**（priority 升序遍历、后命中覆盖前者、无命中落 `default_sponsor_text`、解析失败的 sponsor 跳过不报错）；
+- **`handlers/sponsor_admin.rs`**：`GET/POST /sponsors`、`GET/PATCH/DELETE /sponsors/{id}`（AdminOnly 面，写入前 AST 白名单校验）；
+- **订阅注入**：`/sub` 渲染时按节点视图求 sponsor 文案注入 `{{sponsor}}` 字段；DB 错误降级为默认文案，绝不 fail 订阅；
+- **契约**：utoipa +2 → **27 条路径**（11562 B）。
+
+**验证**：校机真实 PG 全套 `FULL_TEST_EXIT=0`（含 0011 迁移）、fmt 0、clippy 0（修了 4 个小错：Cargo 依赖重复 / match_text 签名 / too_many_arguments / if-same-then-else 死分支）。
+
+**B1 宿主机决策记录**：校机跑 MiaoSpeed + mihomo 代理出站——worker 连校机 MiaoSpeed WS（校园网内可达），MiaoSpeed 经 mihomo 出墙测活。待实施（纯部署配置：校机起 mihomo + MiaoSpeed `-proxy` 参数或系统代理）。
+
+**等价性终态**：26 条上游路径 25/26 通过，唯一剩余 `auth/refresh`（单管理员重新登录覆盖，暂不做）。
