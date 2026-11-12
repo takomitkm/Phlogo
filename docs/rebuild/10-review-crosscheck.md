@@ -247,7 +247,7 @@ ErrorResponse/分页/ConfigMap 类型化/请求校验/兼容策略/索引/历史
 
 | # | 事项 | 裁定 | 落地状态 |
 |---|---|---|---|
-| A1 | 反代下限流语义 | **待定**（见 §9 方案对比：PROXY protocol / 可信代理 CIDR / 边缘限流 / 直连 TLS） | 未动，现状=保守（全局共享桶） |
+| A1 | 反代下限流语义 | **PROXY protocol**（选项③，用户裁定 2026-11-13） | ✅ **已实现**（s42）：`apps/api/src/proxy_protocol.rs`（v1 解析 + 自己的 accept 循环 + hyper 驱动）；Caddy `transport http { proxy_protocol v1 }`；`api` 不再发布宿主端口；`expect_proxy` 强制要求该头 |
 | A2 | 凭据加密方案 | **XChaCha20-Poly1305 + `PAILY_PAYLOAD_KEY`** 方向确认（量子面见 §9 说明） | 待实现（B2） |
 | A3 | 高级搜索形态 | **① 前端产 Filter-AST JSON**（不做 expr 兼容层） | 待实现（B6，见 11 §2） |
 | A4 | 评分 speed 混合口径 | **保持现状**（按上游 Go 代码基线混合；已记录于 p4-03 决策 1） | 已定稿，无需改动 |
@@ -273,6 +273,25 @@ ErrorResponse/分页/ConfigMap 类型化/请求校验/兼容策略/索引/历史
 | ⑤ 去掉反代 | API 直接暴露 TLS（axum+rustls） | peer 即真实 | 丢掉 http→https 跳转/静态资源/单端口便利 | 半天 |
 
 **推荐**：③ PROXY protocol（不引入"可信头"这一类可伪造面）；若想少改 Caddy，则 ②（可信 CIDR）+ 防火墙保证 API 端口不可直连。**换掉 Caddy 本身不解决问题**——问题不在代理是谁，而在于「API 如何得知真实客户端地址」，换 nginx/HAProxy 同样是这一组选项。
+
+### A1 落地记录（s42，2026-11-13）
+
+**已实现 PROXY protocol v1**（用户裁定）：
+
+| 组件 | 实现 |
+|---|---|
+| 解析 | `apps/api/src/proxy_protocol.rs::parse_v1` — `PROXY TCP4/TCP6` 提取真实源 IP:port；`PROXY UNKNOWN` 无地址；非 PROXY 前缀不误判。单测 5 项 |
+| 服务端 | axum 0.7 的 `axum::serve` **没有**消费前置头的钩子（内部直接建连交给 hyper），所以本模块自带 accept 循环 + `hyper::server::conn::http1`（照 axum `serve.rs` 的写法）；非 PROXY 连接的首批字节用 `PrefixedStream` **回放**给 hyper，不会丢请求 |
+| 真实 IP 落点 | `ConnectInfo<SocketAddr>` 注入（与 axum 原生路径同构）→ `proxy_protocol::peer_addr/peer_ip` 统一取用 |
+| 限流桶键 | `rate_limit.rs` 改用 `peer_ip()` |
+| 代理侧 | `deploy/Caddyfile` 三个 `reverse_proxy` 各加 `transport http { proxy_protocol v1 }`（**caddy validate 实测通过**） |
+| 部署面 | `deploy/compose.yaml`：`api` **取消宿主端口**（只 `expose`），`PAILY_SERVER_PROXY_PROTOCOL=1` + `PAILY_SERVER_EXPECT_PROXY=1`（缺头即拒） |
+| 配置 | `PAILY_SERVER_PROXY_PROTOCOL` / `PAILY_SERVER_EXPECT_PROXY`（`crates/config`，默认关，向后兼容） |
+| 测试 | `apps/api/tests/proxy_protocol.rs`：带 PROXY 头→200；无头（不强制）→200；无头（强制）→拒绝；`PROXY UNKNOWN`→200 不报错；头被正确消费（否则 hyper 会把 `PROXY TCP4 …` 当请求行→400） |
+
+**顺带修掉的真 bug（重要）**：`rate_limit.rs` 原本读**裸 `SocketAddr`** 扩展，而 axum 插入的是 `ConnectInfo<SocketAddr>` → **永远取不到**，桶键恒为 `0.0.0.0`（全局一个桶）。也就是说"按 IP 分桶"此前**没有真正生效**。现已改为经 `peer_ip()` 读取 `ConnectInfo`。
+
+**遗留**：`expect_proxy` 只在 PROXY 模式下有意义；直连模式（默认）仍以 TCP peer 为准。
 
 ### A2 量子安全说明（供裁定）
 

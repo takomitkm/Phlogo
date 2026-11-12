@@ -118,9 +118,9 @@
 | `node_dead_window_days` | 节点判死窗口 | ⏸ 同上 |
 | `fetch_history_window_days` | 抓取历史保留天数 | ⏸ 仍无消费者（清理只处理孤儿节点 + 测活历史） |
 | `default_sponsor_text` | 无 sponsor 命中时的默认文案 | ⏸ sponsor 域未实现 |
-| `node_distribute_filter` | 全局分发筛选 | ⏸ 仍无消费者（改由 `subscription_profiles.filter_ast` 表达——**语义已覆盖，但键本身空心**） |
-| `node_name_template` | 节点命名模板 | ⏸ 仍无消费者（改由 `subscription_profiles.naming_rule` 表达，同上） |
-| `filename_clash` / `filename_singbox` / `filename_base64` | 订阅文件名 | ⏸ 仍无消费者（现由 `/sub/{token}.{fmt}` 的 fmt 段决定格式，文件名未定制） |
+| `node_distribute_filter` | 全局分发筛选 | ⏸ 仍无消费者（改由 `subscription_profiles.filter_ast` 表达——**语义已覆盖，但键本身空心**；用户裁定 2026-11-13：**先留着并记录，全部功能做完后再统一复查确认无用了再删**） |
+| `node_name_template` | 节点命名模板 | ⏸ 同上（由 `subscription_profiles.naming_rule` 表达；**先留着**，收尾时复查） |
+| `filename_clash` / `filename_singbox` / `filename_base64` | 订阅文件名 | ⏸ 仍无消费者（现由 `/sub/{token}.{fmt}` 的 fmt 段决定格式）；**先留着**，收尾时复查 |
 
 **另外**：`score_min_samples` 被读（`params.rs:32`）但**从未 seed**，永远走 fallback `1`。
 

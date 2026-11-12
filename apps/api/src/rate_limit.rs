@@ -8,7 +8,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, Duration};
 
@@ -34,11 +33,13 @@ pub async fn rate_limit(
 ) -> Response {
     // Identity: peer IP only (strip the ephemeral port) so connection rotation cannot
     // evade the bucket; X-Forwarded-For is never read (spoofable at the edge).
-    let ip = req
-        .extensions()
-        .get::<SocketAddr>()
-        .map(|a| a.ip())
-        .unwrap_or_else(|| "0.0.0.0".parse().expect("valid ip"));
+    //
+    // The address comes from `ConnectInfo<SocketAddr>` — the extension axum inserts.
+    // With PROXY protocol enabled this is the *real* client address (A1); otherwise it
+    // is the TCP peer (the reverse proxy), i.e. one shared bucket — the conservative
+    // direction. Reading a bare `SocketAddr` here would always miss and collapse every
+    // request into the 0.0.0.0 bucket.
+    let ip = crate::proxy_protocol::peer_ip(req.extensions());
     let decision = {
         let mut map = st.windows.lock().expect("rate windows poisoned");
         let now = Instant::now();

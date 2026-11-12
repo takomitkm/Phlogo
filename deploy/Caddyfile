@@ -3,10 +3,28 @@
 	root * /srv/web
 	file_server
 
-	# Management + subscription API
-	reverse_proxy /api/*  http://api:8080
-	reverse_proxy /sub/*  http://api:8080
-	reverse_proxy /health http://api:8080
+	# Management + subscription API.
+	#
+	# A1: `proxy_protocol v1` prepends a PROXY protocol header carrying the real
+	# client address to every upstream connection. The API reads it at the TCP
+	# layer, so the login rate limiter can bucket by the real client IP instead
+	# of seeing one shared proxy address. It cannot be forged by a client
+	# (unlike X-Forwarded-For), and the api service publishes no host port.
+	reverse_proxy /api/*  http://api:8080 {
+		transport http {
+			proxy_protocol v1
+		}
+	}
+	reverse_proxy /sub/*  http://api:8080 {
+		transport http {
+			proxy_protocol v1
+		}
+	}
+	reverse_proxy /health http://api:8080 {
+		transport http {
+			proxy_protocol v1
+		}
+	}
 
 	# /metrics is NOT proxied (p7-03: metrics expose topology; scrape via the
 	# compose-internal network or an authenticated boundary, plan §16.10).

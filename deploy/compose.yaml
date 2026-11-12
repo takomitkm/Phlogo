@@ -1,6 +1,13 @@
 # Paily deployment topology (p7-01, plan §2.2/§13).
 # Constraints: postgres/miaospeed have NO public ports (plan §16.10);
 # caddy is the single ingress on the legacy 21380.
+#
+# A1 (PROXY protocol): caddy prepends a PROXY v1 header with the real client
+# address to every connection it forwards to `api`. The API reads it at the TCP
+# layer (cannot be forged by a client) and uses it as the rate-limit bucket key.
+# `api` therefore must NOT publish a host port — it is reachable only from the
+# compose network, through caddy. See PAILY_SERVER_PROXY_PROTOCOL /
+# PAILY_SERVER_EXPECT_PROXY in the api service.
 services:
   postgres:
     image: postgres:16-alpine
@@ -20,8 +27,13 @@ services:
       PAILY_AUTH_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set in .env}
       PAILY_AUTH_JWT_SECRET: ${JWT_SECRET:?set in .env}
       PAILY_SERVER_PORT: "8080"
+      # A1: read the PROXY v1 header from caddy; require it (the api port is
+      # compose-internal only, so a direct connection cannot happen anyway).
+      PAILY_SERVER_PROXY_PROTOCOL: "1"
+      PAILY_SERVER_EXPECT_PROXY: "1"
     depends_on: [postgres]
     expose: ["8080"]
+    # no host port: -> only reachable through caddy
 
   worker:
     build: { context: .., dockerfile: deploy/Dockerfile.worker }

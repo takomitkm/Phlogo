@@ -745,3 +745,22 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 **验证**：校机真实 PG 全套 `FULL_TEST_EXIT=0`、`cargo fmt --check=0`、`clippy -D warnings=0`；新增 `apps/api/tests/search_endpoints.rs`（未认证 401 边界 3 项）。
 
 **已知限制（诚实记录）**：`unlock` 条件永不匹配（无 streaming 表）；节点 `region` 取自最近测活 metrics；搜索是内存过滤（与上游同语义，量大时应改 SQL 下推）。**sponsors 域仍缺，待用户裁定是否恢复**。
+
+---
+
+## [UTC 2026-11-13T04:55:00Z] S42 · A1 落地（PROXY protocol v1）+ 修限流桶键真 bug + 部署面收紧
+
+**A1（用户裁定 PROXY protocol）已实现**：
+- `apps/api/src/proxy_protocol.rs`：v1 解析（`TCP4`/`TCP6`/`UNKNOWN`）+ **自带 accept 循环**（axum 0.7 的 `axum::serve` 内部直接建连交给 hyper，没有消费前置头的钩子——照 axum `serve.rs` 的写法自建 loop + `hyper::server::conn::http1`）；非 PROXY 连接首批字节用 `PrefixedStream` **回放**给 hyper；PROXY 头之后可能同包到达的 HTTP 字节也回放（`read_proxy_header` 返回 leftover）。
+- 真实地址落点 `ConnectInfo<SocketAddr>`（与 axum 原生同构）→ `peer_addr()`/`peer_ip()` 统一取用；**从不读 XFF**。
+- 部署：`deploy/Caddyfile` 三个 `reverse_proxy` 各加 `transport http { proxy_protocol v1 }`（**本机 podman `caddy validate` 实测 "Valid configuration"**）；`deploy/compose.yaml` 的 `api` **取消宿主端口**（只 expose），加 `PAILY_SERVER_PROXY_PROTOCOL=1` / `PAILY_SERVER_EXPECT_PROXY=1`（缺头即拒）。
+- 配置：`crates/config` 新增 `server.proxy_protocol` / `server.expect_proxy`（默认关，向后兼容）。
+- 测试：`apps/api/tests/proxy_protocol.rs` 5 项（带头 200 / 无头不强制 200 / 无头强制拒 / `PROXY UNKNOWN` 不报错 / 头被正确消费）+ 模块内单测 5 项。
+
+**修掉的真 bug（重要）**：`rate_limit.rs` 原读**裸 `SocketAddr`** 扩展，而 axum 插入的是 `ConnectInfo<SocketAddr>` → **永远取不到**，桶键恒为 `0.0.0.0`（全局单桶）。即"按 IP 分桶"此前**从未真正生效**。现已改经 `peer_ip()`。
+
+**测试自身踩的坑**：`prefixed_stream_replays_bytes` 用 `duplex` 时写端未关闭 → `read_to_end` 永等 EOF → 测试挂 60 秒（首次跑被卡住）。修正为 `drop(w)`。
+
+**验证**：校机真实 PG 全套 `FULL_TEST_EXIT=0`、`cargo fmt --check=0`、`clippy -D warnings=0`；本机 podman `caddy validate` 通过；`podman-compose config` 可解析。
+
+**顺带修正文档错误**：`deploy/README.md` 里脚本路径写成 `scripts/runtime.sh`，实际在**仓库根** `scripts/`（git ls-files 确认）。

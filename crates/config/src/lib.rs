@@ -18,6 +18,13 @@ pub struct ServerConfig {
     pub port: u16,
     pub cors_origins: Vec<String>,
     pub verbose: bool,
+    /// A1: accept a PROXY protocol v1 header on each connection (the reverse proxy
+    /// sends the real client address). `expect_proxy` additionally *requires* it,
+    /// so the API port must not be reachable directly.
+    #[serde(default)]
+    pub proxy_protocol: bool,
+    #[serde(default)]
+    pub expect_proxy: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +50,8 @@ impl Default for ServerConfig {
             port: 21380,
             cors_origins: Vec::new(),
             verbose: false,
+            proxy_protocol: false,
+            expect_proxy: false,
         }
     }
 }
@@ -89,6 +98,12 @@ impl Config {
         }
         if let Ok(v) = var("PAILY_SERVER_VERBOSE") {
             self.server.verbose = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes");
+        }
+        if let Ok(v) = var("PAILY_SERVER_PROXY_PROTOCOL") {
+            self.server.proxy_protocol = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes");
+        }
+        if let Ok(v) = var("PAILY_SERVER_EXPECT_PROXY") {
+            self.server.expect_proxy = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes");
         }
         if let Ok(v) = var("PAILY_DATABASE_TYPE") {
             self.database.db_type = v;
