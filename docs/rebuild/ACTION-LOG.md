@@ -705,3 +705,20 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 **验证**：auth_matrix 7/7、login_limit 4/4（真 TCP 触发/XFF/并发/其他端点不受扰）、**全套 workspace 测试（真实 PG）EXIT=0**、fmt/clippy 0。**附带修复**：p402 测试绝对日期跨日出窗（改相对 now）。
 
 **决策**：P0-01/P0-02 **关闭**。ErrorResponse+分页等 P1 待办见 10-review-crosscheck §5。
+
+---
+
+## [UTC 2026-11-13T01:55:00Z] S40 · 上游等价性审计（B3）+ 配置键悬挂审计 + 自检失误修复
+
+**B3 等价性审计**（`docs/rebuild/11-equivalence-audit.md`）：以上游基线 `dda4e6f2` 的 26 条 API 路径逐条对照——**19 通过**（15 同形 + 4 架构取代 + 1 异形订阅 URL）、**7 条真缺失**（`auth/refresh`、`nodes|sources/search`、`filter/preview`、`sponsors` CRUD ×2、`format-configs` ×2），归为 3 个功能域。口径按用户裁定「多实现路径只需一条等价」。
+
+**新发现：配置面悬挂**（比缺功能更危险）：
+- **6 个键的值被静默忽略**——`score_decay_alpha`/`score_weight_*`/`score_latency_curve_k` 在 `configs` 里 seed 成小数（`0.7`），而 `scoring/params.rs:16-21` 按「整数百分数」`parse::<i64>()` → 解析失败 → **走 fallback**，改配置无效果（fallback 恰好等于 seed，所以一直没暴露）。
+- **13 个键无任何消费者**：`grade_*_min`（阈值被 `GradeThresholds::default()` 硬编码）、`dead_latency_ms`、`fetch_dead_window_days`、`node_dead_window_days`、`fetch_history_window_days`、`check_run_history_days`、`cleanup_interval_minutes`、`default_sponsor_text`、`node_distribute_filter`、`node_name_template`、`filename_*`×3；另有 `score_min_samples` 被读但**从未 seed**。
+
+**自检失误修复（C）**：
+1. `login_limit.rs::xff_cannot_bypass` 原为 `assert!(saw_429 || true)`（恒真 = 假测试）→ 改为真断言：XFF 轮换 13 次，前 10 次必不 429、第 11 次必 429、第 13 次仍 429。
+2. `09-self-completed-gaps.md` B5 行过期（仍写「未覆盖」）→ 改为已完成（`de57dcc`，19 路径）。
+3. `00-index.md` 未收录 10/11 两份新文档 → 补索引行。
+
+**决策登记**：A1 待定（§9 五方案对比）、A2 方向 XChaCha20、A3 选 AST JSON、A4 保持现状、A5 14 天且必须可配、A6 冻结、A7 CI 记录就绪、A8 容器转本机、B1/B2 通过——落 `10-review-crosscheck.md §8`。

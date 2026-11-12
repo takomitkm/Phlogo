@@ -81,22 +81,29 @@ async fn health_not_throttled() {
 }
 
 /// X-Forwarded-For cannot rotate the bucket identity.
+///
+/// The limiter keys on the peer IP only (see `rate_limit.rs`), so a fresh forged
+/// `X-Forwarded-For` on every attempt must NOT reset the window: attempts 1..=10
+/// consume the threshold, attempt 11 -> 429. This is a real assertion — if anyone
+/// ever wires XFF into the key, the 11th attempt stops being 429 and this fails.
 #[tokio::test]
 async fn xff_cannot_bypass() {
     let addr = spawn().await;
-    let mut saw_429 = false;
-    for i in 0..15 {
+    let mut statuses = Vec::new();
+    for i in 0..13 {
         let xff = format!("X-Forwarded-For: 10.0.0.{i}\r\n");
-        let st = raw_request(addr, &login_req(addr, &xff)).await;
-        if st == 429 {
-            saw_429 = true;
-        }
+        statuses.push(raw_request(addr, &login_req(addr, &xff)).await);
     }
-    // Even if buckets are per-connection here, XFF must never CHANGE the verdict
-    // from what a connection without XFF would get — verified structurally by the
-    // limiter never reading XFF (see rate_limit.rs). We assert 429 still appears.
-    assert!(saw_429 || true, "structural: XFF not read by limiter");
-    let _ = saw_429;
+
+    for (i, st) in statuses.iter().take(10).enumerate() {
+        assert_ne!(*st, 429, "attempt {} must be below the threshold", i + 1);
+        assert_ne!(*st, 0, "attempt {} got no response", i + 1);
+    }
+    assert_eq!(
+        statuses[10], 429,
+        "the 11th attempt must be throttled even though it carried a fresh X-Forwarded-For"
+    );
+    assert_eq!(statuses[12], 429, "throttling must persist beyond the threshold");
 }
 
 /// Concurrent hammering: all responses valid, at least one 429, no panics/hangs.

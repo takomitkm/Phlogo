@@ -38,6 +38,8 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 | **P6** | 管理前端 | `07-p6-admin-ui/` | vben-scaffold · pages |
 | **P7** | 生产化 | `08-p7-productionization/` | compose-backup · observability · security-hardening |
 | **收口** | 自补记录 | `09-self-completed-gaps.md` | 收口后自查补齐的缺口（fetch 闭环接线/调度/登录/触发）+ 推迟项 + 换构架评估输入 |
+| **评审** | 旧 Go 评审 × Rust 实现交叉审查 | `10-review-crosscheck.md` | 逐节对照（权限/DB/评分/契约/表达式/分发/工程化/架构）+ 真实缺口 + 已废弃建议 + P0 验收 |
+| **等价性** | 上游等价性审计（B3 答复） | `11-equivalence-audit.md` | 26 条上游路径逐条判定（等价/架构取代/缺失）+ **配置键悬挂审计**（13 键无消费者、6 键值被静默忽略） |
 
 ### 实施状态总览（2026-11-11 收口）
 
