@@ -97,3 +97,40 @@ pub fn matches(node: &NodeView, ast: &FilterNode) -> bool {
         }
     }
 }
+
+/// Whitelist-shaped view of a source (upstream `SourceFilterEnv`).
+#[derive(Debug, Clone, Default)]
+pub struct SourceView {
+    pub id: String,
+    pub identifier: String,
+    pub source_type: String,
+    pub status: String,
+    pub info: String,
+}
+
+/// Evaluate the AST against a source view (`id|identifier|type|status|info`).
+pub fn matches_source(source: &SourceView, ast: &FilterNode) -> bool {
+    match ast {
+        FilterNode::And { conditions } => conditions.iter().all(|c| matches_source(source, c)),
+        FilterNode::Or { conditions } => conditions.iter().any(|c| matches_source(source, c)),
+        FilterNode::Not { condition } => !matches_source(source, condition),
+        FilterNode::Cond(c) => {
+            let op = c.operator;
+            let field = match c.field.as_str() {
+                "id" => &source.id,
+                "identifier" => &source.identifier,
+                "type" => &source.source_type,
+                "status" => &source.status,
+                "info" => &source.info,
+                _ => return false, // unreachable after whitelist validation
+            };
+            match op {
+                CompareOp::Contains => text(&c.value)
+                    .map(|v| field.to_lowercase().contains(&v.to_lowercase()))
+                    .unwrap_or(false),
+                CompareOp::IsNull => field.is_empty(),
+                _ => text(&c.value).map(|v| compare(op, field, &v)).unwrap_or(false),
+            }
+        }
+    }
+}

@@ -7,8 +7,11 @@ pub mod parse;
 pub mod sql;
 
 pub use ast::{CompareOp, Condition, FilterNode, FilterValue};
-pub use eval::{matches, NodeView};
-pub use parse::{parse, FilterError, MAX_AST_DEPTH, MAX_CONDITION_COUNT, FIELD_WHITELIST};
+pub use eval::{matches, matches_source, NodeView, SourceView};
+pub use parse::{
+    parse, parse_with, FilterError, FIELD_WHITELIST, MAX_AST_DEPTH, MAX_CONDITION_COUNT,
+    SOURCE_FIELD_WHITELIST,
+};
 pub use sql::{to_sql, SqlParam};
 
 #[cfg(test)]

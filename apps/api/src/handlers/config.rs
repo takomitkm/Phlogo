@@ -31,6 +31,30 @@ pub async fn get_config(State(st): State<AppState>) -> Response {
     }
 }
 
+/// Grade thresholds from `configs` (`grade_a_min` / `grade_b_min` / `grade_c_min`).
+/// These keys were seeded but never read (B3 audit) — the subscription renderer now
+/// consumes them instead of the in-code defaults.
+pub async fn grade_thresholds(
+    pool: &sqlx::PgPool,
+) -> Result<distribution::naming::GradeThresholds, sqlx::Error> {
+    async fn one(pool: &sqlx::PgPool, key: &str, fallback: f64) -> f64 {
+        sqlx::query_scalar::<_, String>("SELECT value FROM configs WHERE key=$1")
+            .bind(key)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .unwrap_or(fallback)
+    }
+    Ok(distribution::naming::GradeThresholds {
+        a_min: one(pool, "grade_a_min", 0.75).await,
+        b_min: one(pool, "grade_b_min", 0.50).await,
+        c_min: one(pool, "grade_c_min", 0.25).await,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ConfigUpdateReq {
     pub values: HashMap<String, String>,

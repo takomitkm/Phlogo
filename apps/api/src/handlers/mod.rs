@@ -2,8 +2,10 @@
 pub mod auth;
 pub mod config;
 pub mod fetch_trigger;
+pub mod format_config;
 pub mod metrics;
 pub mod node;
+pub mod search;
 pub mod source;
 pub mod subscription;
 pub mod subscriptions_admin;

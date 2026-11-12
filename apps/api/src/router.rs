@@ -11,7 +11,10 @@ use utoipa::OpenApi;
 use app_config::Config;
 
 use crate::auth::{require_api_auth, AuthState};
-use crate::handlers::{auth, config, fetch_trigger, metrics, node, source, subscription, subscriptions_admin, views};
+use crate::handlers::{
+    auth, config, fetch_trigger, format_config, metrics, node, search, source, subscription,
+    subscriptions_admin, views,
+};
 use crate::state::AppState;
 
 async fn health() -> &'static str {
@@ -71,6 +74,9 @@ pub fn build(cfg: Config) -> Router {
         .route("/sources/:id/ignore-dead", post(source::set_ignore_dead))
         .route("/sources/:id/nodes", get(source::nodes))
         .route("/nodes", get(node::list))
+        .route("/nodes/search", post(search::nodes_search))
+        .route("/sources/search", post(search::sources_search))
+        .route("/filter/preview", post(search::preview))
         .route("/nodes/:id", get(node::get).delete(node::delete))
         .route("/nodes/:id/checks/initial", get(views::node_initial_checks))
         .route("/nodes/:id/checks/deep", get(views::node_deep_checks))
@@ -95,6 +101,14 @@ pub fn build(cfg: Config) -> Router {
             delete(subscriptions_admin::revoke_token),
         )
         .route("/config", get(config::get_config).put(config::put_config))
+        .route(
+            "/format-configs",
+            get(format_config::list),
+        )
+        .route(
+            "/format-configs/:format",
+            get(format_config::get).put(format_config::update),
+        )
         .with_state(state.clone())
         // P0-01: matrix-enforcing auth (fail-closed AdminOnly for unmatched routes).
         // Applied AFTER with_state so the middleware stack isn't reset by the

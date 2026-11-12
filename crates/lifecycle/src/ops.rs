@@ -92,19 +92,61 @@ pub async fn orphan_retention_days(pool: &PgPool) -> anyhow::Result<i64> {
     Ok(v.parse().unwrap_or(14))
 }
 
-/// One cleanup tick (plan §2.1 LIFE/cleanup): retire expired orphans, then physically
-/// delete retired nodes (guarded). Returns what happened, for logs/metrics.
+/// One cleanup tick (plan §2.1 LIFE/cleanup): retire expired orphans, physically
+/// delete retired nodes (guarded), then prune check history past its retention
+/// window (A5: `check_run_history_days`, default 14). Returns what happened, for logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CleanupReport {
     pub retired: u64,
     pub deleted: u64,
+    pub pruned: u64,
 }
 
 pub async fn run_cleanup_cycle(pool: &PgPool) -> anyhow::Result<CleanupReport> {
     let retention = orphan_retention_days(pool).await?;
     let retired = retire_expired_orphans(pool, retention).await?;
     let deleted = delete_retired_nodes(pool).await?;
-    Ok(CleanupReport { retired, deleted })
+    let history_days = check_history_days(pool).await?;
+    let pruned = prune_check_history(pool, history_days).await?;
+    Ok(CleanupReport {
+        retired,
+        deleted,
+        pruned,
+    })
+}
+
+/// Read `check_run_history_days` (A5: seeded 14 since migration 0010).
+pub async fn check_history_days(pool: &PgPool) -> anyhow::Result<i64> {
+    let v: Option<String> =
+        sqlx::query_scalar("SELECT value FROM configs WHERE key='check_run_history_days'")
+            .fetch_optional(pool)
+            .await?;
+    Ok(v.and_then(|s| s.trim().parse().ok()).unwrap_or(14))
+}
+
+/// Read `cleanup_interval_minutes` (seeded 30); the worker's scheduler uses it.
+pub async fn cleanup_interval_minutes(pool: &PgPool) -> anyhow::Result<i64> {
+    let v: Option<String> =
+        sqlx::query_scalar("SELECT value FROM configs WHERE key='cleanup_interval_minutes'")
+            .fetch_optional(pool)
+            .await?;
+    Ok(v.and_then(|s| s.trim().parse().ok()).unwrap_or(30).max(1))
+}
+
+/// Delete check history older than the retention window. `retention_days <= 0` keeps
+/// history forever (explicit opt-out) and is the only supported "disable" switch.
+pub async fn prune_check_history(pool: &PgPool, retention_days: i64) -> anyhow::Result<u64> {
+    if retention_days <= 0 {
+        return Ok(0);
+    }
+    let done = sqlx::query(
+        "DELETE FROM node_check_results \
+         WHERE checked_at < now() - make_interval(days => $1)",
+    )
+    .bind(retention_days as i32)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
 }
 
 /// Cross-tag alive materialization (rewrites `batchAliveDecision`):

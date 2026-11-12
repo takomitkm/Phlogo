@@ -137,6 +137,69 @@ pub mod subscriptions_admin {
     pub fn revoke_token() {}
 }
 
+/// Documented search / preview / format-template routes (B3 gap #1 and #3).
+pub mod search {
+    #[utoipa::path(
+        operation_id = "NodeSearch",
+        post,
+        path = "/api/v1/nodes/search",
+        request_body = serde_json::Value,
+        responses((status = 200, description = "paged node search", body = serde_json::Value))
+    )]
+    #[allow(dead_code)]
+    pub fn nodes_search() {}
+
+    #[utoipa::path(
+        operation_id = "SourceSearch",
+        post,
+        path = "/api/v1/sources/search",
+        request_body = serde_json::Value,
+        responses((status = 200, description = "paged source search", body = serde_json::Value))
+    )]
+    #[allow(dead_code)]
+    pub fn sources_search() {}
+
+    #[utoipa::path(
+        operation_id = "FilterPreview",
+        post,
+        path = "/api/v1/filter/preview",
+        request_body = serde_json::Value,
+        responses((status = 200, description = "filter dry-run (max 100 rows)", body = serde_json::Value))
+    )]
+    #[allow(dead_code)]
+    pub fn preview() {}
+
+    #[utoipa::path(
+        operation_id = "FormatConfigList",
+        get,
+        path = "/api/v1/format-configs",
+        responses((status = 200, description = "per-format template configs", body = serde_json::Value))
+    )]
+    #[allow(dead_code)]
+    pub fn format_configs_list() {}
+
+    #[utoipa::path(
+        operation_id = "FormatConfigGet",
+        get,
+        path = "/api/v1/format-configs/{format}",
+        params(("format" = String, Path)),
+        responses((status = 200, description = "one format config", body = serde_json::Value))
+    )]
+    #[allow(dead_code)]
+    pub fn format_config_get() {}
+
+    #[utoipa::path(
+        operation_id = "FormatConfigUpdate",
+        put,
+        path = "/api/v1/format-configs/{format}",
+        params(("format" = String, Path)),
+        request_body = serde_json::Value,
+        responses((status = 200, description = "stored", body = serde_json::Value))
+    )]
+    #[allow(dead_code)]
+    pub fn format_config_update() {}
+}
+
 /// Documented auth + fetch-trigger routes.
 pub mod misc {
     #[utoipa::path(

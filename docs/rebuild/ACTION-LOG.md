@@ -722,3 +722,26 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 3. `00-index.md` 未收录 10/11 两份新文档 → 补索引行。
 
 **决策登记**：A1 待定（§9 五方案对比）、A2 方向 XChaCha20、A3 选 AST JSON、A4 保持现状、A5 14 天且必须可配、A6 冻结、A7 CI 记录就绪、A8 容器转本机、B1/B2 通过——落 `10-review-crosscheck.md §8`。
+
+---
+
+## [UTC 2026-11-13T02:20:00Z] S41 · 评分参数修复 + A5 保留期接线 + B3 缺口 #1/#3 补齐（搜索/预览/模板配置）
+
+**评分参数修复**（`crates/scoring/src/params.rs`）：原 `cfg_i64(...)/100.0` 按整数百分数解析，但 seed 是小数 `0.7` → 解析失败 → **静默走 fallback**（改配置无效）。改为 `cfg_ratio()`：小数原样、≥2 视作百分数（兼容旧写法）；单测 `decimals_and_percents_agree` 钉死。**现在改权重真的生效**。
+
+**A5 落地**（14 天 + 可配）：
+- `lifecycle::prune_check_history`（按 `check_run_history_days` 删除超期 `node_check_results`；`≤0` = 永不删）；
+- `lifecycle::cleanup_interval_minutes` → worker 调度周期改读配置（默认 30 分钟），不再硬编码 600s；
+- migration `0010_config_wiring`：把未被改过的 `check_run_history_days` seed 从 7 改 14；补 seed `score_min_samples`；加索引 `idx_node_check_results_node_time`（时间线查询 `(node_id, checked_at DESC)`）；建表 `format_configs`。
+
+**B3 缺口补齐**：
+- **#1 高级搜索 + 预览**：`apps/api/src/handlers/search.rs`——`POST /nodes/search`、`POST /sources/search`（AST JSON body + 分页 ≤200）、`POST /filter/preview`（≤100）；filter crate 扩 `parse_with(whitelist)` / `matches_source` / `SOURCE_FIELD_WHITELIST`；权限矩阵纳入（读面 AdminOrService，fail-closed 保持）。
+- **#3 模板配置**：`apps/api/src/handlers/format_config.rs` + `format_configs` 表；**写入前用渲染同款解析器校验**（坏模板 400，不在每次订阅时 500）；`GET` 读面 AdminOrService、`PUT` AdminOnly。
+
+**接线配置键**：`grade_*_min` → `handlers/config.rs::grade_thresholds()`（订阅渲染不再硬编码阈值）。
+
+**契约**：utoipa 补 6 条路径 → **25 条**（`openapi.json` 10290 B）。
+
+**验证**：校机真实 PG 全套 `FULL_TEST_EXIT=0`、`cargo fmt --check=0`、`clippy -D warnings=0`；新增 `apps/api/tests/search_endpoints.rs`（未认证 401 边界 3 项）。
+
+**已知限制（诚实记录）**：`unlock` 条件永不匹配（无 streaming 表）；节点 `region` 取自最近测活 metrics；搜索是内存过滤（与上游同语义，量大时应改 SQL 下推）。**sponsors 域仍缺，待用户裁定是否恢复**。

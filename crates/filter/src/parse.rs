@@ -13,6 +13,9 @@ pub const FIELD_WHITELIST: &[&str] = &[
     "unlock",    // streaming unlock contains (case-insensitive)
 ];
 
+/// Source-level whitelist (upstream `SourceFilterEnv`: id/identifier/info/status/type).
+pub const SOURCE_FIELD_WHITELIST: &[&str] = &["id", "identifier", "type", "status", "info"];
+
 pub const MAX_AST_DEPTH: usize = 8;
 pub const MAX_CONDITION_COUNT: usize = 32;
 pub const MAX_RESULT_SIZE: usize = 1000;
@@ -37,23 +40,28 @@ fn is_valid_operator(op: &str) -> bool {
     CompareOp::try_from_name(op).is_some()
 }
 
-fn validate(node: &FilterNode, depth: usize, leaves: &mut usize) -> Result<(), FilterError> {
+fn validate(
+    node: &FilterNode,
+    depth: usize,
+    leaves: &mut usize,
+    allowed: &[&str],
+) -> Result<(), FilterError> {
     if depth > MAX_AST_DEPTH {
         return Err(FilterError::TooDeep);
     }
     match node {
         FilterNode::And { conditions } | FilterNode::Or { conditions } => {
             for c in conditions {
-                validate(c, depth + 1, leaves)?;
+                validate(c, depth + 1, leaves, allowed)?;
             }
         }
-        FilterNode::Not { condition } => validate(condition, depth + 1, leaves)?,
+        FilterNode::Not { condition } => validate(condition, depth + 1, leaves, allowed)?,
         FilterNode::Cond(c) => {
             *leaves += 1;
             if *leaves > MAX_CONDITION_COUNT {
                 return Err(FilterError::TooManyConditions);
             }
-            if !FIELD_WHITELIST.contains(&c.field.as_str()) {
+            if !allowed.contains(&c.field.as_str()) {
                 return Err(FilterError::UnknownField(c.field.clone()));
             }
             if !is_valid_operator(c.operator_name()) {
@@ -67,12 +75,17 @@ fn validate(node: &FilterNode, depth: usize, leaves: &mut usize) -> Result<(), F
 /// Parse an AST JSON string. Empty/whitespace input is reported as `FilterError::Empty`
 /// so callers can treat it as "no filtering".
 pub fn parse(json: &str) -> Result<FilterNode, FilterError> {
+    parse_with(json, FIELD_WHITELIST)
+}
+
+/// Same as [`parse`] but against another whitelist (e.g. source-level fields).
+pub fn parse_with(json: &str, allowed: &[&str]) -> Result<FilterNode, FilterError> {
     if json.trim().is_empty() {
         return Err(FilterError::Empty);
     }
     let node: FilterNode =
         serde_json::from_str(json).map_err(|e| FilterError::Json(e.to_string()))?;
     let mut leaves = 0;
-    validate(&node, 1, &mut leaves)?;
+    validate(&node, 1, &mut leaves, allowed)?;
     Ok(node)
 }

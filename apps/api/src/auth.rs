@@ -79,6 +79,7 @@ pub fn auth_kind(method: &str, path: &str) -> AuthKind {
         // sources
         ("GET", Some("sources"), None, _) => AdminOrService,
         ("POST", Some("sources"), None, _) => AdminOrService, // fetch intake (upstream sourceCreateMW)
+        ("POST", Some("sources"), Some("search"), _) => AdminOrService, // AST search (read)
         ("GET", Some("sources"), Some(_), None) => AdminOrService,
         ("GET", Some("sources"), Some(_), Some("nodes")) => AdminOrService,
         ("PATCH", Some("sources"), Some(_), _) => AdminOnly,
@@ -86,9 +87,12 @@ pub fn auth_kind(method: &str, path: &str) -> AuthKind {
         ("POST", Some("sources"), Some(_), Some("ignore-dead")) => AdminOnly,
         // nodes
         ("GET", Some("nodes"), None, _) => AdminOrService,
+        ("POST", Some("nodes"), Some("search"), _) => AdminOrService, // AST search (read)
         ("GET", Some("nodes"), Some(id), None) if UuidLike::is(id) => AdminOrService,
         ("GET", Some("nodes"), Some(_), Some("checks")) => AdminOrService,
         ("DELETE", Some("nodes"), Some(_), _) => AdminOnly,
+        // filter preview (read-only dry run)
+        ("POST", Some("filter"), Some("preview"), _) => AdminOrService,
         // reads
         ("GET", Some("stats"), _, _) => AdminOrService,
         ("GET", Some("checkers"), _, _) => AdminOrService,
@@ -96,6 +100,9 @@ pub fn auth_kind(method: &str, path: &str) -> AuthKind {
         // config
         ("GET", Some("config"), _, _) => AdminOrService,
         ("PUT", Some("config"), _, _) => AdminOnly,
+        // format templates: read for any service identity, write is admin-only
+        ("GET", Some("format-configs"), _, _) => AdminOrService,
+        ("PUT", Some("format-configs"), _, _) => AdminOnly,
         // fetch trigger: the one legitimate service-identity write
         ("POST", Some("fetch"), Some("trigger"), _) => AdminOrService,
         // subscriptions admin surface: AdminOnly for every method

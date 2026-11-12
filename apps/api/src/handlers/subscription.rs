@@ -87,7 +87,11 @@ pub async fn sub(State(st): State<AppState>, Path(spec): Path<String>) -> Respon
     }
 
     // Naming (default template; full payload conversion lands with node_payloads).
-    let thresholds = distribution::naming::GradeThresholds::default();
+    // Grade thresholds come from `configs` (B3 gap: `grade_*_min` had no consumer).
+    let thresholds = match crate::handlers::config::grade_thresholds(st.pool()).await {
+        Ok(t) => t,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")),
+    };
     let lines: Vec<String> = selected
         .iter()
         .map(|s| {

@@ -27,11 +27,17 @@ async fn main() -> anyhow::Result<()> {
 
     // Periodic scheduling: batch-enqueue fetches for active sources, then run one
     // lifecycle cleanup tick — both on fixed intervals (plan §2.1 worker loop).
+    // The cleanup interval is config-driven (`cleanup_interval_minutes`, default 30).
+    let cleanup_secs = lifecycle::cleanup_interval_minutes(&pool)
+        .await
+        .unwrap_or(30)
+        .max(1) as u64
+        * 60;
     let sched_pool = pool.clone();
     let mut sched_fetch = fetch_storage.clone();
     tokio::spawn(async move {
         let mut fetch_tick = tokio::time::interval(Duration::from_secs(300));
-        let mut cleanup_tick = tokio::time::interval(Duration::from_secs(600));
+        let mut cleanup_tick = tokio::time::interval(Duration::from_secs(cleanup_secs));
         loop {
             tokio::select! {
                 _ = fetch_tick.tick() => {
@@ -42,8 +48,13 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }                _ = cleanup_tick.tick() => {
                     match lifecycle::run_cleanup_cycle(&sched_pool).await {
-                        Ok(r) if r.retired > 0 || r.deleted > 0 => {
-                            tracing::info!(retired = r.retired, deleted = r.deleted, "cleanup tick acted")
+                        Ok(r) if r.retired > 0 || r.deleted > 0 || r.pruned > 0 => {
+                            tracing::info!(
+                                retired = r.retired,
+                                deleted = r.deleted,
+                                pruned = r.pruned,
+                                "cleanup tick acted"
+                            )
                         }
                         Ok(_) => {}
                         Err(e) => tracing::error!(error = %e, "cleanup tick failed"),
