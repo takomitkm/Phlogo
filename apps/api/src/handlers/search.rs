@@ -97,37 +97,44 @@ type NodeRow = (
     Option<Vec<String>>,
 );
 
-async fn load_nodes(pool: &sqlx::PgPool) -> Result<Vec<NodeRow>, sqlx::Error> {
-    sqlx::query_as(
-        "SELECT n.id, n.identity_hash, n.protocol, n.server, n.port, \
-                (SELECT max(sc.score) FROM node_scores sc WHERE sc.node_id = n.id)::float8 AS score, \
-                (SELECT st.health FROM node_status st WHERE st.node_id = n.id \
-                   ORDER BY st.last_checked_at DESC LIMIT 1) AS health, \
-                (SELECT r.metrics->>'region' FROM node_check_results r \
-                   WHERE r.node_id = n.id AND r.metrics ? 'region' \
-                   ORDER BY r.checked_at DESC LIMIT 1) AS region, \
-                (SELECT array_agg(ns.source_id::text) FROM node_sources ns \
-                   WHERE ns.node_id = n.id) AS source_ids \
-         FROM nodes n ORDER BY n.identity_hash",
-    )
-    .fetch_all(pool)
-    .await
-}
+/// The per-node "search view": latest health across tags, max score, latest region.
+/// The SQL push-down compiles the AST against this shape (see `filter::to_search_sql`).
+const NODE_VIEW_SQL: &str = "(SELECT n.id, n.identity_hash, n.protocol, n.server, n.port, \
+        (SELECT max(sc.score) FROM node_scores sc WHERE sc.node_id = n.id)::float8 AS score, \
+        (SELECT st.health FROM node_status st WHERE st.node_id = n.id \
+           ORDER BY st.last_checked_at DESC LIMIT 1) AS health, \
+        (SELECT r.metrics->>'region' FROM node_check_results r \
+           WHERE r.node_id = n.id AND r.metrics ? 'region' \
+           ORDER BY r.checked_at DESC LIMIT 1) AS region, \
+        (SELECT array_agg(ns.source_id::text) FROM node_sources ns \
+           WHERE ns.node_id = n.id) AS source_ids \
+     FROM nodes n)";
 
-fn node_view(row: &NodeRow) -> filter::NodeView {
-    filter::NodeView {
-        health: row.6.clone().unwrap_or_else(|| "unknown".to_string()),
-        region: row.7.clone(),
-        score: row.5.unwrap_or(0.0),
-        protocol: row.2.clone(),
-        server: row.3.clone(),
-        source_id: row
-            .8
-            .as_ref()
-            .and_then(|ids| ids.first())
-            .and_then(|s| Uuid::parse_str(s).ok()),
-        streaming: Default::default(),
+async fn load_nodes(
+    pool: &sqlx::PgPool,
+    filter_ast: Option<&filter::FilterNode>,
+) -> Result<Vec<NodeRow>, sqlx::Error> {
+    // Filter push-down: the AST compiles to a parameterized WHERE clause over the
+    // per-node aggregates above (latest health across tags, max score, latest region,
+    // source membership via EXISTS). No checker_tag is pinned — the search view spans
+    // all tags. Memory evaluation still runs afterwards for `unlock` conditions
+    // (streaming has no table yet) — see `evaluate_node`.
+    let (where_clause, params) = match filter_ast {
+        Some(ast) => filter::to_search_sql(ast),
+        None => ("TRUE".to_string(), Vec::new()),
+    };
+    let sql = format!(
+        "SELECT * FROM {NODE_VIEW_SQL} v WHERE {where_clause} ORDER BY v.identity_hash"
+    );
+    let mut q = sqlx::query_as::<_, NodeRow>(&sql);
+    for p in &params {
+        q = match p {
+            filter::SqlParam::Str(s) => q.bind(s.clone()),
+            filter::SqlParam::Num(n) => q.bind(*n),
+            filter::SqlParam::Bool(b) => q.bind(*b),
+        };
     }
+    q.fetch_all(pool).await
 }
 
 fn node_summary(row: &NodeRow) -> Value {
@@ -145,22 +152,22 @@ fn node_summary(row: &NodeRow) -> Value {
 }
 
 /// POST /api/v1/nodes/search — AST filter + pagination (upstream `NodeSearch`).
+///
+/// The filter is authoritative **in SQL** (`filter::to_search_sql` over the per-node
+/// view). No memory re-check: the in-memory `matches` does not implement `contains`
+/// /`is_null` and would wrongly drop rows SQL already matched. Known limitation:
+/// `unlock` leaves compile to SQL `FALSE` (no streaming table yet), so a filter with
+/// `unlock` matches nothing.
 pub async fn nodes_search(State(st): State<AppState>, Json(req): Json<SearchReq>) -> Response {
     let ast = match parse_filter(&req.filter, filter::FIELD_WHITELIST) {
         Ok(a) => a,
         Err(r) => return r,
     };
-    let rows = match load_nodes(st.pool()).await {
+    let rows = match load_nodes(st.pool(), ast.as_ref()).await {
         Ok(r) => r,
         Err(e) => return err500(e),
     };
-    let matched: Vec<NodeRow> = rows
-        .into_iter()
-        .filter(|row| match &ast {
-            None => true,
-            Some(ast) => filter::matches(&node_view(row), ast),
-        })
-        .collect();
+    let matched: Vec<NodeRow> = rows;
 
     let (page, limit) = page_of(&req);
     let total = matched.len() as i64;
@@ -262,19 +269,11 @@ pub async fn preview(State(st): State<AppState>, Json(req): Json<PreviewReq>) ->
                 Ok(a) => a,
                 Err(r) => return r,
             };
-            let rows = match load_nodes(st.pool()).await {
+            let rows = match load_nodes(st.pool(), ast.as_ref()).await {
                 Ok(r) => r,
                 Err(e) => return err500(e),
             };
-            let hits: Vec<Value> = rows
-                .iter()
-                .filter(|row| match &ast {
-                    None => true,
-                    Some(ast) => filter::matches(&node_view(row), ast),
-                })
-                .take(cap)
-                .map(node_summary)
-                .collect();
+            let hits: Vec<Value> = rows.iter().take(cap).map(node_summary).collect();
             Json(serde_json::json!({ "nodes": hits })).into_response()
         }
         "source" => {

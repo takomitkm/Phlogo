@@ -32,6 +32,18 @@ fn column_of(field: &str) -> &'static str {
     }
 }
 
+/// Fixed whitelist -> search-view column mapping (plain aggregate columns).
+fn view_column_of(field: &str) -> &'static str {
+    match field {
+        "health" => "v.health",
+        "score" => "v.score",
+        "region" => "v.region",
+        "protocol" => "v.protocol",
+        "server" => "v.server",
+        _ => "v.id", // unreachable after validation
+    }
+}
+
 fn op_sql(op: CompareOp) -> &'static str {
     match op {
         CompareOp::Eq => "=",
@@ -128,6 +140,87 @@ impl Compiler {
             FilterNode::Cond(c) => self.leaf(&c.field, c.operator, &c.value),
         }
     }
+
+    /// Same shape as [`Self::compile`] but against the search view: plain columns,
+    /// EXISTS aliases renamed (`nsv`) so they cannot collide with the view's `ns`.
+    fn compile_view(&mut self, node: &FilterNode) -> String {
+        match node {
+            FilterNode::And { conditions } => {
+                let parts: Vec<String> = conditions.iter().map(|c| self.compile_view(c)).collect();
+                format!("({})", parts.join(" AND "))
+            }
+            FilterNode::Or { conditions } => {
+                let parts: Vec<String> = conditions.iter().map(|c| self.compile_view(c)).collect();
+                format!("({})", parts.join(" OR "))
+            }
+            FilterNode::Not { condition } => format!("(NOT {})", self.compile_view(condition)),
+            FilterNode::Cond(c) => {
+                let field = c.field.as_str();
+                let op = c.operator;
+                let value = &c.value;
+                match (field, op) {
+                    ("source_id", CompareOp::Eq) => {
+                        let n = self.push(SqlParam::from_value(value));
+                        format!("EXISTS (SELECT 1 FROM node_sources nsv WHERE nsv.node_id=v.id AND nsv.source_id=${n}::uuid)")
+                    }
+                    ("source_id", CompareOp::Ne) => {
+                        let n = self.push(SqlParam::from_value(value));
+                        format!("NOT EXISTS (SELECT 1 FROM node_sources nsv WHERE nsv.node_id=v.id AND nsv.source_id=${n}::uuid)")
+                    }
+                    // unlock/streaming: no table yet — keep it expressible but always
+                    // false in SQL; the caller re-checks these in memory.
+                    ("unlock", _) => {
+                        let _n = self.push(SqlParam::from_value(value));
+                        "FALSE".to_string()
+                    }
+                    (f, CompareOp::IsNull) => {
+                        let col = view_column_of(f);
+                        if matches!(value, FilterValue::Bool(true)) {
+                            format!("{col} IS NULL")
+                        } else {
+                            format!("{col} IS NOT NULL")
+                        }
+                    }
+                    (f, CompareOp::In) | (f, CompareOp::NotIn) => {
+                        let col = view_column_of(f);
+                        let list = match value {
+                            FilterValue::List(items) => items.clone(),
+                            other => vec![other.clone()],
+                        };
+                        let marks: Vec<String> = list
+                            .iter()
+                            .map(|item| {
+                                let n = self.push(SqlParam::from_value(item));
+                                format!("${n}")
+                            })
+                            .collect();
+                        let joined = marks.join(", ");
+                        if op == CompareOp::In {
+                            format!("{col} IN ({joined})")
+                        } else {
+                            format!("{col} NOT IN ({joined})")
+                        }
+                    }
+                    (f, CompareOp::Contains) => {
+                        // Case-insensitive substring match over the view column.
+                        let col = view_column_of(f);
+                        let n = self.push(SqlParam::from_value(value));
+                        format!("({col} ILIKE '%' || ${n} || '%' OR {col} ILIKE ${n})")
+                    }
+                    (f, op) => {
+                        let col = view_column_of(f);
+                        let op_str = op_sql(op);
+                        let n = self.push(SqlParam::from_value(value));
+                        if f == "score" {
+                            format!("{col} {op_str} ${n}::float8")
+                        } else {
+                            format!("{col} {op_str} ${n}")
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Compile the AST into `SELECT n.id ... WHERE <expr>` with bound parameters.
@@ -144,4 +237,19 @@ pub fn to_sql(node: &FilterNode, checker_tag: &str) -> (String, Vec<SqlParam>) {
          WHERE {where_clause}"
     );
     (sql, c.params)
+}
+
+/// Compile the AST for the **search view** (`handlers/search.rs` NODE_VIEW_SQL):
+/// a per-node aggregate row with plain columns `health`/`score`/`region` (latest
+/// across tags, max score) — unlike [`to_sql`], no checker tag is pinned and the
+/// params start at `$1`.
+///
+/// The unlock/streaming branches are preserved for whitelist compatibility; there is
+/// no `node_streaming` table yet, so callers keep memory evaluation for those leaves.
+pub fn to_search_sql(node: &FilterNode) -> (String, Vec<SqlParam>) {
+    let mut c = Compiler {
+        params: Vec::new(),
+    };
+    let where_clause = c.compile_view(node);
+    (where_clause, c.params)
 }

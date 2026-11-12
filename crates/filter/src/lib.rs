@@ -12,7 +12,7 @@ pub use parse::{
     parse, parse_with, FilterError, FIELD_WHITELIST, MAX_AST_DEPTH, MAX_CONDITION_COUNT,
     SOURCE_FIELD_WHITELIST,
 };
-pub use sql::{to_sql, SqlParam};
+pub use sql::{to_search_sql, to_sql, SqlParam};
 
 #[cfg(test)]
 mod p5_tests;

@@ -789,3 +789,17 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 **环境坑（备忘）**：podman-compose 1.6 无 `--no-build`（`podman compose` 转发可用）；curl.exe 的 `--data-binary "@file"` 在 PS 里 `@` 被 splatting 吃掉（换 Python requests 驱动 e2e）。
 
 **验证**：演练后 `deploy/compose.yaml` 的 `podman compose config` 可解析；Caddyfile `caddy validate` 通过；校机全套测试绿（见 S42）；本机全栈 5 服务 Up（postgres/api/worker/web/caddy）。
+
+---
+
+## [UTC 2026-11-13T06:50:00Z] S44 · 步骤2：搜索端点 SQL 下推（AST → 参数化 SQL，替换内存全量过滤）
+
+**实现**：
+- `crates/filter/src/sql.rs` 新增 **`to_search_sql`**：同 `to_sql` 的白名单编译，但对准 `handlers/search.rs` 的**节点聚合视图**（`v.health`/`v.score`/`v.region`——跨 tag 最新/max，不钉 checker tag）；参数从 `$1` 起；`source_id` 走 EXISTS（别名 `nsv` 防撞）；**`contains` → `ILIKE '%'||$n||'%'`**（首版漏了 contains 走 `=` 被演练抓出）；`unlock` → SQL `FALSE`（无 streaming 表，文档化限制）。
+- `handlers/search.rs::load_nodes`：AST 编译进 WHERE，视图内联子查询 `FROM (SELECT … ) v WHERE …`；**删除内存复检**——`eval::matches` 不支持 `contains`/`is_null`，会把 SQL 已匹配的行错杀（第二版被演练抓出；SQL 是权威，preview/sources 侧保留内存求值因 `matches_source` 全支持）。
+- 分页在过滤后的行上切片；坏字段仍白名单 400（SQL 前）。
+
+**真实验证（本机 compose 栈， drill 节点：trojan/drill.example.com/无 score 行/无 status 行）**：
+`server contains drill`=1、`protocol eq trojan`=1、`score gte 0`=0（NULL 三值逻辑，正确）、`health is_null`=1、`and` 组合=1、no-match=0、unlock=0、坏字段=400。校机全套测试 + fmt + clippy 全绿。
+
+**踩坑记录**：① 首版 GROUP BY+HAVING 形态列引用歧义，改为内联视图 + WHERE；② contains 首版落默认分支变 `=`；③ 内存复检错杀——**教训：两个求值器并存时必须二选一作为权威**；④ podman `--no-cache` 重建遇网络死结，改 `down/up` 换镜像（本演练中"镜像未更新"与"内存复检"两个因素叠加，靠 psql 手动跑同形 SQL 定位到是代码而非部署）。
