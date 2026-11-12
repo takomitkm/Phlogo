@@ -17,12 +17,19 @@ services:
       POSTGRES_DB: paily
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # worker's Apalis queue needs its own database; create it on first boot.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     # no ports: -> compose-internal only
 
   api:
-    build: { context: .., dockerfile: deploy/Dockerfile.api }
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    image: localhost/paily-api:local
     environment:
       PAILY_DATABASE_DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily
+      # fetch/trigger enqueues into the Apalis queue (same database the worker uses).
+      PAILY_DATABASE_JOBS_DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily_jobs
       PAILY_AUTH_SERVICE_SECRET: ${SERVICE_SECRET:?set in .env}
       PAILY_AUTH_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set in .env}
       PAILY_AUTH_JWT_SECRET: ${JWT_SECRET:?set in .env}
@@ -36,7 +43,10 @@ services:
     # no host port: -> only reachable through caddy
 
   worker:
-    build: { context: .., dockerfile: deploy/Dockerfile.worker }
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.worker
+    image: localhost/paily-worker:local
     environment:
       PAILY_DATABASE_DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily
       PAILY_DATABASE_JOBS_DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily_jobs

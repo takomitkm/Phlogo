@@ -21,8 +21,8 @@ pub async fn handle_fetch(job: FetchJob, pool: Data<PgPool>) {
 
 /// Run the fetch loop for one source (also used directly by integration tests).
 pub async fn run_fetch(pool: &PgPool, job: FetchJob) {
-    let Some((url,)) = sqlx::query_as::<_, (String,)>(
-        "SELECT content FROM sources WHERE id=$1",
+    let Some((source_type, content)) = sqlx::query_as::<_, (String, String)>(
+        "SELECT type, content FROM sources WHERE id=$1",
     )
     .bind(job.source_id)
     .fetch_optional(pool)
@@ -32,8 +32,20 @@ pub async fn run_fetch(pool: &PgPool, job: FetchJob) {
         return;
     };
 
-    // 1) fetch (SSRF guard + size/timeout limits, P2-01)
-    match fetch::fetch(&url, &fetch::FetchPolicy::default()).await {
+    // 1) obtain the subscription bytes.
+    //
+    // - type='url': HTTP fetch through the SSRF guard (P2-01).
+    // - type='content': the subscription text is stored inline (upstream semantics);
+    //   treating it as a URL made every content source fail with
+    //   "ssrf: invalid url: missing host" (found in the B4 compose drill).
+    let fetched: Result<Vec<u8>, fetch::FetchError> = match source_type.as_str() {
+        "content" => Ok(content.into_bytes()),
+        _ => fetch::fetch(&content, &fetch::FetchPolicy::default())
+            .await
+            .map(|b| b.to_vec()),
+    };
+
+    match fetched {
         Ok(bytes) => {
             // 2) parse (P2-02) — SourceContext carries source + run for tracking
             let ctx = registry::source_ctx(job.source_id, job.run_id);

@@ -764,3 +764,28 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 **验证**：校机真实 PG 全套 `FULL_TEST_EXIT=0`、`cargo fmt --check=0`、`clippy -D warnings=0`；本机 podman `caddy validate` 通过；`podman-compose config` 可解析。
 
 **顺带修正文档错误**：`deploy/README.md` 里脚本路径写成 `scripts/runtime.sh`，实际在**仓库根** `scripts/`（git ls-files 确认）。
+
+---
+
+## [UTC 2026-11-13T05:55:00Z] S43 · B4 本机 compose 全栈演练 ✅（用户裁定容器用本机）+ 修 content 源 fetch 真 bug
+
+**镜像构建**：`podman build`（Buildah）出 `paily-api:local` / `paily-worker:local`（rust:1.83-slim → bookworm-slim，多阶段）——**首次真正构建**（此前只有 Dockerfile）。
+
+**部署缺口修复**：
+1. **`paily_jobs` 库**：postgres 官方镜像只建 `POSTGRES_DB=paily`，worker 启动即挂（`database "paily_jobs" does not exist`）→ 新增 `deploy/postgres-init/01-jobs-db.sql` 挂 `/docker-entrypoint-initdb.d`（新卷自动建；已存在的卷需手动 `CREATE DATABASE`——本次演练即手动补的）；
+2. **compose build 键**：podman-compose 1.6.0 不认 `build: {context, dockerfile}` 内联 map（报 "no Containerfile found"）→ 改多行 map + `image:` 指向预构建镜像，`podman compose`（provider 转发）`--no-build` 起；
+3. **api 补 `PAILY_DATABASE_JOBS_DSN`**（fetch/trigger 端点要它入队）。
+
+**演练结果（全部经 caddy:21380，即 PROXY protocol 链路）**：
+- `/health` 200；api 日志实证 **"serving with PROXY protocol v1"**（expect_proxy=true）；
+- **登录限流真实验证**：12 连发 `400×9,429×3`（PS 引号毁 body 致 400，但 **400 也计入桶**——符合"凭据错仍计桶"设计）→ **IP 分桶在真实反代链路上生效**；
+- 权限矩阵实测：service bearer 打 `PUT /config` → **403**；admin JWT 全通过；
+- **订阅全链路**：login 200 → 建源 201 → profile 201 → token 201（一次性明文展示）→ `/sub/{token}.base64` **200 + base64 内容**（`…://node/🌐 LINKED 01`，命名渲染正常）；错 token → 401；
+- **新端点实测**：`nodes/search`、`sources/search`、`filter/preview`、`format-configs` 全 200；`PUT format-configs/clash` 存储成功（`source:"stored"`）；
+- **fetch 闭环实测**：content 源 → `finished, node_count=1` → 节点入库 → stats `total_nodes=1`；url 源（假域名）→ `failed` 且**旧映射保留**（P2-04 不变量）。
+
+**修复的真 bug（第 3 个，由演练挖出）**：`run_fetch` 无条件把 `content` 列当 URL fetch → **`type=content` 源永远失败**（`ssrf: invalid url: missing host`）。上游语义是"内容内联"。修：按 `source.type` 分支（`content` 直接用库内文本，其余走 HTTP+SSRF）。**这是上游也有的等价性缺口**（B3 审计补充）。
+
+**环境坑（备忘）**：podman-compose 1.6 无 `--no-build`（`podman compose` 转发可用）；curl.exe 的 `--data-binary "@file"` 在 PS 里 `@` 被 splatting 吃掉（换 Python requests 驱动 e2e）。
+
+**验证**：演练后 `deploy/compose.yaml` 的 `podman compose config` 可解析；Caddyfile `caddy validate` 通过；校机全套测试绿（见 S42）；本机全栈 5 服务 Up（postgres/api/worker/web/caddy）。
