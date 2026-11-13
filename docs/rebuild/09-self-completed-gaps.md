@@ -146,6 +146,38 @@
 - **本节只做记录与排期，未改动任何代码**；代码实现按 M1→M2→M3→M4→M5 顺序逐步落地，每步照本仓惯例
   「做一步、写一页、push 一步」。
 
+### D.5 生产级能力 5 项（用户 2026-11-13 追加，**全部要做**）
+
+> 用户给出 5 行能力对照（无表头，中间/右侧两列是两档评价）。**不臆测两列指哪两个对象**，
+> 只按「能力维度」核查**我们这版**的实际状态；若需补对比列，用户给出对象后再补。
+> 结论：5 项**没有一项达到完整档**，且多数比"有限/部分"更弱（是**未接线/未实现**）。
+
+| # | 能力 | 用户给的档位 | **我们这版的现状（带证据）** | 判定 |
+|---|---|---|---|---|
+| 1 | **按业务选择出口** | 有限 / 有 | schema 有 `subscription_profiles.{filter_ast,region,health,min_score,preset,output_format}`（`migrations/0009_subscriptions.up.sql:2-16`），Filter-AST 白名单 7 字段（`crates/filter/src/parse.rs:6-14`）；**但 `/sub` 把 `filter_ast`/`preset` 用 `let _ =` 丢掉、preset 硬编码 `"common"`**（`handlers/subscription.rs:46-84`，即 M6），`unlock` 无表（M7），无 per-service 维度（M11/M12）。上游 Go 版另有「按检测视角（checker_tag）分发」（上游 README 主要能力），我们也没接 | **比"有限"更弱：未接线** |
+| 2 | **按用户地理位置调度** | 非核心能力 / 有 | PROXY protocol v1 透传真实客户端 IP **只用于登录限流分桶**（`apps/curse/src/rate_limit.rs`、`proxy_protocol.rs`）；全仓无 GeoIP 查用户位置、无按用户地区路由（grep `client_ip\|geoip\|x-forwarded` 零命中）。`region` 是**节点出口地区**（MiaoSpeed `GEOIP_*` 矩阵，`p0-02` D.7）而非用户位置，且 deep 被丢（M4） | **不是"非核心"，是未实现** |
+| 3 | **SLA 保障** | 不完整 / 有 | 只有 `/health` + 最小 `/metrics`（`handlers/metrics.rs:1` 自陈 "Minimal Prometheus…"）；**compose 无 `healthcheck` / `restart` / `stop_grace_period`**（grep 零命中）；无 SLO、错误预算、告警规则、降级策略；容器全栈演练因无运行时未做（B4） | 不完整，且比该档更薄 |
+| 4 | **故障自动恢复** | 部分 / 完整体系 | 应用层**有**：Apalis PG at-least-once + 租约/超时回收（P0-03 真机验证）、`ON CONFLICT` 幂等（`check_job.rs:22-34`）、`should_overwrite` 迟到不覆盖、fetch 失败保留旧关联。**编排层无**：compose 无 restart/healthcheck、无断路器/退避配置、sidecar 无 supervision、M2 未接线故测活故障无从恢复；B4 容器演练未做 | 部分（**仅应用层**） |
+| 5 | **权限、审计、合规** | 不完整 / 通常有 | **权限已有且修过**：fail-closed 权限矩阵（P0-01）、登录限流（P0-02）、token 哈希可吊销、JWT、敏感字段 redaction、SSRF 守卫、不信任 XFF（`auth.rs`、`telemetry.rs`、`p7-03`）。**审计/合规缺**：migrations 无 `audit*` / `actor` / `ip_address` 表；`/logs/check`、`/logs/fetch` 是**测活/抓取业务日志**，不是管理操作审计；无配置变更留痕；SBOM 未产出（`p0-05` 仅规划）、`cargo audit` 校机受限（B4 离线匹配器 4 命中） | 权限 ✅ / 审计合规 ❌ |
+
+**新增 MUST-DO（M18–M22，全部要做，编号续 D.2）：**
+
+| ID | 项 | 现状证据 | 验收标准 | 优先级 / 依赖 |
+|---|---|---|---|---|
+| **M18** | **按业务/目标服务选出口** | D.5 #1 | profile 能按 service（OpenAI/Netflix/…）与 checker_tag 选出口，`/sub` 真正生效；不接 M6 的硬编码 | **P1**，依赖 M6+M7+M11+M12+M13 |
+| **M19** | **按用户地理位置调度** | D.5 #2 | 引入用户侧 GeoIP（沿用 PROXY 真实 IP，**不信任 XFF**）+ 路由策略；不同地区请求得到不同节点集；有"未知/私有 IP"兜底 | **P1**，依赖 M19 自身新增 + M6 |
+| **M20** | **SLA 保障** | D.5 #3 | 定义 SLO（`/sub` 可用率、生成 P95）；Prometheus 告警规则；compose `healthcheck` + `restart`；**sidecar/MiaoSpeed 不可用时原生三格式仍可用**；故障注入下 `/sub` 仍 200 | **P1**，依赖 M2+M13 |
+| **M21** | **故障自动恢复（编排层）** | D.5 #4 | compose restart/healthcheck、任务级重试退避、断路器、sidecar supervision；kill 容器后自动拉起且队列任务不丢不重；补做 B4 容器演练 | **P1**，依赖 M2+M13+M20 |
+| **M22** | **审计与合规** | D.5 #5 | 建 `admin_audit_log`（actor/time/action/target/before→after）；任一管理写可查到审计行；配置变更留痕；SBOM 产出且与 `THIRD_PARTY.md` 哈希一致；`cargo deny`/`audit` 进 CI | **P1**，依赖 M14 |
+
+**分层门禁（口径：全部要做，但分两道，不要混成"上线前全做完"）**：
+
+- **可部署门禁**（不给用户发假节点）：**M1–M5 + M15** —— 即 D.2 的上线总门禁那条链。
+- **生产级门禁**（GA 前）：**M6–M14 + M18–M22** —— 上面 5 项能力 + 筛选/评分/配额/审计/CI。
+- 用户裁定：**两道都算「必须做」**，区别只在顺序与验收时点，不是做不做。
+
+> 与 D.4 一致：本节**只做记录与排期，未改代码**；未改动 A/B/C 节历史结论。
+
 ---
 
 ## 提交记录

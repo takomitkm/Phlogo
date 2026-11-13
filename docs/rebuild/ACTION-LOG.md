@@ -1182,3 +1182,40 @@ README 与 Rust Workspace 一致性提醒；随后裁定「把这些核查记录
 - 新增 **M1–M17**（含 M15–M17 文档一致性、M11/M12 按服务评分为**新设计**非接线）。
 - **上线总门禁**：抓取 → 真测活 → deep 落库 → 评分更新 → `/sub` 出真实节点 → `mihomo -t` 通过 → 真代理出网 204。
 - 本节**只做记录与排期，未改代码**；代码实现按 M1→M2→M3→M4→M5 逐步落地，每步照惯例「做一步、写一页、push 一步」。
+
+---
+
+## [UTC 2026-11-13T07:30:00Z] S59 · 追加「生产级能力 5 项」到缺口总账（M18–M22，全部要做）
+
+**用户指令**：「这些呢：按业务选择出口 / 按用户地理位置调度 / SLA 保障 / 故障自动恢复 / 权限、审计、合规」——
+5 行能力对照（**无表头，不臆测两列指向哪两个对象**），延续 S58 的裁定「都要做」。
+
+### 执行的每一步 / 每条只读核查
+
+| # | 命令 / 动作 | 结果与证据 |
+| --- | --- | --- |
+| 1 | `grep migrations "audit\|sla\|geo\|subscription_profiles\|CREATE TABLE"` | 迁移里**无 `audit*` / `sla` 表**；`subscription_profiles` 只有 filter_ast/region/health/min_score/preset 等（`0009:2-16`） |
+| 2 | `grep deploy/*.yaml "healthcheck\|restart\|depends_on\|PROXY"` | compose 有 `depends_on` + PROXY v1 头，**无 `healthcheck` / `restart` / `stop_grace_period`** |
+| 3 | `grep crates+apps "client_ip\|geoip\|x-forwarded\|audit\|SLA\|SLO"` | 全仓仅 1 条命中（config.rs 注释里的 "B3 audit"）→ **无用户侧 GeoIP、无审计表、无 SLO** |
+| 4 | `read filter/src/parse.rs:1-30` | Filter-AST 白名单 7 字段（health/region/score/protocol/server/source_id/unlock），**无 service/业务维度** |
+| 5 | `read apps/curse/src/handlers/subscription.rs` + `grep "ConnectInfo\|client\|ip\|geo\|region\|preset"` | `/sub` 不读客户端 IP；`filter_ast`/`preset` 被 `let _ =` 丢弃、preset 硬编码 `"common"`（M6 复证） |
+| 6 | `read deploy/compose.yaml:20-64` | PROXY v1 头送 curse；`depends_on: [postgres]`（无健康检查条件）；miaospeed `:latest` 浮标复证 |
+| 7 | `grep docs/configuration-and-api.md "审计\|SLA\|告警\|合规\|retention"` | 文档只有业务日志/历史保留键，**无管理操作审计、无 SLA/告警定义** |
+| 8 | `edit 09-self-completed-gaps.md`（新增 §D.5）、`edit 00-index.md` | 写入 5 项现状表 + M18–M22 + 两道门禁口径 |
+
+### 5 项逐条判定（均**未达完整档**，多数比"有限/部分"更弱）
+
+| 能力 | 我们这版 | 关键证据 |
+| --- | --- | --- |
+| 按业务选择出口 | **未接线**（比"有限"更弱） | `subscription.rs:46-84` 丢弃 filter_ast/preset；无 per-service 维度（M11/M12）；上游 Go 的"按检测视角分发"也没接 |
+| 按用户地理位置调度 | **未实现**（不是"非核心能力"） | PROXY 真实 IP 只用于登录限流分桶；`region` 是节点出口地区且 deep 被丢（M4）；零 GeoIP 代码 |
+| SLA 保障 | 不完整且更薄 | 只有 `/health` + 最小 `/metrics`；compose 无 healthcheck/restart；无 SLO/告警/降级；B4 容器演练未做 |
+| 故障自动恢复 | 部分（**仅应用层**） | Apalis at-least-once + `ON CONFLICT` 幂等 + `should_overwrite` ✅；编排层无 restart/断路器/supervision；M2 未接线 |
+| 权限、审计、合规 | 权限 ✅ / 审计合规 ❌ | fail-closed 矩阵（P0-01）、限流（P0-02）、token 哈希、redaction、SSRF 已有；**无 audit 表**、`/logs/*` 只是业务日志、SBOM 未产出 |
+
+### 口径
+
+- 新增 **M18–M22**（按业务选出口 / 用户地理调度 / SLA / 编排层故障恢复 / 审计与合规），各带验收标准与依赖。
+- **两道门禁**：可部署门禁 = M1–M5 + M15；生产级门禁 = M6–M14 + M18–M22。**全部要做**（用户裁定），
+  区别只在顺序与验收时点，不是做不做。
+- 本节同样**只做记录与排期，未改代码**。
