@@ -1,4 +1,4 @@
-# Paily Connect Core（Rust 重构版）
+# Phlogo Gnosis
 
 > 本仓库是 [`openpaily/paily-core`](https://github.com/openpaily/paily-core) 的 **Rust 重构 fork**。
 > 原始 Go 实现已从本仓库移除，其行为以 fork 根提交 **`dda4e6f2`** 为对照基准
