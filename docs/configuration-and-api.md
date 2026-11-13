@@ -1,10 +1,10 @@
 # 配置与 API
 
-本文档介绍 Paily 主服务的配置层次、可调参数、筛选引擎、节点命名与 sponsor text，以及接口权限划分。
+本文档介绍 Phlogo 主服务的配置层次、可调参数、筛选引擎、节点命名与 sponsor text，以及接口权限划分。
 
 ## 配置层次
 
-Paily 主服务的配置分为两层：
+Phlogo 主服务的配置分为两层：
 
 1. **启动配置**：通过 YAML 文件或环境变量提供，涵盖监听端口、数据库、认证和测活后端列表等，需重启生效。
 2. **动态配置**：保存在数据库中，涵盖评分、分发、历史保留和命名等参数，可在管理界面修改，无需重启。
@@ -15,23 +15,23 @@ Paily 主服务的配置分为两层：
 环境变量 > YAML 配置文件 > 内置默认值
 ```
 
-环境变量统一以 `PAILY_` 为前缀，嵌套键中的 `.` 替换为 `_`。例如 `server.port` 对应 `PAILY_SERVER_PORT`。
+环境变量统一以 `PHLOGO_` 为前缀，嵌套键中的 `.` 替换为 `_`。例如 `server.port` 对应 `PHLOGO_SERVER_PORT`。
 
 ## 启动配置
 
 | YAML 键 / 环境变量 | 说明 |
 | --- | --- |
-| `server.port` / `PAILY_SERVER_PORT` | HTTP 监听端口，内置默认值 `21380`。 |
-| `server.proxy_protocol` / `PAILY_SERVER_PROXY_PROTOCOL` | 接受 PROXY protocol v1 头（反代后取真实客户端 IP，限流按真实 IP 分桶）。 |
-| `server.expect_proxy` / `PAILY_SERVER_EXPECT_PROXY` | 与上项连用：**要求**每个连接都带 PROXY 头（API 端口不对外时的纵深防御）。 |
-| `server.verbose` / `PAILY_SERVER_VERBOSE` | 是否记录 debug 级日志。 |
-| `database.dsn` / `PAILY_DATABASE_DSN` | PostgreSQL DSN（**仅支持 PostgreSQL**）。 |
-| `PAILY_DATABASE_JOBS_DSN` | Apalis 队列库 DSN（默认由主 DSN 推导出 `paily_jobs`）。 |
-| `auth.admin_password` / `PAILY_AUTH_ADMIN_PASSWORD` | 管理员密码（登录用）。 |
-| `auth.service_secret` / `PAILY_AUTH_SERVICE_SECRET` | 服务身份密钥（读面 + 源 intake + fetch trigger）。 |
-| `auth.jwt_secret` / `PAILY_AUTH_JWT_SECRET` | JWT HMAC 密钥。 |
-| `PAILY_LOGIN_RATE_LIMIT_PER_MIN` | 登录限流阈值（默认 10/min，按真实客户端 IP 分桶）。 |
-| `PAILY_TOKEN_PEPPER` | 订阅 token 哈希 pepper。 |
+| `server.port` / `PHLOGO_SERVER_PORT` | HTTP 监听端口，内置默认值 `21380`。 |
+| `server.proxy_protocol` / `PHLOGO_SERVER_PROXY_PROTOCOL` | 接受 PROXY protocol v1 头（反代后取真实客户端 IP，限流按真实 IP 分桶）。 |
+| `server.expect_proxy` / `PHLOGO_SERVER_EXPECT_PROXY` | 与上项连用：**要求**每个连接都带 PROXY 头（API 端口不对外时的纵深防御）。 |
+| `server.verbose` / `PHLOGO_SERVER_VERBOSE` | 是否记录 debug 级日志。 |
+| `database.dsn` / `PHLOGO_DATABASE_DSN` | PostgreSQL DSN（**仅支持 PostgreSQL**）。 |
+| `PHLOGO_DATABASE_JOBS_DSN` | Apalis 队列库 DSN（默认由主 DSN 推导出 `phlogo_jobs`）。 |
+| `auth.admin_password` / `PHLOGO_AUTH_ADMIN_PASSWORD` | 管理员密码（登录用）。 |
+| `auth.service_secret` / `PHLOGO_AUTH_SERVICE_SECRET` | 服务身份密钥（读面 + 源 intake + fetch trigger）。 |
+| `auth.jwt_secret` / `PHLOGO_AUTH_JWT_SECRET` | JWT HMAC 密钥。 |
+| `PHLOGO_LOGIN_RATE_LIMIT_PER_MIN` | 登录限流阈值（默认 10/min，按真实客户端 IP 分桶）。 |
+| `PHLOGO_TOKEN_PEPPER` | 订阅 token 哈希 pepper。 |
 
 ## 动态配置
 
@@ -61,9 +61,9 @@ Paily 主服务的配置分为两层：
 | 历史 | `check_run_history_days` | `14` | 测活明细保留天数（A5）；`0` = 永不删。 | ✅ 清理周期删除超期记录 |
 | 历史 | `cleanup_interval_minutes` | `30` | 清理间隔，单位分钟。 | ✅ worker 调度消费 |
 | 命名 | `node_name_template` | （expr 模板） | 节点命名模板。 | ⏸ 由订阅档案的 `naming_rule` 覆盖；键保留待清理 |
-| 文件名 | `filename_clash` | `Paily Connect.yaml` | Clash 下载文件名。 | ⏸ 现由 URL 格式后缀决定；键保留待清理 |
-| 文件名 | `filename_singbox` | `Paily Connect.json` | Sing-box 下载文件名。 | ⏸ 同上 |
-| 文件名 | `filename_base64` | `Paily Connect.txt` | Base64 下载文件名。 | ⏸ 同上 |
+| 文件名 | `filename_clash` | `Phlogo Wish.yaml` | Clash 下载文件名。 | ⏸ 现由 URL 格式后缀决定；键保留待清理 |
+| 文件名 | `filename_singbox` | `Phlogo Wish.json` | Sing-box 下载文件名。 | ⏸ 同上 |
+| 文件名 | `filename_base64` | `Phlogo Wish.txt` | Base64 下载文件名。 | ⏸ 同上 |
 | sponsor | `default_sponsor_text` | 空 | 无 sponsor 命中时的默认文案。 | ✅ sponsor 匹配落空时使用 |
 | 判死 | `dead_latency_ms` | `3000` | 判死延迟门限。 | ⏸ 当前不参与存活判定；不可达以初筛延迟 `-1` 表示 |
 
@@ -106,7 +106,7 @@ AST 形状（逻辑节点带 `operator: and|or|not`，叶子是条件对象）�
 
 ## API 与权限
 
-三层身份，按**路由权限矩阵**强制（代码：`apps/api/src/auth.rs::auth_kind`；**fail-closed**——任何未列入矩阵的 `/api/v1` 路由一律要求 AdminJWT）：
+三层身份，按**路由权限矩阵**强制（代码：`apps/curse/src/auth.rs::auth_kind`；**fail-closed**——任何未列入矩阵的 `/api/v1` 路由一律要求 AdminJWT）：
 
 | 身份 | 凭据 | 可访问范围 |
 | --- | --- | --- |

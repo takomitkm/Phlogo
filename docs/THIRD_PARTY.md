@@ -5,7 +5,7 @@
 
 ## 上游仓库与许可证 · Upstreams & licenses
 
-| 组件 | 仓库 | 许可证 | 用途 | 是否链接进 Core |
+| 组件 | 仓库 | 许可证 | 用途 | 是否链接进 Gnosis |
 |---|---|---|---|---|
 | paily-core | `openpaily/paily-core`（归档） | AGPL-3.0 | 重构对象（架构参考） | — |
 | paily-fetch | `openpaily/paily-fetch` | AGPL-3.0 | 架构参考（format 插件） | 否（重写） |

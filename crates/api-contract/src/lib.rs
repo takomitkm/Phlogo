@@ -8,7 +8,7 @@ mod schemas;
 use schemas::*;
 use utoipa::OpenApi;
 
-/// Documented routes (HTTP wiring in `apps/api/src/router.rs`).
+/// Documented routes (HTTP wiring in `apps/curse/src/router.rs`).
 mod paths_mod {
     use super::*;
 
@@ -153,9 +153,9 @@ pub mod health_path {
 #[derive(OpenApi)]
 #[openapi(
     info(
-        title = "paily-core-rust API",
+        title = "Phlogo Wish Gnosis API",
         version = "0.1.0",
-        description = "Rust rebuild of paily-core (Phlogo). spec.yaml is the canonical contract."
+        description = "Rust rebuild of Phlogo Wish Gnosis. spec.yaml is the canonical contract."
     ),
     paths(
         paths_mod::create,

@@ -17,7 +17,7 @@ import {
   updateSponsor,
   type SponsorUpsert,
   type SponsorView,
-} from '#/api/paily';
+} from '#/api/phlogo';
 
 const sponsors = ref<SponsorView[]>([]);
 const total = ref(0);

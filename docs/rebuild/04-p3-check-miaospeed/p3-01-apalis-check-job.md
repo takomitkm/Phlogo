@@ -2,7 +2,7 @@
 
 ### 目标 / Goal
 
-在 `core-worker` 内用 **Apalis（PostgreSQL backend）** 承载测活任务的调度，替代 Phlogo 当前被动等待外部
+在 `gnosis-worker` 内用 **Apalis（PostgreSQL backend）** 承载测活任务的调度，替代 Phlogo 当前被动等待外部
 `paily-check` 通过 `POST /api/v1/check/results` 回调的模式（见 `internal/checker/handler.go` `PostResults` 被动监听）。
 本步骤只解决「**任务如何被创建、被 Worker 领取、如何重试/超时/恢复**」，不涉及 MiaoSpeed 协议（见 p3-02）与结果持久化（见 p3-04）。
 
@@ -25,7 +25,7 @@
 - 已完成 P0-03 spike（`01-p0-upstream-verification/p0-03-apalis.md`）：固定 Apalis 版本、PostgreSQL backend、retry/timeout、任务恢复、Board 兼容性均已验证。
   > ⚠️ 下方具体 API 名（`Job` derive、`PostgresStorage`、`Monitor::push`、`WorkerBuilder::register`、retry/timeout 方法名）为**预期形态**，
   > 确切签名以 P0-03 固定版本为准；写代码前先回填到本页。
-- P1 已完成：`core-worker` 骨架、SQLx + PostgreSQL、`database` crate 可取得 `PgPool`（`02-p1-core-skeleton-data/`）。
+- P1 已完成：`gnosis-worker` 骨架、SQLx + PostgreSQL、`database` crate 可取得 `PgPool`（`02-p1-gnosis-skeleton-data/`）。
 - `node_ids` 对应的 `nodes` 行已存在（`02-p1-04-source-node-crud.md` 保证每个内部节点有稳定 `Uuid`）。
 
 ### 步骤 / Steps
@@ -81,7 +81,7 @@ pub struct CheckJob {
 由 API handler 或周期调度器触发。下面的 `monitor` 来自 `PostgresStorage`。
 
 ```rust
-// apps/api 或 apps/worker 内的调度入口
+// apps/curse 或 apps/worker 内的调度入口
 use apalis::prelude::*;
 use apalis::postgres::PostgresStorage;
 
@@ -158,8 +158,8 @@ async fn check_job_handler(job: CheckJob, data: Data<AppState>) -> Result<(), Er
 - `apps/worker` 改 lib+bin：`CheckJob{run_id, checker_tag, node_ids, presets}`（serde，即 Apalis 任务载荷）；
   `record_check_run`（`INSERT .. ON CONFLICT (id) DO NOTHING`，返回是否首投）与 `finish_check_run`（`WHERE finished_at IS NULL` 单向转移）——**at-least-once 重投全部幂等**；
   `handle_check` 为 Apalis handler（编排入口，真实 MiaoSpeed 调用留 p3-02+）。
-- migration `0004_check_runs`（主库；`paily_jobs` 承载 Apalis 官方表）。
-- **关键决策：Apalis 用独立数据库 `paily_jobs`**（`PAILY_DATABASE_JOBS_DSN` 覆盖，默认由主 DSN 改库名派生）——
+- migration `0004_check_runs`（主库；`phlogo_jobs` 承载 Apalis 官方表）。
+- **关键决策：Apalis 用独立数据库 `phlogo_jobs`**（`PHLOGO_DATABASE_JOBS_DSN` 覆盖，默认由主 DSN 改库名派生）——
   apalis 0.7.4 的 `setup()` 内嵌 sqlx migration 与业务 `migrate!` 共用 `_sqlx_migrations` 版本序列会冲突
   （实测 `Migrate(VersionMissing(1))` panic）；独立库既解决冲突又满足方案 §3.1「业务表与 Apalis 内部表严格分离」。
 
@@ -170,7 +170,7 @@ async fn check_job_handler(job: CheckJob, data: Data<AppState>) -> Result<(), Er
 | `cargo test --workspace` | **0**——`worker::check_job::no_duplicate_work`（重复投递 4 次仅 1 行 `check_runs`、finish 单向转移）+ 既有全部测试 |
 | `cargo fmt --all -- --check` | **0** |
 | `cargo clippy --workspace --all-targets -- -D warnings` | **0** |
-| **worker 真机 smoke（12s）** | `paily_jobs` 中 apalis 官方表建立；主库 `check_runs` 计数 2→**3**（handler 消费了新入队 demo job，`finished_at` 非空） |
+| **worker 真机 smoke（12s）** | `phlogo_jobs` 中 apalis 官方表建立；主库 `check_runs` 计数 2→**3**（handler 消费了新入队 demo job，`finished_at` 非空） |
 
 **验收对照**：#1 入队并执行 ✓（真机 smoke）；#2/#3 幂等重试/无重复副作用 ✓（集成测试，`run_id` 键控）；#4 worker 重启恢复——由 apalis PG backend 的 at-least-once + 本页幂等副作用保证，进程级 kill/restart harness 留 CI（P0-03 已标注）。
 

@@ -24,7 +24,7 @@ struct Claims {
     exp: usize,
 }
 
-/// POST /api/v1/auth/login — admin login (PAILY_AUTH_ADMIN_PASSWORD check).
+/// POST /api/v1/auth/login — admin login (PHLOGO_AUTH_ADMIN_PASSWORD check).
 pub async fn login(State(st): State<AppState>, Json(req): Json<LoginReq>) -> Response {
     // Single-admin model (plan §17): username is informational; password is the gate.
     let expected = st.admin_password();

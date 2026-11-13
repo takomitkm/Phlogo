@@ -89,7 +89,7 @@ CREATE TABLE subscription_tokens (
 - 以 `internal/templates/clash.yaml` 为模板（通过 `templates.go` 的 `{"template":"<raw>"}` 包装读取）。
 - 替换顶层 `proxies:` 列表为选中节点的 proxy 对象（每个节点由 `NormalizedNode` → clash proxy schema 转换）。
 - 把每个生成节点名追加到模板中所有 `proxy-groups[].proxies`（模板里 `自动选择`/`故障转移` 两组 `proxies: []`，需填充）。
-- 输出 YAML 含 `mixed-port`/`dns`/`rules` 等原样保留（CONVENTIONS §2.8 的公开订阅地址表：`/clash` 默认文件名 `Paily Connect.yaml`）。
+- 输出 YAML 含 `mixed-port`/`dns`/`rules` 等原样保留（CONVENTIONS §2.8 的公开订阅地址表：`/clash` 默认文件名 `Phlogo Wish.yaml`）。
 - 设置 `Content-Type: text/yaml; charset=utf-8`、`Content-Disposition`（ASCII fallback + `filename*=UTF-8''` 双 token，与 Go `contentDisposition` 一致）。
 
 #### 4. Sing-box JSON 生成（`singbox.rs`，**独立转换器**，plan §10.1）
@@ -98,7 +98,7 @@ CREATE TABLE subscription_tokens (
 - **保留**模板里的管理/路由结构：`inbounds`（tun/socks/mixed）、`route.rule_set`、`dns`、`experimental`、`log`。
 - **替换**代理 `outbounds`：模板中 `outbounds` 含 `select`/`urltest`/`direct`，把 `urltest` 的 `outbounds: []` 与 `select` 的 `outbounds` 填充为选中节点转换出的 sing-box outbound 对象（**sing-box 独立 schema：`type`/`server`/`port`/`...` 与 clash 不同**）。
 - **不得**把 Mihomo proxy 对象反向转成 sing-box（plan §10.1 明确要求「独立的 Sing-box 转换器，不能假设 Mihomo 配置可以无损反向转换」）；两者各有自己的 `NormalizedNode → outbound` 映射函数。
-- 输出 `Content-Type: application/json; charset=utf-8`（`/singbox` 默认文件名 `Paily Connect.json`）。
+- 输出 `Content-Type: application/json; charset=utf-8`（`/singbox` 默认文件名 `Phlogo Wish.json`）。
 
 #### 5. 节点命名（`naming.rs`，对应 `internal/naming/naming.go`）
 

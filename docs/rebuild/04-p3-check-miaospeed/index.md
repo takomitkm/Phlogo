@@ -14,7 +14,7 @@
 
 具体目标：
 
-1. 由 `core-worker` 内的 **Apalis Check Job** 触发并编排一次测活批次（取代 Phlogo 被动等待外部回调）。
+1. 由 `gnosis-worker` 内的 **Apalis Check Job** 触发并编排一次测活批次（取代 Phlogo 被动等待外部回调）。
 2. 通过 `checker-miaospeed` crate 实现方案 §8 的 `Checker` trait（`submit` / `collect` / `status`），
    经 WebSocket 与独立 MiaoSpeed 二进制通信。
 3. 把 MiaoSpeed 返回的结果做**单位规范化**并**精准映射回内部 `node_id`**。
@@ -39,7 +39,7 @@
 以下为本阶段整体验收（各子步骤另有细化验收，见对应页面）：
 
 1. **批量结果精准映射到内部 `node_id`**：一次批量测活返回的每一条结果都能准确对应到提交时的内部 `node_id`，
-   无错位、无遗漏（`core-worker` 测试可断言 `node_check_results.node_id` 与提交集合一一对应）。
+   无错位、无遗漏（`gnosis-worker` 测试可断言 `node_check_results.node_id` 与提交集合一一对应）。
    - 命令种子：`cargo test --test integration check_loop_maps_node_ids`
    - 预期：测试通过（exit 0），且 `SELECT COUNT(*) FROM node_check_results WHERE check_run_id = $run` == 提交节点数（成功+失败计全）。
 

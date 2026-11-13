@@ -46,7 +46,7 @@
 |---|---|---|
 | `internal/filter/filter.go` + `env.go` | `crates/filter/` | `expr-lang` 动态引擎 → 结构化 Filter AST + 参数化 SQL（p5-01） |
 | `internal/distribution/selector.go` | `crates/distribution/src/selector.rs` | 地区配额 + A-Res 加权抽样，逐函数移植（p5-02） |
-| `internal/distribution/handler.go` | `crates/distribution/src/handler.rs` + `apps/api` 路由 | `GET /{format}` 公开订阅 → `GET /sub/{token}` 带 Token（p5-03） |
+| `internal/distribution/handler.go` | `crates/distribution/src/handler.rs` + `apps/curse` 路由 | `GET /{format}` 公开订阅 → `GET /sub/{token}` 带 Token（p5-03） |
 | `internal/templates/*` + `internal/naming/naming.go` | `crates/distribution/src/output/`（mihomo/singbox/base64）+ naming | 模板内嵌 + expr 命名（p5-03） |
 | `configs`: `node_distribute_filter`、`filename_*`、`node_name_template` | `subscription_profiles` + config crate | 全局分发筛选 / 文件名 / 命名模板（p5-01、p5-03） |
 | `sponsors`.`filter_expr` | `sponsors`.`filter_ast`（或 AST 求值） | sponsor 匹配改为 AST（p5-01） |

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "apps/api",
+    "apps/curse",
     "apps/worker",
     "crates/domain",
     "crates/database",

@@ -9,7 +9,7 @@ use app_config::Config;
 async fn spawn() -> SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = api::router::build(Config::default());
+    let app = curse::router::build(Config::default());
     tokio::spawn(async move {
         let _ = axum::serve(
             listener,

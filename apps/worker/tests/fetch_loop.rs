@@ -40,7 +40,7 @@ async fn fetch_loop_end_to_end() {
         return;
     };
     // Allowlist loopback for the SSRF guard (the subscription server is local).
-    std::env::set_var("PAILY_FETCH_ALLOW_LOOPBACK", "1");
+    std::env::set_var("PHLOGO_FETCH_ALLOW_LOOPBACK", "1");
     let pool = database::connect(&dsn).await.expect("connect");
     database::migrate(&pool).await.expect("migrate");
 

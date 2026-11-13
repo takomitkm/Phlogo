@@ -1,12 +1,12 @@
 /**
- * paily API layer (p6-02 + contract-gap closures). Self-contained typed calls;
+ * phlogo API layer (p6-02 + contract-gap closures). Self-contained typed calls;
  * pages never touch the database or MiaoSpeed directly (hard constraint).
  */
 
 function authHeaders(json = false): Headers {
   const headers = new Headers();
   if (json) headers.set('content-type', 'application/json');
-  const token = (window as unknown as { __PAILY_TOKEN__?: string }).__PAILY_TOKEN__;
+  const token = (window as unknown as { __PHLOGO_TOKEN__?: string }).__PHLOGO_TOKEN__;
   if (token) headers.set('Authorization', `Bearer ${token}`);
   return headers;
 }

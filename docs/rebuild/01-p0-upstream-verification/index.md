@@ -40,7 +40,7 @@
   - MiaoSpeed：tag `4.7.9`（自建，exe sha256 `2c302b29…46ab18`）
   - Apalis：`0.7.4`（+`apalis-sql 0.7.4`；`1.0.0` 升级候选）
   - Vben：tag `v5.7.0`（commit `63a38dce…70e9`）
-- [x] **许可证审查已完成**并记录：MiaoSpeed（AGPL-3.0）、Mihomo（GPL-3.0）、VProxy（MIT，保留版权）、paily（AGPL，仅架构参考）、Apalis/Vben（MIT）。
+- [x] **许可证审查已完成**并记录：MiaoSpeed（AGPL-3.0）、Mihomo（GPL-3.0）、VProxy（MIT，保留版权）、phlogo（AGPL，仅架构参考）、Apalis/Vben（MIT）。
 - [x] **`docs/THIRD_PARTY.md` 草案存在**，包含：上游版本/commit、许可证、修改记录、二进制 SHA-256 与构建信息、已知限制。
 - [x] **未验证的假设被显式标注**：MiaoSpeed Matrix 名/错误码、`Vendor` 签名 quirk、Apalis 内部表名等均以固定版本源码为准并记录（见 `p0-02` D 节、`p0-03`）。
 - [x] **进程隔离 ≠ 许可证豁免** 的事实已写入基线文档（`THIRD_PARTY.md`、`p0-05`、CONVENTIONS §2.11）。

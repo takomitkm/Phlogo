@@ -18,7 +18,7 @@ import {
   type ProfileUpsert,
   type ProfileView,
   type TokenRow,
-} from '#/api/paily';
+} from '#/api/phlogo';
 
 const profiles = ref<ProfileView[]>([]);
 const loading = ref(false);

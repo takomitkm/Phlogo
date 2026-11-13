@@ -9,7 +9,7 @@
 ## 0. 目的（Purpose）
 
 把 `takomitkm/Phlogo`（即 `openpaily/paily-core` 的一个 fork）这个 **Go 单体**重构为
-`@S:\Downloads\paily-core-rust-rebuild-plan.md` 描述的 **Rust 多进程架构**（core-api + core-worker + 独立 MiaoSpeed + Vben 前端）。
+`@S:\Downloads\paily-core-rust-rebuild-plan.md` 描述的 **Rust 多进程架构**（gnosis-api + gnosis-worker + 独立 MiaoSpeed + Vben 前端）。
 
 本目录的每一页对应一个**可独立验收的大步骤的子步骤**。页面要写得足够详细，使后续可以**照着写 CI**——
 因此每个页面都给出**具体命令、预期产物、验收标准**，并在末尾标注「CI 提示」。
@@ -43,14 +43,14 @@
 
 | 项 | 现状（Phlogo / paily-core） | 重构目标（Rust） |
 |---|---|---|
-| 语言/运行时 | Go 1.24，单体 `cmd/server/main.go` | Rust + Cargo workspace，core-api / core-worker 两二进制 |
+| 语言/运行时 | Go 1.24，单体 `cmd/server/main.go` | Rust + Cargo workspace，gnosis-api / gnosis-worker 两二进制 |
 | HTTP | Gin | Axum |
 | 异步 | goroutine + 手动 mutex | Tokio |
 | ORM | GORM（`gorm.io/gorm`，同时带 postgres+sqlite 驱动） | SQLx（仅 PostgreSQL） |
 | API 契约 | `oapi-codegen` v2.6.0 从 `api/openapi/spec.yaml` 生成 `internal/api/generated/server.gen.go` | utoipa 生成 OpenAPI，再生成 TS client |
 | 表达式引擎 | `expr-lang/expr`（筛选、命名模板、sponsor 匹配） | 自研 Typed Filter AST（MVP 白名单字段/运算符） |
 | 日志 | zerolog | tracing |
-| 配置 | Viper，`PAILY_` 前缀环境变量覆盖 | Figment 或轻量自建 |
+| 配置 | Viper，`PHLOGO_` 前缀环境变量覆盖 | Figment 或轻量自建 |
 | 认证 | `golang-jwt/v5` + 自定义 bearer 中间件 | jsonwebtoken / OIDC |
 | UUID / 加密 | `google/uuid`、`golang.org/x/crypto` | `uuid`、`rustcrypto` |
 | 外部格式插件 | `openpaily/paily-fetch/format`（clash/singbox/base64） | VProxy Export 或自研 Mihomo/Sing-box 导出 |
@@ -64,7 +64,7 @@
 另起 goroutine：`cleanup.Start(...)`、初始 `aliveCache.TriggerRebuild(...)`、格式配置 seed。
 
 **关键差异**：Phlogo 是单体，fetch 由独立 `paily-fetch` 服务回调 `POST /api/v1/fetch/*`，
-check 由独立 `paily-check` 服务回调 `POST /api/v1/check/*`。Rust 方案把 fetch 收编为 core-worker 内的
+check 由独立 `paily-check` 服务回调 `POST /api/v1/check/*`。Rust 方案把 fetch 收编为 gnosis-worker 内的
 Fetch Worker，把 check 收编为通过 **MiaoSpeed WebSocket Adapter** 调用的测活（替代 paily-check）。
 
 ### 2.3 数据模型（GORM models → 目标表）
@@ -133,7 +133,7 @@ t        = clamp(score_jitter_linear_threshold_ms/1000,0,1)   # 默认 200ms→0
 `node_name_template="(unlock_flags != \"\" ? \"[\" + unlock_flags + \"] \" : \"\") + node.grade + \" - \" + node.region_flag + \" \" + node.region + \" \" + node.seq + (node.sponsor != \"\" ? \" \" + node.sponsor : \"\")"`、
 `filename_clash/singbox/base64`。
 另：`config.example.yaml` 给出 `server`/`database`/`auth`/`checkers`/`default_preset` 的 YAML 结构，
-环境变量用 `PAILY_` 前缀、`_` 替换 `.`（如 `PAILY_SERVER_PORT`）。
+环境变量用 `PHLOGO_` 前缀、`_` 替换 `.`（如 `PHLOGO_SERVER_PORT`）。
 
 ### 2.7 测活回调契约（Checker contract）— `internal/checker/handler.go`
 
@@ -208,8 +208,8 @@ t        = clamp(score_jitter_linear_threshold_ms/1000,0,1)   # 默认 200ms→0
 
 | Phlogo（Go） | Rust crate / 模块 | 说明 |
 |---|---|---|
-| `cmd/server/main.go` | `apps/api/src/main.rs` + `apps/worker/src/main.rs` | 拆分单体为 api/worker |
-| `internal/api/**` + `api/openapi/spec.yaml` | `api-contract` + `apps/api` | utoipa 替代 oapi-codegen |
+| `cmd/server/main.go` | `apps/curse/src/main.rs` + `apps/worker/src/main.rs` | 拆分单体为 api/worker |
+| `internal/api/**` + `api/openapi/spec.yaml` | `api-contract` + `apps/curse` | utoipa 替代 oapi-codegen |
 | `internal/auth/**` | `api-contract` / `config` 内 auth 模块 | JWT + service bearer + checker secret |
 | `internal/db/**` + `internal/db/model/**` | `database` + `domain` + `migrations/` | SQLx + 迁移，替代 GORM |
 | `internal/source/**` | `registry` + `lifecycle` | 来源生命周期/去重/死源 |
@@ -232,12 +232,12 @@ t        = clamp(score_jitter_linear_threshold_ms/1000,0,1)   # 默认 200ms→0
 
 1. **paily-fetch → VProxy**：Phlogo 用 `openpaily/paily-fetch/format` 插件做格式解析/导出；
    方案要求改用 VProxy Parser/Fingerprint/Export（P0 验证能否轻依赖独立编译）。
-2. **paily-check → MiaoSpeed**：Phlogo 由独立 paily-check 通过 HTTP 回调；方案改为 core-worker 经
+2. **paily-check → MiaoSpeed**：Phlogo 由独立 paily-check 通过 HTTP 回调；方案改为 gnosis-worker 经
    MiaoSpeed WebSocket Adapter 直接测活。
 3. **GORM → SQLx**：放弃 SQLite 支持，仅 PostgreSQL；模型从 struct tag 改为手写 migration + `sqlx::FromRow`。
 4. **expr-lang → Typed Filter AST**：筛选/命名/sponsor 从动态 expr 改为白名单字段+运算符的结构化 AST（方案 §9.2）。
 5. **oapi-codegen → utoipa**：API 契约生成方式变更，但 `spec.yaml` 仍是契约来源（先翻译为 OpenAPI 再 utoipa）。
-6. **单体 → 多进程**：fetch/check 从外部服务回调收编为 core-worker 内的 Job（Apalis 调度）。
+6. **单体 → 多进程**：fetch/check 从外部服务回调收编为 gnosis-worker 内的 Job（Apalis 调度）。
 
 P0 必须验证：VProxy 可独立编译、MiaoSpeed 固定版本 WebSocket 协议、Apalis PG backend 行为、Vben 固定版本构建。
 
@@ -272,7 +272,7 @@ docs/rebuild/
 │   ├── p0-03-apalis.md
 │   ├── p0-04-vben.md
 │   └── p0-05-licensing-supply-chain.md
-├── 02-p1-core-skeleton-data/
+├── 02-p1-gnosis-skeleton-data/
 │   ├── index.md
 │   ├── p1-01-workspace.md
 │   ├── p1-02-api-skeleton.md

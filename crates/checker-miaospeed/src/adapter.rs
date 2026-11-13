@@ -77,7 +77,7 @@ impl MiaoSpeedAdapter {
 
     fn new_request(&self, id: &str, matrices: &[String], nodes: &[Value]) -> Value {
         json!({
-            "Basics": {"ID": id, "Slave": "", "SlaveName": "phlogo-worker",
+            "Basics": {"ID": id, "Slave": "", "SlaveName": "phlogo-gnosis-worker",
                         "Invoker": self.invoker, "Version": env!("CARGO_PKG_VERSION")},
             "Options": {"Filter": "", "Matrices": matrices
                 .iter().map(|m| json!({"Type": m, "Params": ""})).collect::<Vec<_>>()},

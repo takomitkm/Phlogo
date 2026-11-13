@@ -62,7 +62,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=20 school-guest "cmd /c \"chcp 65001 >nul
 
 **决策**：
 1. 采用「本机编辑+git 提交推送 / 校机 SSH 远程 `cargo` 编译」的双机工作流。
-2. Rust 工程放 `Phlogo/core-rs/`（Cargo workspace），保留 Go 树作参考，避免与 `go.mod` 根目录混编；待 P1 落地时据此细化目录与 CONVENTIONS §6。
+2. Rust 工程放 `Phlogo/gnosis-rs/`（Cargo workspace），保留 Go 树作参考，避免与 `go.mod` 根目录混编；待 P1 落地时据此细化目录与 CONVENTIONS §6。
 3. 编译产物/日志从校机回传编辑机后再 `git add`/`commit`/`push`，满足「做一步 push 一步」。
 
 ---
@@ -262,16 +262,16 @@ npx -y openapi-typescript@7 spec.yaml -o schema.d.ts   # OAPI_EXIT=0, 1256行→
 **命令/动作**（编辑机）：
 ```
 GET https://api.github.com/repos/mateo-ki/vproxy/commits?per_page=1   # HEAD 19b9c147…（v1.16.9）
-# 新建 deny.toml（仓库根，licenses/advisories/bans/sources；待 P1 core-rs/Cargo.toml 后生效）
+# 新建 deny.toml（仓库根，licenses/advisories/bans/sources；待 P1 gnosis-rs/Cargo.toml 后生效）
 # 更新 docs/THIRD_PARTY.md：VProxy/Apalis/Vben/MiaoSpeed/Mihomo 全部真实版本+哈希
 # 更新 p0-05 页面「固定基线」节 + P0 index 验收勾选
 ```
 
 **结果（P0 收口）**：`docs/THIRD_PARTY.md` 固定版本一览——
-- VProxy `19b9c147…`（v1.16.9，MIT，仅移植）；MiaoSpeed tag `4.7.9` 自建 exe `2c302b29…46ab18`（AGPL）；Mihomo `AirportR/mihomo v1.19.33-x365-miu.2`（GPL，随 MiaoSpeed）；Apalis `0.7.4`（MIT）；Vben `v5.7.0`（commit `63a38dce…70e9`，MIT）；paily AGPL 仅架构参考。
+- VProxy `19b9c147…`（v1.16.9，MIT，仅移植）；MiaoSpeed tag `4.7.9` 自建 exe `2c302b29…46ab18`（AGPL）；Mihomo `AirportR/mihomo v1.19.33-x365-miu.2`（GPL，随 MiaoSpeed）；Apalis `0.7.4`（MIT）；Vben `v5.7.0`（commit `63a38dce…70e9`，MIT）；phlogo AGPL 仅架构参考。
 - `deny.toml` 已落地（P1 生效）；SBOM 计划：`cargo cyclonedx` + 二进制哈希登记比对。
 
-**决策**：**P0 全阶段 PASS**（P0-01 VProxy / P0-02 MiaoSpeed / P0-03 Apalis / P0-04 Vben / P0-05 许可证供应链）。下一步进入 **P1（core-rs workspace + 数据层）**，开始真正写 Rust 代码；重量级编译继续走校机（rustc 1.99.1 + MinGW PATH）。
+**决策**：**P0 全阶段 PASS**（P0-01 VProxy / P0-02 MiaoSpeed / P0-03 Apalis / P0-04 Vben / P0-05 许可证供应链）。下一步进入 **P1（gnosis-rs workspace + 数据层）**，开始真正写 Rust 代码；重量级编译继续走校机（rustc 1.99.1 + MinGW PATH）。
 
 > 环境基线（后续复用）：校机 `rustc/cargo 1.99.1`（rsproxy 升级）；GNU target 需 `D:\yzd\MSYS2\mingw64\bin` 于 PATH；cargo 依赖走 `rsproxy-sparse`；Go 依赖走 `goproxy.cn`；node `v24.22.2`+pnpm `10.33.4`（npmmirror）。
 
@@ -279,7 +279,7 @@ GET https://api.github.com/repos/mateo-ki/vproxy/commits?per_page=1   # HEAD 19b
 
 ## [UTC 2026-11-10T01:18:00Z] S11 · P1-01 Cargo workspace 骨架（build/fmt/clippy 全绿）
 
-**动作**：按 `docs/rebuild/02-p1-core-skeleton-data/p1-01-workspace.md` 在仓库根建 Cargo workspace。
+**动作**：按 `docs/rebuild/02-p1-gnosis-skeleton-data/p1-01-workspace.md` 在仓库根建 Cargo workspace。
 
 **新建**（编辑机 `repos/Phlogo`）：`Cargo.toml`（workspace, resolver=2, members=`apps/{api,worker}` + `crates/{domain,database,config,api-contract}`）、`rust-toolchain.toml`（stable+rustfmt+clippy）、`.gitignore`、各 crate `Cargo.toml`+占位 `main.rs/lib.rs`；配置 crate 包名 `app-config`。
 
@@ -299,7 +299,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## [UTC 2026-11-10T01:34:00Z] S12 · P1-02 Axum API 骨架 + 分层认证（build/test/fmt/clippy 全绿 + 冒烟 200/401/404）
 
-**动作**：`apps/api` 改 lib+bin；实现 Figment 配置（显式 PAILY_ env 覆盖）、auth 中间件、路由装配、OpenAPI JSON 端点。
+**动作**：`apps/curse` 改 lib+bin；实现 Figment 配置（显式 PHLOGO_ env 覆盖）、auth 中间件、路由装配、OpenAPI JSON 端点。
 
 **命令**（校机 `C:\Users\YiZhidi\phlogo-rs`，PATH 含 cargo+mingw64）：
 ```
@@ -307,11 +307,11 @@ cargo build --workspace --all-targets
 cargo test -p api
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-# 运行期冒烟：$env:PAILY_SERVER_PORT=28099; .\target\debug\api.exe & curl 200/401/404
+# 运行期冒烟：$env:PHLOGO_SERVER_PORT=28099; .\target\debug\api.exe & curl 200/401/404
 ```
 
 **结果**：`BUILD_EXIT=0`、`TEST_EXIT=0`（4 passed：health/protected-401/unknown-404/openapi-200）、`FMT_EXIT=0`、`CLIPPY_EXIT=0`；
-冒烟 **`health=200 post_sources=401 unknown=404`**（`PAILY_SERVER_PORT` 覆盖生效）。
+冒烟 **`health=200 post_sources=401 unknown=404`**（`PHLOGO_SERVER_PORT` 覆盖生效）。
 
 **偏差**：`utoipa-swagger-ui 8.1.0` build.rs 与 `zip 2.6.1` 不兼容 → 本轮改用 `/api-docs/openapi.json` 提供 OpenAPI JSON（Swagger UI 静态资源后续钉版本再启用）。
 **决策**：P1-02 判定 **PASS**。进入 P1-03（SQLx 迁移 + configs seed；校机无 PG，运行验证拟装便携 PG 或转 CI）。
@@ -329,8 +329,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 # 迁移文件（SQLx 约定：文件而非目录）：migrations/0001_init.up.sql/.down.sql, 0002_uq_sources.up.sql/.down.sql
 initdb -D C:\Users\YiZhidi\pgdata -U postgres --auth=trust -E UTF8 --locale=C
 Start-Process postgres.exe -D C:\Users\YiZhidi\pgdata -p 5432 -c listen_addresses=127.0.0.1   # 不用 pg_ctl（管道挂起）
-psql -c "CREATE ROLE paily ...; CREATE DATABASE paily OWNER paily;"
-$env:DATABASE_URL=postgres://paily:change-me@127.0.0.1:5432/paily
+psql -c "CREATE ROLE phlogo ...; CREATE DATABASE phlogo OWNER phlogo;"
+$env:DATABASE_URL=postgres://phlogo:change-me@127.0.0.1:5432/phlogo
 cargo run -p database --example migrate
 ```
 
@@ -349,23 +349,23 @@ cargo run -p database --example migrate
 
 ## [UTC 2026-11-10T02:40:00Z] S14 · P1-04 Source/Node CRUD + 关系（真实 PG 集成测试 + API e2e 全绿）
 
-**动作**：新增 `crates/registry`、`database` 仓库层与模型、`apps/api` handlers + AppState（lazy pool），接入真实路由。
+**动作**：新增 `crates/registry`、`database` 仓库层与模型、`apps/curse` handlers + AppState（lazy pool），接入真实路由。
 
 **命令**（校机，PG 18.6 + cargo）：
 ```
 cargo build --workspace --all-targets
-DATABASE_URL=postgres://paily:change-me@127.0.0.1:5432/paily cargo test --workspace
+DATABASE_URL=postgres://phlogo:change-me@127.0.0.1:5432/phlogo cargo test --workspace
 cargo test -p database --test pg_crud
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-# API e2e：起 api(PAILY_AUTH_SERVICE_SECRET=svc-secret) → curl POST /api/v1/sources 两次（同 body）
+# API e2e：起 api(PHLOGO_AUTH_SERVICE_SECRET=svc-secret) → curl POST /api/v1/sources 两次（同 body）
 ```
 
 **结果**：`BUILD/TEST/FMT/CLIPPY` 全 0；`pg_crud` **2 passed**；**e2e `create1=201 create2=200`**（b1 `alreadyExisted=false`、b2 `true`，同一 id），`list_noauth=401`/`list_auth=200`。
 
 **决策/修正**：
 1. 去重竞态：新增 `0002_uq_sources`（`UNIQUE(type,content)`）+ `ON CONFLICT ... DO NOTHING`，并发安全（取代 `FOR UPDATE` 方案）。
-2. `apps/api` 用 `database::connect_lazy` 构建 pool，未连库即可跑 health/401/404 单测。
+2. `apps/curse` 用 `database::connect_lazy` 构建 pool，未连库即可跑 health/401/404 单测。
 3. handler `parse_id` 用 `#[allow(clippy::result_large_err)]`；rustfmt 差异按 `fmt.log` 逐处修正。
 
 **决策**：P1-04 判定 **PASS**。**P1 阶段（骨架+数据层+CRUD）全部完成**。下一步进入 P2（fetch/parse 抓取解析）。
@@ -436,7 +436,7 @@ cargo clippy -p domain --all-targets -- -D warnings
 **命令**（校机，PG 18.6）：
 ```
 cargo build --workspace --all-targets
-DATABASE_URL=postgres://paily:change-me@127.0.0.1:5432/paily cargo test --workspace
+DATABASE_URL=postgres://phlogo:change-me@127.0.0.1:5432/phlogo cargo test --workspace
 cargo fmt --all / cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
@@ -451,16 +451,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## [UTC 2026-11-11T02:30:00Z] S19 · P3-01 Apalis Check Job（PG 后端真机跑通；幂等副作用）
 
-**动作**：`apps/worker` lib+bin 化：`CheckJob` + 幂等 `record/finish_check_run`（migration 0004 主库）+ Apalis `PostgresStorage` 装配；**Apalis 独立库 `paily_jobs`**。
+**动作**：`apps/worker` lib+bin 化：`CheckJob` + 幂等 `record/finish_check_run`（migration 0004 主库）+ Apalis `PostgresStorage` 装配；**Apalis 独立库 `phlogo_jobs`**。
 
-**关键修正**：apalis 0.7.4 `setup()` 内嵌 migration 与业务 `migrate!` 共用 `_sqlx_migrations` 冲突（`VersionMissing(1)`）→ **队列独立数据库**（`PAILY_DATABASE_JOBS_DSN`，默认派生 `paily_jobs`），同时满足方案 §3.1 分离要求。`postgres` feature 属于 `apalis-sql`。
+**关键修正**：apalis 0.7.4 `setup()` 内嵌 migration 与业务 `migrate!` 共用 `_sqlx_migrations` 冲突（`VersionMissing(1)`）→ **队列独立数据库**（`PHLOGO_DATABASE_JOBS_DSN`，默认派生 `phlogo_jobs`），同时满足方案 §3.1 分离要求。`postgres` feature 属于 `apalis-sql`。
 
 **命令**（校机，PG 18.6）：
 ```
 cargo build --workspace --all-targets
-DATABASE_URL=... cargo test --workspace      # + PAILY_DATABASE_JOBS_DSN=paily_jobs
+DATABASE_URL=... cargo test --workspace      # + PHLOGO_DATABASE_JOBS_DSN=phlogo_jobs
 cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnings
-# 真机 smoke：起 worker 12s，确认 paily_jobs 内 apalis 表 + 主库 check_runs finished 计数递增
+# 真机 smoke：起 worker 12s，确认 phlogo_jobs 内 apalis 表 + 主库 check_runs finished 计数递增
 ```
 
 **结果**：`build/test/fmt/clippy` 全 **0**；幂等测试过（重投 4 次仅 1 行）；真机 smoke 中 handler 消费 demo job（`check_runs` 2→3）。
@@ -591,9 +591,9 @@ cargo fmt --all -- --check / cargo clippy --workspace --all-targets -- -D warnin
 
 ## [UTC 2026-11-11T06:00:00Z] S30 · P6-02 管理页面（Sources/Nodes/Scoring 三页 + config 端点；build:ele 11/11 绿）
 
-**动作**：后端补 `GET/PUT /api/v1/config`（KV 读写，事务）；前端三页（sources 去重创建/删除/ignore-dead、nodes 列表删除、scoring 配置编辑）+ `paily.ts` 自含 API 层 + Paily 菜单路由。
+**动作**：后端补 `GET/PUT /api/v1/config`（KV 读写，事务）；前端三页（sources 去重创建/删除/ignore-dead、nodes 列表删除、scoring 配置编辑）+ `phlogo.ts` 自含 API 层 + Phlogo 菜单路由。
 
-**关键踩坑**：首次部署覆盖了 vben 原生 `src/api/request.ts` → `core/auth.ts` 的 `requestClient/baseRequestClient` 导出丢失 → MISSING_EXPORT 构建失败。从本地 pristine v5.7.0 恢复原文件，自研层改独立 `paily.ts`（自含 fetch+bearer）。**教训：向第三方 monorepo 注入文件前先查同名导出的消费方。**
+**关键踩坑**：首次部署覆盖了 vben 原生 `src/api/request.ts` → `gnosis/auth.ts` 的 `requestClient/baseRequestClient` 导出丢失 → MISSING_EXPORT 构建失败。从本地 pristine v5.7.0 恢复原文件，自研层改独立 `phlogo.ts`（自含 fetch+bearer）。**教训：向第三方 monorepo 注入文件前先查同名导出的消费方。**
 
 **实测**：Rust build/test/fmt/clippy 全 0；`pnpm build:ele` **0**（11/11 tasks，dist.zip 1.09MB）。
 
@@ -664,7 +664,7 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 
 ## [UTC 2026-11-11T08:00:00Z] S36 · 管理页面补齐（规格 7 页全部落地；build:ele 11/11 绿）
 
-**动作**：新增 `dashboard.vue`（统计卡+分布）、`checks.vue`（tags+初筛日志，-1 红标）、`node-detail.vue`（身份+双时间线）、`subscriptions.vue`（profile CRUD+token 签发一次性弹窗/撤销）；`paily.ts` 扩至全部端点；路由七项；Nodes 页加详情入口。
+**动作**：新增 `dashboard.vue`（统计卡+分布）、`checks.vue`（tags+初筛日志，-1 红标）、`node-detail.vue`（身份+双时间线）、`subscriptions.vue`（profile CRUD+token 签发一次性弹窗/撤销）；`phlogo.ts` 扩至全部端点；路由七项；Nodes 页加详情入口。
 
 **实测**：校机 `pnpm build:ele` **0**（11/11 tasks，7 页进 dist）。
 
@@ -735,14 +735,14 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 - migration `0010_config_wiring`：把未被改过的 `check_run_history_days` seed 从 7 改 14；补 seed `score_min_samples`；加索引 `idx_node_check_results_node_time`（时间线查询 `(node_id, checked_at DESC)`）；建表 `format_configs`。
 
 **B3 缺口补齐**：
-- **#1 高级搜索 + 预览**：`apps/api/src/handlers/search.rs`——`POST /nodes/search`、`POST /sources/search`（AST JSON body + 分页 ≤200）、`POST /filter/preview`（≤100）；filter crate 扩 `parse_with(whitelist)` / `matches_source` / `SOURCE_FIELD_WHITELIST`；权限矩阵纳入（读面 AdminOrService，fail-closed 保持）。
-- **#3 模板配置**：`apps/api/src/handlers/format_config.rs` + `format_configs` 表；**写入前用渲染同款解析器校验**（坏模板 400，不在每次订阅时 500）；`GET` 读面 AdminOrService、`PUT` AdminOnly。
+- **#1 高级搜索 + 预览**：`apps/curse/src/handlers/search.rs`——`POST /nodes/search`、`POST /sources/search`（AST JSON body + 分页 ≤200）、`POST /filter/preview`（≤100）；filter crate 扩 `parse_with(whitelist)` / `matches_source` / `SOURCE_FIELD_WHITELIST`；权限矩阵纳入（读面 AdminOrService，fail-closed 保持）。
+- **#3 模板配置**：`apps/curse/src/handlers/format_config.rs` + `format_configs` 表；**写入前用渲染同款解析器校验**（坏模板 400，不在每次订阅时 500）；`GET` 读面 AdminOrService、`PUT` AdminOnly。
 
 **接线配置键**：`grade_*_min` → `handlers/config.rs::grade_thresholds()`（订阅渲染不再硬编码阈值）。
 
 **契约**：utoipa 补 6 条路径 → **25 条**（`openapi.json` 10290 B）。
 
-**验证**：校机真实 PG 全套 `FULL_TEST_EXIT=0`、`cargo fmt --check=0`、`clippy -D warnings=0`；新增 `apps/api/tests/search_endpoints.rs`（未认证 401 边界 3 项）。
+**验证**：校机真实 PG 全套 `FULL_TEST_EXIT=0`、`cargo fmt --check=0`、`clippy -D warnings=0`；新增 `apps/curse/tests/search_endpoints.rs`（未认证 401 边界 3 项）。
 
 **已知限制（诚实记录）**：`unlock` 条件永不匹配（无 streaming 表）；节点 `region` 取自最近测活 metrics；搜索是内存过滤（与上游同语义，量大时应改 SQL 下推）。**sponsors 域仍缺，待用户裁定是否恢复**。
 
@@ -751,11 +751,11 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 ## [UTC 2026-11-13T04:55:00Z] S42 · A1 落地（PROXY protocol v1）+ 修限流桶键真 bug + 部署面收紧
 
 **A1（用户裁定 PROXY protocol）已实现**：
-- `apps/api/src/proxy_protocol.rs`：v1 解析（`TCP4`/`TCP6`/`UNKNOWN`）+ **自带 accept 循环**（axum 0.7 的 `axum::serve` 内部直接建连交给 hyper，没有消费前置头的钩子——照 axum `serve.rs` 的写法自建 loop + `hyper::server::conn::http1`）；非 PROXY 连接首批字节用 `PrefixedStream` **回放**给 hyper；PROXY 头之后可能同包到达的 HTTP 字节也回放（`read_proxy_header` 返回 leftover）。
+- `apps/curse/src/proxy_protocol.rs`：v1 解析（`TCP4`/`TCP6`/`UNKNOWN`）+ **自带 accept 循环**（axum 0.7 的 `axum::serve` 内部直接建连交给 hyper，没有消费前置头的钩子——照 axum `serve.rs` 的写法自建 loop + `hyper::server::conn::http1`）；非 PROXY 连接首批字节用 `PrefixedStream` **回放**给 hyper；PROXY 头之后可能同包到达的 HTTP 字节也回放（`read_proxy_header` 返回 leftover）。
 - 真实地址落点 `ConnectInfo<SocketAddr>`（与 axum 原生同构）→ `peer_addr()`/`peer_ip()` 统一取用；**从不读 XFF**。
-- 部署：`deploy/Caddyfile` 三个 `reverse_proxy` 各加 `transport http { proxy_protocol v1 }`（**本机 podman `caddy validate` 实测 "Valid configuration"**）；`deploy/compose.yaml` 的 `api` **取消宿主端口**（只 expose），加 `PAILY_SERVER_PROXY_PROTOCOL=1` / `PAILY_SERVER_EXPECT_PROXY=1`（缺头即拒）。
+- 部署：`deploy/Caddyfile` 三个 `reverse_proxy` 各加 `transport http { proxy_protocol v1 }`（**本机 podman `caddy validate` 实测 "Valid configuration"**）；`deploy/compose.yaml` 的 `api` **取消宿主端口**（只 expose），加 `PHLOGO_SERVER_PROXY_PROTOCOL=1` / `PHLOGO_SERVER_EXPECT_PROXY=1`（缺头即拒）。
 - 配置：`crates/config` 新增 `server.proxy_protocol` / `server.expect_proxy`（默认关，向后兼容）。
-- 测试：`apps/api/tests/proxy_protocol.rs` 5 项（带头 200 / 无头不强制 200 / 无头强制拒 / `PROXY UNKNOWN` 不报错 / 头被正确消费）+ 模块内单测 5 项。
+- 测试：`apps/curse/tests/proxy_protocol.rs` 5 项（带头 200 / 无头不强制 200 / 无头强制拒 / `PROXY UNKNOWN` 不报错 / 头被正确消费）+ 模块内单测 5 项。
 
 **修掉的真 bug（重要）**：`rate_limit.rs` 原读**裸 `SocketAddr`** 扩展，而 axum 插入的是 `ConnectInfo<SocketAddr>` → **永远取不到**，桶键恒为 `0.0.0.0`（全局单桶）。即"按 IP 分桶"此前**从未真正生效**。现已改经 `peer_ip()`。
 
@@ -769,12 +769,12 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 
 ## [UTC 2026-11-13T05:55:00Z] S43 · B4 本机 compose 全栈演练 ✅（用户裁定容器用本机）+ 修 content 源 fetch 真 bug
 
-**镜像构建**：`podman build`（Buildah）出 `paily-api:local` / `paily-worker:local`（rust:1.83-slim → bookworm-slim，多阶段）——**首次真正构建**（此前只有 Dockerfile）。
+**镜像构建**：`podman build`（Buildah）出 `phlogo-api:local` / `phlogo-worker:local`（rust:1.83-slim → bookworm-slim，多阶段）——**首次真正构建**（此前只有 Dockerfile）。
 
 **部署缺口修复**：
-1. **`paily_jobs` 库**：postgres 官方镜像只建 `POSTGRES_DB=paily`，worker 启动即挂（`database "paily_jobs" does not exist`）→ 新增 `deploy/postgres-init/01-jobs-db.sql` 挂 `/docker-entrypoint-initdb.d`（新卷自动建；已存在的卷需手动 `CREATE DATABASE`——本次演练即手动补的）；
+1. **`phlogo_jobs` 库**：postgres 官方镜像只建 `POSTGRES_DB=phlogo`，worker 启动即挂（`database "phlogo_jobs" does not exist`）→ 新增 `deploy/postgres-init/01-jobs-db.sql` 挂 `/docker-entrypoint-initdb.d`（新卷自动建；已存在的卷需手动 `CREATE DATABASE`——本次演练即手动补的）；
 2. **compose build 键**：podman-compose 1.6.0 不认 `build: {context, dockerfile}` 内联 map（报 "no Containerfile found"）→ 改多行 map + `image:` 指向预构建镜像，`podman compose`（provider 转发）`--no-build` 起；
-3. **api 补 `PAILY_DATABASE_JOBS_DSN`**（fetch/trigger 端点要它入队）。
+3. **api 补 `PHLOGO_DATABASE_JOBS_DSN`**（fetch/trigger 端点要它入队）。
 
 **演练结果（全部经 caddy:21380，即 PROXY protocol 链路）**：
 - `/health` 200；api 日志实证 **"serving with PROXY protocol v1"**（expect_proxy=true）；
@@ -848,8 +848,47 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 ## [UTC 2026-11-13T07:55:00Z] S47 · sponsor 管理前端页面（p6 增补）+ `build:ele` 绿
 
 **新增**（照 subscriptions.vue 既有惯例：Element Plus 表格 + 对话框表单 + typed API 层）：
-- `web/vben-admin/src/api/paily.ts` 补 sponsor 段（`SponsorView/SponsorUpsert/listSponsors/createSponsor/updateSponsor/deleteSponsor` + `simpleCondition` AST 构造辅助）；
-- **`views/paily/sponsors.vue`**：分页表格（priority 可排序 / 注入文案 / AST 预览）+ 新建/编辑对话框——表单把「字段+运算符+值」三个简单控件拼成 **Filter-AST 单叶条件**（空值 = 匹配全部节点），提交前本地构造、服务端白名单兜底；删除带确认；
-- 路由 `PailySponsors`（`/paily/sponsors`）。
+- `web/vben-admin/src/api/phlogo.ts` 补 sponsor 段（`SponsorView/SponsorUpsert/listSponsors/createSponsor/updateSponsor/deleteSponsor` + `simpleCondition` AST 构造辅助）；
+- **`views/phlogo/sponsors.vue`**：分页表格（priority 可排序 / 注入文案 / AST 预览）+ 新建/编辑对话框——表单把「字段+运算符+值」三个简单控件拼成 **Filter-AST 单叶条件**（空值 = 匹配全部节点），提交前本地构造、服务端白名单兜底；删除带确认；
+- 路由 `PhlogoSponsors`（`/phlogo/sponsors`）。
 
 **校机构建**：checkout 实际在 `C:\Users\YiZhidi\p0-04\vue-vben-admin-5.7.0`（根下那个不存在）；node v22.22.2 在 `C:\Users\YiZhidi\shortcuts-verify\`、pnpm 10.33.4 只有 `.tools\pnpm\10.33.4\bin\pnpm.CMD`（无全局 exe）——PATH 组合后 **`build:ele` 11/11 successful**（1m04s）。
+
+---
+
+## [UTC 2026-11-13T08:40:00Z] S48 · 全仓改名：paily→phlogo、core→gnosis、Connect→Wish、api→curse
+
+**用户裁定**（三轮问答确认边界）：
+1. **scope**：全量替换 `core→gnosis`（含目录/进程名）；
+2. **runtime**：运行期标识符全改，含数据库迁移；
+3. **upstream**：保护上游外部引用（`openpaily/paily-*`）不改；
+4. 追加裁定：**Connect→Wish**（品牌词组）、**api→curse 只改服务名**（HTTP 路由前缀 `/api/v1` 与 OpenAPI/openapi-ts/api-contract 等标准与工具名保持不动）；
+5. 命名组合：**Phlogo Wish Gnosis / gnosis-curse**。
+
+**改名映射**：
+
+| 原 | 新 |
+| --- | --- |
+| `paily` / `Paily` / `PAILY_*` | `phlogo` / `Phlogo` / `PHLOGO_*`（含环境变量前缀） |
+| `core` / `Core`（产品语境） | `gnosis` / `Gnosis` |
+| `core-api` / `core-worker` | `gnosis-curse` / `gnosis-worker` |
+| `Paily Connect` / `Paily Connect Core` | `Phlogo Wish` / `Phlogo Wish Gnosis` |
+| crate `api`（`apps/api`） | crate `curse`（`apps/curse`），二进制 `curse` |
+| 镜像 `phlogo-api` / `phlogo-worker` | `phlogo-gnosis-curse` / `phlogo-gnosis-worker` |
+| 前端 `src/api/paily.ts`、`src/views/paily/`、路由模块 `paily.ts` | `src/api/phlogo.ts`、`src/views/phlogo/`、`modules/phlogo.ts` |
+| 队列库 `paily_jobs` / 库 `paily` / PG role `paily` | `phlogo_jobs` / `phlogo` / `phlogo` |
+| compose 服务 `api` | `curse` |
+| `deploy/Dockerfile.api` | `deploy/Dockerfile.curse` |
+
+**保护表**（脚本内置，dry-run 断言零违规）：`openpaily/paily-core|fetch|check`、任何含 `score` 的标识符（`score`/`node_scores`/`score_decay_alpha`…）、第三方 crate 内嵌 core（`futures-core`/`sqlx-core`/`axum-core`/`serde_core`/`rand_core`/`parking_lot_core`/`core-foundation-sys`/`apalis-core`/`tracing-core`/`time-core`/`windows-core`/`icu_locale_core`）、技术标识符 `ConnectInfo`/`PgConnection`/`CheckerError::Connect`。
+
+**改名脚本**（`.tmp/rename-apply.py` 等）：先收集全部替换（位置基于原文）再**从右往左**应用——第一版按顺序改字符数组导致长度变化后索引错位，产出 `gnosiscore` 这类污染（`score` 被拆），改为右到左后归零。
+
+**误伤修复**（23 文件）：`openphlogo/*` → `openpaily/*`；`phlogo-gnosis-rust-rebuild-plan.md` → `paily-core-rust-rebuild-plan.md`（用户本地方案文件名，磁盘上就是这个名）；`phlogo-gnosis` → `paily-core`（其余均源自上游项目名）。
+
+**校机数据库迁移**（运行期改名）：`ALTER ROLE paily RENAME TO phlogo` + `ALTER DATABASE paily|paily_jobs RENAME TO phlogo|phlogo_jobs`（须用 `postgres` 超级用户；`ALTER ROLE` 以自身身份连接会报 "session user cannot be renamed"）。
+
+**验证**：校机 `cargo test --workspace -- --test-threads=1` → **FULL_TEST_EXIT=0**（43 个测试二进制全绿）、fmt 0、clippy 0；前端 `build:ele` **11/11 successful**（含新路由 + 8 页面）。
+> 首次 workspace 并发跑时 `check_persist` 2 个用例 30s 超时——**并发下 PG 连接池争用**，单线程重跑通过，非改名引入。
+
+**顺带发现并修正**：校机前端 checkout 此前**从未 ship 过 paily 视图**（`src/views/` 只有 vben 自带页面），此前的 "build 绿" 是构建缓存产物的假绿；本次显式 `mkdir` + 逐文件 ship 后才是真绿。

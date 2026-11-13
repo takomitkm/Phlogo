@@ -17,7 +17,7 @@
   - API 中间件：`tracing` request span + 结构化字段；metrics middleware。
   - `crates/worker` 内 Apalis `Monitor` 配置（Redis/Postgres backend 已用 Postgres，见 P3）。
   - 集成测试：日志 redaction 断言、metrics 端点断言、任务恢复断言。
-- **修改**：`apps/api/src/main.rs`、`apps/worker/src/main.rs`（替换 zerolog、接 tracing）。
+- **修改**：`apps/curse/src/main.rs`、`apps/worker/src/main.rs`（替换 zerolog、接 tracing）。
 - **不做**：自建 APM 后端；把 Apalis 任务状态机与 Node Lifecycle 状态混用（方案 §3 明确二者严格分开）；
   任意 SQL 查询日志化（避免把 `raw`/凭据顺手写进慢查询日志）。
 
@@ -36,7 +36,7 @@
 #### Step 1 — tracing 初始化（替换 zerolog）
 
 Phlogo：`main.go` 用 `log.Logger = log.Output(zerolog.ConsoleWriter{...}).Level(zerolog.InfoLevel)`。
-Rust 侧在 `apps/api` 与 `apps/worker` 启动处统一装配 `tracing-subscriber`，
+Rust 侧在 `apps/curse` 与 `apps/worker` 启动处统一装配 `tracing-subscriber`，
 输出 JSON 而非 human 文本，便于采集：
 
 ```rust
@@ -88,10 +88,10 @@ pub fn redact_subscription_url(url: &str) -> String {
 
 #### Step 3 — metrics 端点
 
-在 `apps/api` 暴露 Prometheus 指标（沿用对外端口，路径 `/metrics`；也可走 Caddy 反代）：
+在 `apps/curse` 暴露 Prometheus 指标（沿用对外端口，路径 `/metrics`；也可走 Caddy 反代）：
 
 ```rust
-// apps/api/src/main.rs (示意)
+// apps/curse/src/main.rs (示意)
 use axum::Router;
 use axum_prometheus::PrometheusMetricLayer;
 
@@ -136,7 +136,7 @@ Monitor::new()
   `redact_secret`（固定掩码 `[REDACTED]`）、`redact_subscription_url`（保 scheme://host/path，剥 query/fragment——**订阅 URL 里的 token 就在 query**）、
   `SECRET_FIELD_NAMES` 白名单（secret/password/token/psk/private_key/raw/credential/authorization/cookie/url）。
   **`RedactionLayer`**：全局 tracing layer，扫描每个 event 的字段名，命中白名单即记 violations 并 `warn!`（defense-in-depth：主防线是调用点用 redact_*，本层让漏网的**可观测**而非静默通过——tracing 的 Event 不可变，无法就地改写，这是该设计的明确取舍，写进文档）。
-- **`/metrics`**（`apps/api/src/handlers/metrics.rs`，根级路由无需认证——与规格 §风险呼应，边界访问控制归 8-03/Caddy）：轻量 Prometheus 文本格式——进程计数器（`http_requests_total`、`subscription_renders_total`）+ DB 量规（`nodes_total/nodes_linked_total/sources_total/check_runs_total`，best-effort 查询不致 500）。
+- **`/metrics`**（`apps/curse/src/handlers/metrics.rs`，根级路由无需认证——与规格 §风险呼应，边界访问控制归 8-03/Caddy）：轻量 Prometheus 文本格式——进程计数器（`http_requests_total`、`subscription_renders_total`）+ DB 量规（`nodes_total/nodes_linked_total/sources_total/check_runs_total`，best-effort 查询不致 500）。
 - api/worker main 接 `observability::init`（api 走 `telemetry.rs` 薄包装保持 config verbose 语义）。
 - **Apalis 恢复**：P3-01 已实现——Postgres-backed storage 天然持久化 Job 状态，worker 重启重认领；`CheckJob` 副作用幂等（`run_id` 键控 `ON CONFLICT`），重放不产生重复行（P3-01/P3-04 集成测试已证）。本页无需新增代码，验收 #4 引用既有测试。
 

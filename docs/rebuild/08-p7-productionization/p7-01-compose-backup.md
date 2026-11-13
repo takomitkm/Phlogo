@@ -15,7 +15,7 @@
 
 - **新建**：
   - `deploy/compose.yaml`（或仓库根 `docker-compose.yaml`）。
-  - `Dockerfile.api`、`Dockerfile.worker`（多阶段 Rust 构建）。
+  - `Dockerfile.curse`、`Dockerfile.worker`（多阶段 Rust 构建）。
   - `deploy/Caddyfile`（web 静态 + API 反向代理，替代裸 `EXPOSE 21380`）。
   - `deploy/miaospeed/` 配置（固定版本 MiaoSpeed 二进制挂载 / 或独立镜像）。
   - `scripts/backup.sh`、`scripts/restore.sh`（pg_dump / psql 封装）。
@@ -26,7 +26,7 @@
 ### 前置 / Prerequisites
 
 - 已完成 P1（`migrations/` + SQLx 初始化）、P3（Apalis PG backend 已建 `apalis` 任务表，方案 §3 Apalis 迁移以官方为准）。
-- Rust 工具链与 `Cargo.lock` 已锁定；`apps/api`、`apps/worker` 二进制可由 `cargo build --release` 产出。
+- Rust 工具链与 `Cargo.lock` 已锁定；`apps/curse`、`apps/worker` 二进制可由 `cargo build --release` 产出。
 - 本地已安装 `docker` 与 `docker compose`（v2）。
 - Postgres 镜像（如 `postgres:16-alpine`）与固定版本 MiaoSpeed 二进制（P0-02 验证的 commit/tag）。
 - 配置 facts：见 `CONVENTIONS.md` §2.3 数据模型（`sources`/`nodes`/`node_sources`/`node_check_results`/`check_runs`/
@@ -40,7 +40,7 @@
 两镜像共享 builder 形态，`api` 与 `worker` 仅 `cargo build --bin` 目标不同。
 
 ```dockerfile
-# deploy/Dockerfile.api
+# deploy/Dockerfile.curse
 # ── Build stage ──
 FROM rust:1.82-slim AS builder
 WORKDIR /src
@@ -49,20 +49,20 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY apps ./apps
 # 仅构建 api（离线检查见 CONVENTIONS §5: cargo sqlx prepare）
-RUN cargo build --release --bin core-api
+RUN cargo build --release --bin gnosis-api
 
 # ── Runtime stage ──
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=builder /src/target/release/core-api /app/core-api
+COPY --from=builder /src/target/release/gnosis-api /app/gnosis-api
 # 静态前端由 web 服务托管；api 仅暴露管理/订阅 API
 EXPOSE 8080
-ENTRYPOINT ["/app/core-api"]
+ENTRYPOINT ["/app/gnosis-api"]
 ```
 
-`deploy/Dockerfile.worker` 同形，仅把 `--bin core-api` 改为 `--bin core-worker`，`EXPOSE` 可按需省略（worker 不对外监听）。
+`deploy/Dockerfile.worker` 同形，仅把 `--bin gnosis-api` 改为 `--bin gnosis-worker`，`EXPOSE` 可按需省略（worker 不对外监听）。
 > 注：旧 `Dockerfile` 使用 `--tags="noclash"` 与 `CGO_ENABLED=1` 是 Go 侧构建细节；
 > Rust 侧无需该 tag，但若 `sqlx` 离线宏启用需 `SQLX_OFFLINE=true` + 已 `cargo sqlx prepare` 产物（见 P1 验收）。
 
@@ -75,17 +75,17 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: paily
+      POSTGRES_USER: phlogo
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
-      POSTGRES_DB: paily
+      POSTGRES_DB: phlogo
     volumes:
       - pgdata:/var/lib/postgresql/data
     # 不写 ports: → 仅 compose 内部网络可达（方案 §16.10：PostgreSQL 不暴露公网）
 
   api:
-    build: { context: .., dockerfile: deploy/Dockerfile.api }
+    build: { context: .., dockerfile: deploy/Dockerfile.curse }
     environment:
-      DATABASE__DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily
+      DATABASE__DSN: postgres://phlogo:${POSTGRES_PASSWORD}@postgres:5432/phlogo
       AUTH__JWT_SECRET: ${JWT_SECRET:?set in .env}
       AUTH__SERVICE_SECRET: ${SERVICE_SECRET:?set in .env}
       AUTH__ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set in .env}
@@ -95,7 +95,7 @@ services:
   worker:
     build: { context: .., dockerfile: deploy/Dockerfile.worker }
     environment:
-      DATABASE__DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily
+      DATABASE__DSN: postgres://phlogo:${POSTGRES_PASSWORD}@postgres:5432/phlogo
       CHECKERS__MIAOSPEED__URL: ws://miaospeed:65432
       CHECKERS__MIAOSPEED__SECRET: ${MIAOSPEED_SECRET:?set in .env}
     depends_on: [postgres, miaospeed]
@@ -120,7 +120,7 @@ services:
   # 可选：apalis-board（仅看任务，不替代管理页，方案 §12）
   apalis-board:
     image: ${APALIS_BOARD_IMAGE:?optional}
-    command: ["--database-url", "postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily"]
+    command: ["--database-url", "postgres://phlogo:${POSTGRES_PASSWORD}@postgres:5432/phlogo"]
     profiles: ["debug"]                   # 默认不启动，compose --profile debug 才起
 
 volumes:
@@ -149,11 +149,11 @@ volumes:
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-OUT="${1:-./backups/paily-$(date +%Y%m%d-%H%M%S).sql.gz}"
+OUT="${1:-./backups/phlogo-$(date +%Y%m%d-%H%M%S).sql.gz}"
 mkdir -p "$(dirname "$OUT")"
 # 用 compose 内 postgres 服务执行；-Fc 自定义格式便于选择性恢复
 docker compose exec -T postgres \
-  pg_dump -U paily -d paily -Fc > "$OUT"
+  pg_dump -U phlogo -d phlogo -Fc > "$OUT"
 echo "backup written: $OUT"
 ```
 
@@ -166,10 +166,10 @@ IN="${1:?usage: restore.sh <file.sql.gz|file.dump>"
 docker compose down -v            # 销毁卷以模拟「从零恢复」
 docker compose up -d postgres
 # 等待 postgres 就绪
-until docker compose exec -T postgres pg_isready -U paily -d paily; do sleep 1; done
-docker compose exec -T postgres pg_restore -U paily -d paily --clean --if-exists < "$IN"
+until docker compose exec -T postgres pg_isready -U phlogo -d phlogo; do sleep 1; done
+docker compose exec -T postgres pg_restore -U phlogo -d phlogo --clean --if-exists < "$IN"
 # 校验：关键表行数应与备份前一致
-docker compose exec -T postgres psql -U paily -d paily -c \
+docker compose exec -T postgres psql -U phlogo -d phlogo -c \
   "SELECT 'sources',count(*) FROM sources UNION ALL
    SELECT 'nodes',count(*) FROM nodes UNION ALL
    SELECT 'node_sources',count(*) FROM node_sources;"
@@ -178,8 +178,8 @@ docker compose exec -T postgres psql -U paily -d paily -c \
 ### 验证结果 / Verified Results（已实测，2026-11-11）
 
 **落地**：`deploy/` 全套 + `scripts/` 备份恢复——
-- `Dockerfile.api` / `Dockerfile.worker`：多阶段 Rust（`rust:1.83-slim` builder → `debian:bookworm-slim` runtime），依赖清单先行缓存层；runtime 携带 `migrations/`（启动即迁移）。**bin 名按实际 `apps/{api,worker}`**（规格里的 `core-api/core-worker` 是方案占位名）。
-- `compose.yaml`：postgres/api/worker/miaospeed/web/caddy 六服务 + `apalis-board`（`--profile debug` 选启）；**postgres/miaospeed 零公网端口**（§16.10），caddy 21380 唯一入口；环境变量用本实现的真实形状（`PAILY_*` 而非规格占位的 `DATABASE__DSN`）；worker 走独立 `paily_jobs` 库（P3-01 决策）。
+- `Dockerfile.curse` / `Dockerfile.worker`：多阶段 Rust（`rust:1.83-slim` builder → `debian:bookworm-slim` runtime），依赖清单先行缓存层；runtime 携带 `migrations/`（启动即迁移）。**bin 名按实际 `apps/{api,worker}`**（规格里的 `gnosis-api/gnosis-worker` 是方案占位名）。
+- `compose.yaml`：postgres/api/worker/miaospeed/web/caddy 六服务 + `apalis-board`（`--profile debug` 选启）；**postgres/miaospeed 零公网端口**（§16.10），caddy 21380 唯一入口；环境变量用本实现的真实形状（`PHLOGO_*` 而非规格占位的 `DATABASE__DSN`）；worker 走独立 `phlogo_jobs` 库（P3-01 决策）。
 - `Caddyfile`：静态 UI + `/api/*`、`/sub/*`、`/health` 反代。
 - `scripts/backup.sh`（`pg_dump -Fc`）与 `scripts/restore.sh`（down -v → pg_restore → 行数校验）。
 
@@ -229,17 +229,17 @@ docker compose exec -T postgres psql -U paily -d paily -c \
 
 4. **备份 → 销毁 → 恢复 → 行数一致**：
    ```bash
-   docker compose exec -T postgres psql -U paily -d paily -tAc "SELECT count(*) FROM node_sources;"  # 记为 N
+   docker compose exec -T postgres psql -U phlogo -d phlogo -tAc "SELECT count(*) FROM node_sources;"  # 记为 N
    bash scripts/backup.sh /tmp/p7-test.dump
    bash scripts/restore.sh /tmp/p7-test.dump
-   docker compose exec -T postgres psql -U paily -d paily -tAc "SELECT count(*) FROM node_sources;"  # 仍为 N
+   docker compose exec -T postgres psql -U phlogo -d phlogo -tAc "SELECT count(*) FROM node_sources;"  # 仍为 N
    ```
    预期：两次 `count` 相等（N 一致），`pg_restore` 退出码 0。
 
 5. **重启数据一致性（阶段验收 #1 的细化）**：
    ```bash
    docker compose restart worker
-   docker compose exec -T postgres psql -U paily -d paily -tAc "SELECT count(*) FROM nodes;"
+   docker compose exec -T postgres psql -U phlogo -d phlogo -tAc "SELECT count(*) FROM nodes;"
    ```
    预期：重启前后 `nodes` 行数不变；`apalis` 任务无 `Running` 永久卡死（worker 重启后重新认领 `Pending`/`Running`）。
 
@@ -248,8 +248,8 @@ docker compose exec -T postgres psql -U paily -d paily -c \
 > 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 - `Dockerfile`（单二进制 `paily-core`，`EXPOSE 21380`，SQLite `./data/data.db`）
-  → 拆为 `deploy/Dockerfile.api` / `deploy/Dockerfile.worker`（方案 §2.2 双二进制；CONVENTIONS §3 映射
-  `cmd/server/main.go` → `apps/api/src/main.rs` + `apps/worker/src/main.rs`）。
+  → 拆为 `deploy/Dockerfile.curse` / `deploy/Dockerfile.worker`（方案 §2.2 双二进制；CONVENTIONS §3 映射
+  `cmd/server/main.go` → `apps/curse/src/main.rs` + `apps/worker/src/main.rs`）。
 - 现有无 compose、无备份；数据在容器本地 SQLite → 改为统一 Postgres + 命名卷 `pgdata` + `pg_dump` 流程。
 - 旧 `internal/checker/handler.go` 的 `GetNodes` 返回 `raw`（完整 clash JSON，含凭据）等逻辑，
   在多进程下由 `api` 暴露、由 `worker` 经 MiaoSpeed WebSocket 消费；数据表同 CONVENTIONS §2.3（`nodes`/`node_sources` 等），
@@ -263,7 +263,7 @@ docker compose exec -T postgres psql -U paily -d paily -c \
   跑完 `docker compose down -v` 清理（用 `--profile debug` 时才带 `apalis-board`）。
 - **备份/恢复演练 job**：起 postgres → `pg_dump -Fc` → 注入样例来源/节点 → `down -v` → `pg_restore` →
   校验 `node_sources`/外键行数与种子一致。可作为 nightly 或 release 前的 gate。
-- **镜像构建 job**：分别对 `Dockerfile.api` / `Dockerfile.worker` 跑 `docker build`，并 `docker scout cves`
+- **镜像构建 job**：分别对 `Dockerfile.curse` / `Dockerfile.worker` 跑 `docker build`，并 `docker scout cves`
   （或 trivy）做基础镜像漏洞扫描；可与 8-03 的 supply-chain 扫描合并。
 - **端口暴露 lint（轻量）**：在 compose 解析里断言 `postgres`/`miaospeed` 无 `ports:` 公网映射，防止误暴露（§16.10）。
 

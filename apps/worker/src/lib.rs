@@ -1,4 +1,4 @@
-//! paily-core-rust worker library: Apalis job definitions + idempotent side effects
+//! Phlogo Wish Gnosis worker library: Apalis job definitions + idempotent side effects
 //! + the fetch closed loop (P2) and periodic scheduling entry points.
 pub mod check_job;
 pub mod fetch_job;
@@ -12,14 +12,14 @@ pub use fetch_job::{
 /// The queue uses its OWN database so apalis's embedded sqlx migrations never share
 /// the `_sqlx_migrations` history of our business migrations (plan §3.1 separation).
 pub fn jobs_dsn(cfg: &app_config::Config) -> String {
-    if let Ok(v) = std::env::var("PAILY_DATABASE_JOBS_DSN") {
+    if let Ok(v) = std::env::var("PHLOGO_DATABASE_JOBS_DSN") {
         if !v.is_empty() {
             return v;
         }
     }
     let main = &cfg.database.dsn;
     match main.rfind('/') {
-        Some(pos) => format!("{}{}", &main[..pos + 1], "paily_jobs"),
+        Some(pos) => format!("{}{}", &main[..pos + 1], "phlogo_jobs"),
         None => main.clone(),
     }
 }

@@ -180,7 +180,7 @@ proxies:
 > 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
 - **`internal/node/upsert.go` 的 `UpsertFromFetchResult`**：当前用 `json.Unmarshal(raw, &fields)` 把节点解析成 `map[string]interface{}`，再 `nodeAuth(proto, fields)` 抽主凭据，最后把**整个原始 JSON** 存进 `nodes.raw`。这是**朴素 clash JSON 解析**，没有强类型、没有 transport/tls 的结构化抽取。Rust 侧用 VProxy Parser 替换这层，产出强类型 `NormalizedNode`。
-- 方案 §3.1 / §7.2 明确「不直接采用 VProxy 的 Node 类型作为 Core 数据库类型；必须转换为自己的 `NormalizedNode`」——这正是本步骤的核心约束。
+- 方案 §3.1 / §7.2 明确「不直接采用 VProxy 的 Node 类型作为 Gnosis 数据库类型；必须转换为自己的 `NormalizedNode`」——这正是本步骤的核心约束。
 - 许可证：VProxy 为 MIT（[`CONVENTIONS.md`](CONVENTIONS.md) §2.11），复用需保留版权；若 P0 发现无法干净拆包，则退化为最小化移植必要算法并保留 MIT 要求。
 
 ### CI 提示 / CI notes（仅描述，不落地 YAML）

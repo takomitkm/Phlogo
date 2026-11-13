@@ -12,7 +12,7 @@
 
 | # | 上游路径 | 本实现 | 判定 | 证据 |
 |---|---|---|---|---|
-| 1 | `POST /api/v1/auth/login` | 同名同形 | ✅ 等价 | `apps/api/src/handlers/auth.rs`（HS256、24h、`token_type=="access"`） |
+| 1 | `POST /api/v1/auth/login` | 同名同形 | ✅ 等价 | `apps/curse/src/handlers/auth.rs`（HS256、24h、`token_type=="access"`） |
 | 2 | `POST /api/v1/auth/refresh` | 无 | ❌ **缺失** | 上游 `internal/auth/handler.go`；单管理员模型未做 refresh |
 | 3 | `POST /api/v1/fetch/sources` | 无 HTTP 端点 | 🔁 架构取代 | 上游供外部 paily-fetch 拉源；本实现 worker 内部 `FetchJob` 直读 DB（`apps/worker/src/fetch_job.rs`） |
 | 4 | `POST /api/v1/fetch/results` | 无 HTTP 端点 | 🔁 架构取代 | worker `run_fetch()` 直接落库+对账（`crates/registry/src/reconcile.rs`） |
@@ -61,9 +61,9 @@
 
 | 域 | 缺什么 | 状态 |
 |---|---|---|
-| **B6 高级搜索 + 预览** | `nodes/search`、`sources/search`、`filter/preview` | ✅ **已补齐**：`apps/api/src/handlers/search.rs`（AST JSON body + 分页 ≤200 + 预览 ≤100）；filter crate 扩 `parse_with` / `matches_source` / `SOURCE_FIELD_WHITELIST`；权限矩阵纳入（读面 AdminOrService） |
-| **format-configs** | 每格式模板可自定义 | ✅ **已补齐**：`apps/api/src/handlers/format_config.rs` + `format_configs` 表（migration 0010）；写入前用渲染同款解析器校验（坏模板在门口被拒，不在每次订阅时 500） |
-| **sponsors** | 整个 sponsor 域（表 + CRUD + 注入订阅） | ✅ **已补齐**（用户裁定恢复，2026-11-13）：`migrations/0011_sponsors`（`filter_ast` JSONB 替代上游 expr 字符串）+ `crates/registry/src/sponsor.rs`（priority 升序、后命中覆盖、`default_sponsor_text` 兜底——上游 `Service::Match` 语义逐条对齐）+ `apps/api/src/handlers/sponsor_admin.rs`（CRUD，AdminOnly 面）+ 订阅渲染注入（`/sub` 命名带 sponsor 文案）；`default_sponsor_text` 键随之生效 |
+| **B6 高级搜索 + 预览** | `nodes/search`、`sources/search`、`filter/preview` | ✅ **已补齐**：`apps/curse/src/handlers/search.rs`（AST JSON body + 分页 ≤200 + 预览 ≤100）；filter crate 扩 `parse_with` / `matches_source` / `SOURCE_FIELD_WHITELIST`；权限矩阵纳入（读面 AdminOrService） |
+| **format-configs** | 每格式模板可自定义 | ✅ **已补齐**：`apps/curse/src/handlers/format_config.rs` + `format_configs` 表（migration 0010）；写入前用渲染同款解析器校验（坏模板在门口被拒，不在每次订阅时 500） |
+| **sponsors** | 整个 sponsor 域（表 + CRUD + 注入订阅） | ✅ **已补齐**（用户裁定恢复，2026-11-13）：`migrations/0011_sponsors`（`filter_ast` JSONB 替代上游 expr 字符串）+ `crates/registry/src/sponsor.rs`（priority 升序、后命中覆盖、`default_sponsor_text` 兜底——上游 `Service::Match` 语义逐条对齐）+ `apps/curse/src/handlers/sponsor_admin.rs`（CRUD，AdminOnly 面）+ 订阅渲染注入（`/sub` 命名带 sponsor 文案）；`default_sponsor_text` 键随之生效 |
 
 ### 已补齐部分的已知限制（诚实记录）
 

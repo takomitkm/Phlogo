@@ -13,7 +13,7 @@ import {
   ignoreDead,
   listSources,
   type SourceView,
-} from '#/api/paily';
+} from '#/api/phlogo';
 
 const rows = ref<SourceView[]>([]);
 const loading = ref(false);

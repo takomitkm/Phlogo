@@ -3,14 +3,14 @@
 ### 目标 / Goal
 
 - 在 `database` / `registry` crate 定义 **repository 层**，实现 Source CRUD（按 `type+content` 去重、状态 `active`/`dead`、`ignore_dead` 标志）与 Node CRUD + Node-Source 多对多关系。
-- 在 `apps/api` 暴露 P1 所需 API 路径（CONVENTIONS §2.10 中 Source/Node 子集），并复用 p1-02 的分层认证。
+- 在 `apps/curse` 暴露 P1 所需 API 路径（CONVENTIONS §2.10 中 Source/Node 子集），并复用 p1-02 的分层认证。
 - 用 `#[tokio::test]` 集成测试覆盖两条核心不变量：
   1. 相同 `type+content` 连续创建 source 返回**已存在的那条**（`alreadyExisted=true`）。
   2. 一个 node 关联两个 source → **1 行 `nodes` + 2 行 `node_sources`**。
 
 ### 范围 / Scope
 
-**新建 / 改写**：`crates/database/src/repositories/{source,node}.rs`（SQLx 实现）、`crates/registry/src/{source,node}.rs`（领域服务，对应 Phlogo `internal/source/service.go` / `internal/node/*`）、`apps/api/src/handlers/{source,node}.rs`、`apps/api/src/router.rs`（挂真实 handler）、`tests/integration/p1_crud.rs`。
+**新建 / 改写**：`crates/database/src/repositories/{source,node}.rs`（SQLx 实现）、`crates/registry/src/{source,node}.rs`（领域服务，对应 Phlogo `internal/source/service.go` / `internal/node/*`）、`apps/curse/src/handlers/{source,node}.rs`、`apps/curse/src/router.rs`（挂真实 handler）、`tests/integration/p1_crud.rs`。
 
 **本阶段 API 路径（来自 CONVENTIONS §2.10）**：
 - `POST /api/v1/sources`、`GET /api/v1/sources`、`GET /api/v1/sources/{id}`、`PATCH /api/v1/sources/{id}`、`DELETE /api/v1/sources/{id}`、`POST /api/v1/sources/{id}/ignore-dead`、`GET /api/v1/sources/{id}/nodes`
@@ -141,7 +141,7 @@ impl SourceService {
 }
 ```
 
-**4. API handler（`apps/api/src/handlers/source.rs`）—— 复刻 `internal/api/handler/source.go`。** 关键点：去重命中返回 **200**（非 201），与 Go `SourceHandler.Create` 的 `existed` 分支（handler/source.go L44-48）一致：
+**4. API handler（`apps/curse/src/handlers/source.rs`）—— 复刻 `internal/api/handler/source.go`。** 关键点：去重命中返回 **200**（非 201），与 Go `SourceHandler.Create` 的 `existed` 分支（handler/source.go L44-48）一致：
 
 ```rust
 // POST /api/v1/sources
@@ -191,12 +191,12 @@ async fn node_linked_to_two_sources_one_node_two_relations() {
 
 ### 验证结果 / Verified Results（已实测，2026-11-10）
 
-> 环境：校机 `rustc 1.99.1` + **PostgreSQL 18.6**（MSYS2）；`DATABASE_URL=postgres://paily:change-me@127.0.0.1:5432/paily`。
+> 环境：校机 `rustc 1.99.1` + **PostgreSQL 18.6**（MSYS2）；`DATABASE_URL=postgres://phlogo:change-me@127.0.0.1:5432/phlogo`。
 
 **落地结构**：
 - 新 crate **`crates/registry`**（`SourceService`/`NodeService`，领域服务，镜像 `internal/source/service.go`、`internal/node/*`）。
 - `crates/database`：`models::{SourceRow,NodeRow}` + `repositories::{source,node}`（`create_dedup`、`list/get/update/delete`、`set_ignore_dead`、`nodes_of_source`、`upsert_by_hash`、`link`、`count_node_sources`）；`connect_lazy`（API 启动/测试无需真库）。
-- `apps/api`：`AppState`（含 lazy `PgPool` + services）+ `handlers/{source,node}`，`router::build` 挂真实路由（`/sources`、`/sources/:id`、`/sources/:id/ignore-dead`、`/sources/:id/nodes`、`/nodes`、`/nodes/:id`），沿用 P1-02 认证层。
+- `apps/curse`：`AppState`（含 lazy `PgPool` + services）+ `handlers/{source,node}`，`router::build` 挂真实路由（`/sources`、`/sources/:id`、`/sources/:id/ignore-dead`、`/sources/:id/nodes`、`/nodes`、`/nodes/:id`），沿用 P1-02 认证层。
 
 **去重竞态（评审结论）**：新增迁移 `0002_uq_sources` 给 `sources` 加 `UNIQUE(type,content)`；`create_dedup` 用
 `INSERT ... ON CONFLICT (type,content) DO NOTHING RETURNING id`，冲突则回查既有 id → **并发安全、无需 `FOR UPDATE`**。

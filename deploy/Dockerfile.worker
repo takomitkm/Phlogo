@@ -14,6 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /app
 COPY --from=builder /src/target/release/worker /app/worker
 COPY migrations /app/migrations
-ENV PAILY_DATABASE_DSN=postgres://paily:change-me@postgres:5432/paily
-ENV PAILY_DATABASE_JOBS_DSN=postgres://paily:change-me@postgres:5432/paily_jobs
+ENV PHLOGO_DATABASE_DSN=postgres://phlogo:change-me@postgres:5432/phlogo
+ENV PHLOGO_DATABASE_JOBS_DSN=postgres://phlogo:change-me@postgres:5432/phlogo_jobs
 ENTRYPOINT ["/app/worker"]

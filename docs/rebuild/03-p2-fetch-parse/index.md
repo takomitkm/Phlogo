@@ -9,11 +9,11 @@
 
 ## 1. 阶段目标 / Phase Goal
 
-把「抓取 → 解析 → 规范化 → 指纹 → 对账入库」这一整条闭环收编进 `core-worker`，替代 Phlogo 当前由**外部 `paily-fetch` 服务**通过 HTTP 回调 `POST /api/v1/fetch/results`（`internal/fetcher/handler.go`）把结果推回来的做法。
+把「抓取 → 解析 → 规范化 → 指纹 → 对账入库」这一整条闭环收编进 `gnosis-worker`，替代 Phlogo 当前由**外部 `paily-fetch` 服务**通过 HTTP 回调 `POST /api/v1/fetch/results`（`internal/fetcher/handler.go`）把结果推回来的做法。
 
 具体要达成的 4 点：
 
-1. fetch 由 `core-worker` 内的 **Fetch Worker** 用 **Reqwest** 直接抓取订阅 URL，并新增 **SSRF 防护**（Phlogo 现状完全没有这一层）。
+1. fetch 由 `gnosis-worker` 内的 **Fetch Worker** 用 **Reqwest** 直接抓取订阅 URL，并新增 **SSRF 防护**（Phlogo 现状完全没有这一层）。
 2. 订阅内容经 **VProxy Parser Adapter** 解析为自有的 `NormalizedNode`，**VProxy 的 Node 类型不得渗透到数据库层**。
 3. 用 `identity_hash` + `fingerprint_version` 计算节点身份，忠实移植 Phlogo `internal/node/upsert.go` 的 `nodeHash` / `nodeAuth` / `normalizeCredential`（**反复 percent-decode 的规范化必须保留**）。
 4. 用 **Fetch Run 历史**（`source_fetch_runs`）+ **Replace / Accumulate 对账** + **事务内孤儿清理** + **死源保护**，把结果写进 `nodes` / `node_sources`，全部关联清理在**同一个 DB 事务**内完成。
@@ -58,7 +58,7 @@
 
 | 阶段能力 | Phlogo 现状（Go） | Rust 目标 |
 |---|---|---|
-| 抓取 | 外部 `paily-fetch` 服务抓取，`internal/fetcher/handler.go` 仅接收结果 | `core-worker` Fetch Worker 用 Reqwest 抓取 |
+| 抓取 | 外部 `paily-fetch` 服务抓取，`internal/fetcher/handler.go` 仅接收结果 | `gnosis-worker` Fetch Worker 用 Reqwest 抓取 |
 | SSRF 防护 | **无**（抓取在外部服务） | `crates/fetch` 新增 `SsrfGuard`（net-new） |
 | 解析 | `internal/node/upsert.go` 用 `json.Unmarshal` 做朴素的 clash JSON 解析 | `crates/vproxy-adapter` 用 VProxy Parser → `domain::NormalizedNode` |
 | 指纹 | `nodeHash`/`nodeAuth`/`normalizeCredential`（sha256 前 16 字节） | `crates/domain` 同算法 + `fingerprint_version` |

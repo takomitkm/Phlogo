@@ -1,4 +1,4 @@
-# 阶段一 · P1 Core 骨架与数据层（Core Skeleton & Data Layer）
+# 阶段一 · P1 Gnosis 骨架与数据层（Gnosis Skeleton & Data Layer）
 
 > 本目录属于 `docs/rebuild/`，事实来源与页面模板见 `../CONVENTIONS.md`。
 > 本阶段只做「骨架 + 数据层 + Source/Node 基础 CRUD」，不实现抓取、测活、评分、订阅发布。
@@ -9,7 +9,7 @@
 把 `openpaily/paily-core`（Phlogo fork）的 Go 单体，在 Rust 侧立起**可编译、可启动、可迁移、可 CRUD** 的最小骨架：
 
 1. 建立 Cargo workspace，按方案 §13 划分 `apps/{api,worker}` 与 `crates/{domain,database,config,api-contract,...}`。
-2. 立 Axum + `tracing` + 配置加载（Figment，`PAILY_` 前缀 env 覆盖）的服务骨架，OpenAPI 仍为唯一契约。
+2. 立 Axum + `tracing` + 配置加载（Figment，`PHLOGO_` 前缀 env 覆盖）的服务骨架，OpenAPI 仍为唯一契约。
 3. 用 SQLx + PostgreSQL 写下初始 migration（方案 §5.1 + CONVENTIONS §2.3 / §2.6）。
 4. 实现 Source CRUD（按 `type+content` 去重）、Node CRUD 与 Node-Source 多对多关系（CONVENTIONS §2.9 / `internal/source/service.go` / `internal/node/upsert.go`）。
 
@@ -40,7 +40,7 @@
 
 | P1 交付物 | 对应 Phlogo（Go）代码 |
 |---|---|
-| workspace / 两个二进制 | `cmd/server/main.go`（单体装配） → 拆为 `apps/api` + `apps/worker`（CONVENTIONS §3 映射表） |
+| workspace / 两个二进制 | `cmd/server/main.go`（单体装配） → 拆为 `apps/curse` + `apps/worker`（CONVENTIONS §3 映射表） |
 | API 骨架 + 分层认证 | `cmd/server/main.go` 的 auth dispatch（L117-141）+ `internal/auth/{bearer,jwt,handler}.go` |
 | 初始 migration | `internal/db/model/{source,node}.go`（GORM 模型）+ `internal/migrate/migrate.go`（GORM AutoMigrate → SQLx migrations） |
 | Source CRUD | `internal/source/service.go`（`Create` 按 `type+content` 去重，`List/Get/Update/Delete/SetIgnoreDead`） |

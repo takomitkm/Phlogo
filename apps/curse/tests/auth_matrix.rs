@@ -1,5 +1,5 @@
 //! P0-01 unit tests: the route permission matrix itself.
-use api::auth::{auth_kind, AuthKind};
+use curse::auth::{auth_kind, AuthKind};
 
 #[test]
 fn login_is_public() {

@@ -1,4 +1,4 @@
-//! paily-core-rust API library: router, auth, handlers, state, telemetry.
+//! Phlogo Wish Gnosis API library: router, auth, handlers, state, telemetry.
 pub mod auth;
 pub mod handlers;
 pub mod proxy_protocol;

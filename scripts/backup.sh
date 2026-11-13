@@ -5,8 +5,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=runtime.sh
 source "$(dirname "$0")/runtime.sh"
-OUT="${1:-./backups/paily-$(date +%Y%m%d-%H%M%S).dump}"
+OUT="${1:-./backups/phlogo-$(date +%Y%m%d-%H%M%S).dump}"
 mkdir -p "$(dirname "$OUT")"
 runtime_compose -f deploy/compose.yaml exec -T postgres \
-  pg_dump -U paily -d paily -Fc > "$OUT"
+  pg_dump -U phlogo -d phlogo -Fc > "$OUT"
 echo "backup written: $OUT"

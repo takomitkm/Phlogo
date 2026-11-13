@@ -8,7 +8,7 @@
 - 确认 VProxy 的 **Parser / Fingerprint / Export** 模块能脱离 GUI、SQLite 数据层、桌面 Collector 单独编译。
 - 用一份示例 Clash YAML 跑通 `解析 → 节点模型 → 计算指纹` 的最小链路，作为后续 `vproxy-adapter` crate 的基线。
 - 记录 Cargo 传递依赖与许可证，确认其依赖面可控。
-- 明确：**禁止** 让 VProxy 的 `Node` 类型直接成为 Core 的 DB 类型；必须转换为自有 `NormalizedNode`（方案 §1.6 第 4 条、§3.1、§7.2）。
+- 明确：**禁止** 让 VProxy 的 `Node` 类型直接成为 Gnosis 的 DB 类型；必须转换为自有 `NormalizedNode`（方案 §1.6 第 4 条、§3.1、§7.2）。
 
 ### 范围 / Scope
 
@@ -106,7 +106,7 @@ fn main() -> anyhow::Result<()> {
     // (2) Fingerprint: 每个节点 -> 指纹串
     // TODO(verify-against-pinned-VProxy): 用 fingerprint 模块，例如：
     //   let fp = vproxy::fingerprint::node_hash(&node)?;
-    //   注意：仅把 VProxy 指纹作为「基线参考」，最终 Core 用自有 NormalizedNode + fingerprint_version。
+    //   注意：仅把 VProxy 指纹作为「基线参考」，最终 Gnosis 用自有 NormalizedNode + fingerprint_version。
     let fp = "<fingerprint-from-vproxy>";
     println!("fingerprint = {}", fp);
 
@@ -114,7 +114,7 @@ fn main() -> anyhow::Result<()> {
     // TODO(verify-against-pinned-VProxy): 用 export 模块，例如：
     //   let out = vproxy::export::to_clash(&nodes)?;
 
-    // 关键约束：VProxy 的 Node 类型 **不得** 直接落入 Core DB。
+    // 关键约束：VProxy 的 Node 类型 **不得** 直接落入 Gnosis DB。
     // 必须在此处 map 到自有 NormalizedNode（字段见方案 §7.2）。
     // let normalized: NormalizedNode = convert_to_normalized(&node);
     Ok(())
@@ -165,7 +165,7 @@ echo "exit=$?"   # 期望 0（或仅出现已审批的 allow 列表内许可证�
 
 - 必须能解析示例 Clash YAML 为节点模型并计算出指纹（`cargo build` 成功 + `cargo run` 输出指纹）。
 - `cargo tree` 输出与许可证审查结论已写入 `docs/THIRD_PARTY.md` 的 VProxy 章节。
-- 记录结论：**VProxy 的 `Node` 类型未被用作 Core DB 类型**；已规划到 `NormalizedNode` 的转换。
+- 记录结论：**VProxy 的 `Node` 类型未被用作 Gnosis DB 类型**；已规划到 `NormalizedNode` 的转换。
 
 ### 与 fork 源对照 / Mapping to the fork source
 > **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
@@ -196,4 +196,4 @@ echo "exit=$?"   # 期望 0（或仅出现已审批的 allow 列表内许可证�
 - **内部 API 漂移**：VProxy 具体 module/函数名以固定版本源码为准；本页 `TODO` 标注处必须回填真实签名，不能凭空假设。
 - **指纹语义不一致**：VProxy 指纹与 `nodeHash` 可能在某些协议字段（TLS/Reality、transport path、SNI）上有差异；必须建自有 golden fixtures（方案 §7.3），不能仅凭 VProxy 测试结果假定覆盖。
 - **传递依赖许可证**：即便 VProxy 是 MIT，其传递依赖可能含 Copyleft；需 `cargo deny` 全量扫描并在 `THIRD_PARTY.md` 记录。
-- **类型渗透**：务必守住「VProxy `Node` 不进 Core DB」红线，否则后续 `domain` / `database` crate 会被上游类型污染（方案 §1.6 第 4 条）。
+- **类型渗透**：务必守住「VProxy `Node` 不进 Gnosis DB」红线，否则后续 `domain` / `database` crate 会被上游类型污染（方案 §1.6 第 4 条）。

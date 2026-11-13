@@ -14,7 +14,7 @@ expr-lang 表达式引擎 + SQLite/PostgreSQL 双支持 + OpenAPI spec-first（o
 
 **当前事实**（Rust 重构后，见 `docs/rebuild/09-self-completed-gaps.md` 与 ACTION-LOG S05–S38）：
 - Go 源码已删除（commit `b7c75c4`），对照基准为 fork 根提交 `dda4e6f2`；
-- 单一 Rust 进程对：`apps/api`（Axum 管理面）+ `apps/worker`（抓取/测活/清理闭环）；
+- 单一 Rust 进程对：`apps/curse`（Axum 管理面）+ `apps/worker`（抓取/测活/清理闭环）；
 - 外部 Fetch/Checker 服务取消：worker 直连 PostgreSQL + MiaoSpeed WebSocket；
 - expr-lang 消灭：`crates/filter` 类型化 AST（白名单字段/运算符 + 参数化 SQL）；
 - PostgreSQL only（SQLx 0001–0009 迁移）；utoipa 契约 19 路径（commit `de57dcc`）。
@@ -29,14 +29,14 @@ expr-lang 表达式引擎 + SQLite/PostgreSQL 双支持 + OpenAPI spec-first（o
 
 | 评审点 | 状态 | 证据 |
 |---|---|---|
-| 「管理接口同时接受 ServiceBearer」 | **⚠️ 评审对本实现仍成立（收口前）**——P1-02 起 `require_admin_or_service`（`apps/api/src/auth.rs`）罩住整个 `/api/v1/*`，含 DELETE/PUT 管理写操作 | `auth.rs:45-66`；router.rs 单层 `middleware::from_fn_with_state(require_admin_or_service)` |
+| 「管理接口同时接受 ServiceBearer」 | **⚠️ 评审对本实现仍成立（收口前）**——P1-02 起 `require_admin_or_service`（`apps/curse/src/auth.rs`）罩住整个 `/api/v1/*`，含 DELETE/PUT 管理写操作 | `auth.rs:45-66`；router.rs 单层 `middleware::from_fn_with_state(require_admin_or_service)` |
 | 三层权限 Admin/Fetch/Checker | 部分：分层中间件接口已预留；但**本架构没有 checker HTTP 面**（MiaoSpeed WS，见 §6） | `auth.rs:1-2` 注释；worker 走 `checker-miaospeed` crate |
 | Fetch/Checker 独立密钥+轮换 | ❌ service_secret 单值，无轮换 | `crates/config/src/lib.rs` AuthConfig |
-| 登录速率限制/防爆破 | ❌ 登录端点 P7-02 才有；限流 layer 已写但**未挂载**（本轮 P0-02 修复） | `apps/api/src/rate_limit.rs` 存在、router 未引用 |
+| 登录速率限制/防爆破 | ❌ 登录端点 P7-02 才有；限流 layer 已写但**未挂载**（本轮 P0-02 修复） | `apps/curse/src/rate_limit.rs` 存在、router 未引用 |
 | JWT 过期/算法/刷新 | 部分：HS256 + `token_type=="access"` + 24h 过期 ✅（`auth.rs:26-43`）；refresh ❌（单管理员模型暂缓） |
 | NodeDetail 敏感字段暴露 | ✅ **优于上游**：上游 `GetNodes` 把含凭据的 `raw` 全量下发 checker（`dda4e6f2:internal/checker/handler.go`）；本实现的 API 面不返回 password/raw，节点 payload 经 `node_payloads` 加密层（B2 待办）才出网 | `handlers/node.rs` NodeView 无敏感字段；`CONVENTIONS.md` §2.4 |
 
-**P0-01 修复**：见 §4 Accepted Changes AC-1；修复前的权限矩阵见 `apps/api/src/auth.rs::auth_kind`（本轮新增）。
+**P0-01 修复**：见 §4 Accepted Changes AC-1；修复前的权限矩阵见 `apps/curse/src/auth.rs::auth_kind`（本轮新增）。
 
 ### 2.2 数据库可靠性（评审 §2，P0）
 
@@ -133,10 +133,10 @@ expr-lang 表达式引擎 + SQLite/PostgreSQL 双支持 + OpenAPI spec-first（o
 
 ### 2.8 架构（评审 §8）——已由既定架构决策取代
 
-评审建议「保留 Go、内部模块化、保留 Paily Fetch/Checker」。**裁定：不再讨论**（用户 2026-11-12）：
+评审建议「保留 Go、内部模块化、保留 Phlogo Fetch/Checker」。**裁定：不再讨论**（用户 2026-11-12）：
 - Go → Rust 全面重写已完成（Go 已删，`dda4e6f2` 为对照基准）；
-- Paily Fetch 取消 → worker fetch 闭环 + **net-new SSRF 防护**（`crates/fetch`，6 测试；上游无此安全面）；
-- Paily Checker 取消 → MiaoSpeed WS Adapter（`checker-miaospeed`，golden 签名与 Go `utils.SignRequest` **逐字节一致**）；
+- Phlogo Fetch 取消 → worker fetch 闭环 + **net-new SSRF 防护**（`crates/fetch`，6 测试；上游无此安全面）；
+- Phlogo Checker 取消 → MiaoSpeed WS Adapter（`checker-miaospeed`，golden 签名与 Go `utils.SignRequest` **逐字节一致**）；
 - 评审的内部模块化清单（Source/Node/Check/Scoring/Filter/Distribution/Persistence）与本实现的 crate 切分**一一对应**——fetch 闭环接线（S37）零接口改动即验证了边界。
 
 ---
@@ -183,7 +183,7 @@ expr-lang 表达式引擎 + SQLite/PostgreSQL 双支持 + OpenAPI spec-first（o
 - **不动**：`/sub/{token}`（订阅 token 自证）、MiaoSpeed WS（worker 侧独立协议认证）、worker↔DB 直连。
 
 ### AC-2 登录限流（P0-02）
-- 现有 `rate_limit.rs` 固定窗口 layer 挂到 `POST /api/v1/auth/login`（独立 `RateLimitState`，`PAILY_LOGIN_RATE_LIMIT_PER_MIN` 默认 10）。
+- 现有 `rate_limit.rs` 固定窗口 layer 挂到 `POST /api/v1/auth/login`（独立 `RateLimitState`，`PHLOGO_LOGIN_RATE_LIMIT_PER_MIN` 默认 10）。
 - **IP 来源 = peer addr（`ConnectInfo`），不读 `X-Forwarded-For`**（防伪造）；caddy 反代下所有请求共享一个桶（保守方向），边界信任配置留 P1。
 - **不做账户维度锁定**：单管理员模型下账户锁定 = 自我 DoS（评审建议的合理组合在单账户场景即纯 IP 限流）。
 - `main.rs` 改 `into_make_service_with_connect_info::<SocketAddr>()` 使真实 peer 可用。
@@ -209,7 +209,7 @@ ErrorResponse/分页/ConfigMap 类型化/请求校验/兼容策略/索引/历史
 ## 6. Rejected Recommendations 已被新架构取代（不再讨论）
 
 1. 「保留 Go、不要全部重写成 Rust」——已重写并删除 Go（对照基准 `dda4e6f2`）。
-2. 「保留 Paily Fetch / Paily Checker 外部服务」——已取消（worker 闭环 + MiaoSpeed WS）。
+2. 「保留 Phlogo Fetch / Phlogo Checker 外部服务」——已取消（worker 闭环 + MiaoSpeed WS）。
 3. 「Checker 任务租约/心跳/分批领取」——Apalis PG backend 原生提供；唯一遗留可取项「增量测活」入 P1。
 4. 「golangci-lint / govulncheck」——等价物 clippy -D warnings + cargo audit（B4 离线匹配器 4 命中甄别）。
 5. 「SQLite 支持不完整」——PostgreSQL only，不适用。
@@ -218,15 +218,15 @@ ErrorResponse/分页/ConfigMap 类型化/请求校验/兼容策略/索引/历史
 
 ## 7. 执行记录（P0-01 / P0-02 已完成，2026-11-12）
 
-**P0-01 权限矩阵收紧**（`apps/api/src/auth.rs` + `router.rs`）：
+**P0-01 权限矩阵收紧**（`apps/curse/src/auth.rs` + `router.rs`）：
 - `auth_kind(method, path)`：代码化矩阵；**路径归一化关键实现细节**——nest 内中间件收到的是剥掉 `/api/v1` 前缀的相对路径（smoke 实证：无凭据 GET /stats 曾直接 200 吐数据），`strip_prefix` 归一后按业务段匹配；
 - **fail-closed**：未匹配一律 AdminOnly；403=ServiceBearer 打管理写（区别于 401 无凭据）；
 - `require_api_auth` 替换整罩式 `require_admin_or_service`（后者保留供旧调用）；
 - `login` 挂到 nest **外**（root `/api/v1/auth/login`），带独立限流 route_layer——矩阵 middleware 不包它。
 
-**P0-02 登录限流**（`apps/api/src/rate_limit.rs` + router）：
+**P0-02 登录限流**（`apps/curse/src/rate_limit.rs` + router）：
 - **桶键改 peer IP**（剥端口，防换连接绕过；原 SocketAddr 键每次连接换桶——实测发现并修复）；XFF 从不读取；
-- 挂载：`/api/v1/auth/login` 独立 `route_layer`（阈值 `PAILY_LOGIN_RATE_LIMIT_PER_MIN` 默认 10/min）；
+- 挂载：`/api/v1/auth/login` 独立 `route_layer`（阈值 `PHLOGO_LOGIN_RATE_LIMIT_PER_MIN` 默认 10/min）；
 - `main.rs` 改 `into_make_service_with_connect_info::<SocketAddr>()` 供真实 peer。
 
 **验证**：
@@ -247,8 +247,8 @@ ErrorResponse/分页/ConfigMap 类型化/请求校验/兼容策略/索引/历史
 
 | # | 事项 | 裁定 | 落地状态 |
 |---|---|---|---|
-| A1 | 反代下限流语义 | **PROXY protocol**（选项③，用户裁定 2026-11-13） | ✅ **已实现**（s42）：`apps/api/src/proxy_protocol.rs`（v1 解析 + 自己的 accept 循环 + hyper 驱动）；Caddy `transport http { proxy_protocol v1 }`；`api` 不再发布宿主端口；`expect_proxy` 强制要求该头 |
-| A2 | 凭据加密方案 | **XChaCha20-Poly1305 + `PAILY_PAYLOAD_KEY`** 方向确认（量子面见 §9 说明） | 待实现（B2） |
+| A1 | 反代下限流语义 | **PROXY protocol**（选项③，用户裁定 2026-11-13） | ✅ **已实现**（s42）：`apps/curse/src/proxy_protocol.rs`（v1 解析 + 自己的 accept 循环 + hyper 驱动）；Caddy `transport http { proxy_protocol v1 }`；`api` 不再发布宿主端口；`expect_proxy` 强制要求该头 |
+| A2 | 凭据加密方案 | **XChaCha20-Poly1305 + `PHLOGO_PAYLOAD_KEY`** 方向确认（量子面见 §9 说明） | 待实现（B2） |
 | A3 | 高级搜索形态 | **① 前端产 Filter-AST JSON**（不做 expr 兼容层） | 待实现（B6，见 11 §2） |
 | A4 | 评分 speed 混合口径 | **保持现状**（按上游 Go 代码基线混合；已记录于 p4-03 决策 1） | 已定稿，无需改动 |
 | A5 | 测活历史保留 | **明细留 14 天**；**保留天数必须可配**（走 `configs`，禁止硬编码） | 待实现（P1：接 `check_run_history_days` 默认值改 14；注意该键当前**无消费者**） |
@@ -267,7 +267,7 @@ ErrorResponse/分页/ConfigMap 类型化/请求校验/兼容策略/索引/历史
 | 方案 | 做法 | 优点 | 缺点 | 工作量 |
 |---|---|---|---|---|
 | ① 现状 | 桶键=peer IP；反代后即全局桶 | 零改动、绝不可伪造 | 多用户互相挤（10/min 总量） | 0 |
-| ② 可信代理 CIDR | `PAILY_TRUST_PROXY_CIDRS` 配置；只有来自该网段的请求才采纳 `X-Forwarded-For` | 保留 Caddy；标准做法（nginx/HAProxy/traefik 同） | 配置错=可伪造；需保证 API 端口不对外 | 半天 |
+| ② 可信代理 CIDR | `PHLOGO_TRUST_PROXY_CIDRS` 配置；只有来自该网段的请求才采纳 `X-Forwarded-For` | 保留 Caddy；标准做法（nginx/HAProxy/traefik 同） | 配置错=可伪造；需保证 API 端口不对外 | 半天 |
 | ③ PROXY protocol | Caddy `listener_wrappers { proxy_protocol }`；API 直接拿真实 TCP peer | **无需信任任何头**（地址由内核给出）；最安全 | 需 Caddy 与 API 都开；直连 API 必须被封 | 半天~1天 |
 | ④ 边缘限流 | Caddy 装 `caddy-ratelimit` 插件，在入口按真实 IP 限 | API 完全不关心 IP | 需自编译 Caddy（xcaddy）；多一处配置面 | 1天 |
 | ⑤ 去掉反代 | API 直接暴露 TLS（axum+rustls） | peer 即真实 | 丢掉 http→https 跳转/静态资源/单端口便利 | 半天 |
@@ -280,14 +280,14 @@ ErrorResponse/分页/ConfigMap 类型化/请求校验/兼容策略/索引/历史
 
 | 组件 | 实现 |
 |---|---|
-| 解析 | `apps/api/src/proxy_protocol.rs::parse_v1` — `PROXY TCP4/TCP6` 提取真实源 IP:port；`PROXY UNKNOWN` 无地址；非 PROXY 前缀不误判。单测 5 项 |
+| 解析 | `apps/curse/src/proxy_protocol.rs::parse_v1` — `PROXY TCP4/TCP6` 提取真实源 IP:port；`PROXY UNKNOWN` 无地址；非 PROXY 前缀不误判。单测 5 项 |
 | 服务端 | axum 0.7 的 `axum::serve` **没有**消费前置头的钩子（内部直接建连交给 hyper），所以本模块自带 accept 循环 + `hyper::server::conn::http1`（照 axum `serve.rs` 的写法）；非 PROXY 连接的首批字节用 `PrefixedStream` **回放**给 hyper，不会丢请求 |
 | 真实 IP 落点 | `ConnectInfo<SocketAddr>` 注入（与 axum 原生路径同构）→ `proxy_protocol::peer_addr/peer_ip` 统一取用 |
 | 限流桶键 | `rate_limit.rs` 改用 `peer_ip()` |
 | 代理侧 | `deploy/Caddyfile` 三个 `reverse_proxy` 各加 `transport http { proxy_protocol v1 }`（**caddy validate 实测通过**） |
-| 部署面 | `deploy/compose.yaml`：`api` **取消宿主端口**（只 `expose`），`PAILY_SERVER_PROXY_PROTOCOL=1` + `PAILY_SERVER_EXPECT_PROXY=1`（缺头即拒） |
-| 配置 | `PAILY_SERVER_PROXY_PROTOCOL` / `PAILY_SERVER_EXPECT_PROXY`（`crates/config`，默认关，向后兼容） |
-| 测试 | `apps/api/tests/proxy_protocol.rs`：带 PROXY 头→200；无头（不强制）→200；无头（强制）→拒绝；`PROXY UNKNOWN`→200 不报错；头被正确消费（否则 hyper 会把 `PROXY TCP4 …` 当请求行→400） |
+| 部署面 | `deploy/compose.yaml`：`api` **取消宿主端口**（只 `expose`），`PHLOGO_SERVER_PROXY_PROTOCOL=1` + `PHLOGO_SERVER_EXPECT_PROXY=1`（缺头即拒） |
+| 配置 | `PHLOGO_SERVER_PROXY_PROTOCOL` / `PHLOGO_SERVER_EXPECT_PROXY`（`crates/config`，默认关，向后兼容） |
+| 测试 | `apps/curse/tests/proxy_protocol.rs`：带 PROXY 头→200；无头（不强制）→200；无头（强制）→拒绝；`PROXY UNKNOWN`→200 不报错；头被正确消费（否则 hyper 会把 `PROXY TCP4 …` 当请求行→400） |
 
 **顺带修掉的真 bug（重要）**：`rate_limit.rs` 原本读**裸 `SocketAddr`** 扩展，而 axum 插入的是 `ConnectInfo<SocketAddr>` → **永远取不到**，桶键恒为 `0.0.0.0`（全局一个桶）。也就是说"按 IP 分桶"此前**没有真正生效**。现已改为经 `peer_ip()` 读取 `ConnectInfo`。
 

@@ -21,7 +21,7 @@
   - 限流中间件（如 `tower-governor` 或自研 `tower` layer），按 route/identity 维度配置。
   - SSRF 守卫（已在 P2-01 实现，本页负责在「生产化」层把它纳入验收与默认开启，不重复实现）。
   - `deny.toml`（`cargo-deny` 配置）、CI 用的 `cargo audit` 步骤、SBOM 生成（`cargo cyclonedx` / `cargo sbom`）。
-- **修改**：`apps/api/src/main.rs` 路由装配（从单进程 `main.go` dispatch 翻译为 Axum middleware 嵌套）。
+- **修改**：`apps/curse/src/main.rs` 路由装配（从单进程 `main.go` dispatch 翻译为 Axum middleware 嵌套）。
 - **不做**：多租户 / 复杂 RBAC / 公开用户注册（方案 §17）；Mihomo 常驻转发服务（§2.2）；自由执行筛选脚本（§17）。
 
 ### 前置 / Prerequisites
@@ -40,7 +40,7 @@ Phlogo `main.go` 的 dispatch（公开 / `/check/*` / `/fetch/*` / `POST /source
 翻译为 Axum 的 route-level 嵌套 layer：
 
 ```rust
-// apps/api/src/main.rs (示意：对应 main.go 的 switch dispatch)
+// apps/curse/src/main.rs (示意：对应 main.go 的 switch dispatch)
 use axum::routing::{get, post};
 use axum::Router;
 
@@ -139,17 +139,17 @@ unknown-git = "warn"
 # SBOM（CycloneDX JSON）
 cargo cyclonedx --format json -o deploy/sbom.cdx.json
 # 二进制哈希（发布产物）
-sha256sum target/release/core-api target/release/core-worker
+sha256sum target/release/gnosis-api target/release/gnosis-worker
 ```
 
 ### 验证结果 / Verified Results（已实测，2026-11-11）
 
 **落地**：
-- **订阅路由暴露（验收 #3 的实现）**：`apps/api/src/handlers/subscription.rs`——`GET /sub/{token}.{yaml|json|base64}`。
+- **订阅路由暴露（验收 #3 的实现）**：`apps/curse/src/handlers/subscription.rs`——`GET /sub/{token}.{yaml|json|base64}`。
   认证链：token → `sha256(plain||pepper)` → `subscription_tokens` JOIN `subscription_profiles` 查 `status='active' AND enabled`——
   **未知/撤销 token 在任何输出前 401**；候选集=Linked 节点按评分走 p5-02 `select_with_preset`；`max_distribute` 从 configs 读；
   命名走 P5-03 白名单模板；三格式渲染（YAML proxies / JSON / Base64）。
-- **限流层**（`apps/api/src/rate_limit.rs`）：自研固定窗口（60s）per-IP Axum layer，`429` 超限；阈值 `PAILY_SERVER_RATE_LIMIT_PER_MIN`（默认 300），不硬编码进 CI。
+- **限流层**（`apps/curse/src/rate_limit.rs`）：自研固定窗口（60s）per-IP Axum layer，`429` 超限；阈值 `PHLOGO_SERVER_RATE_LIMIT_PER_MIN`（默认 300），不硬编码进 CI。
 - **/metrics 边界控制**：Caddyfile 显式 `respond /metrics 403`（拓扑/规模不出口，§16.10）—— scrape 走 compose 内网。
 - **supply-chain**：`scripts/supply-chain.sh`（`cargo deny check licenses bans` → `cargo audit` → SBOM（cyclonedx 可选）→ release 二进制 sha256）；`deny.toml` P0-05 版本复用（AGPL/GPL 不默认放行）。
 - **认证分层**：P1-02 `require_admin_or_service` 覆盖全部 `/api/v1/*`（验收 #1 的 sources/nodes/config 401 已在 P1-02 冒烟断言）；checker/fetch 细分层随对应路由暴露时挂载（能力已有，见 P7 收口说明）。
@@ -229,7 +229,7 @@ sha256sum target/release/core-api target/release/core-worker
 - **SSRF gate**：`cargo test -p fetch ssrf`（P2-01）作为常规单元测试 job，每次 push 必跑。
 - **supply-chain gate**：`cargo deny check licenses` 与 `cargo audit`（可加 `--deny warnings`）在
   merge/release 前必须零异常退出；`deny.toml` 的 license 白名单变更需人工 review（AGPL/GPL 尤其）。
-- **SBOM 产物**：release job 生成 `deploy/sbom.cdx.json` 并归档，同时记录 `core-api`/`core-worker` 二进制 SHA-256；
+- **SBOM 产物**：release job 生成 `deploy/sbom.cdx.json` 并归档，同时记录 `gnosis-api`/`gnosis-worker` 二进制 SHA-256；
   可与 8-01 的镜像漏洞扫描（trivy/docker scout）合并为「supply-chain」job。
 
 ### 风险 / Risks

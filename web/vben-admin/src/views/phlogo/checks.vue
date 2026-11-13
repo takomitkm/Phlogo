@@ -7,7 +7,7 @@ import { onMounted, ref } from 'vue';
 
 import { ElMessage } from 'element-plus';
 
-import { getCheckLogs, getCheckers, type CheckLogRow } from '#/api/paily';
+import { getCheckLogs, getCheckers, type CheckLogRow } from '#/api/phlogo';
 
 const tags = ref<string[]>([]);
 const rows = ref<CheckLogRow[]>([]);

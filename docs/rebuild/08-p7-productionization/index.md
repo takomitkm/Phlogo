@@ -10,7 +10,7 @@
 
 ## 1. 阶段目标（Phase Goal）
 
-把单体重写后的 Rust 多进程服务（`core-api` + `core-worker` + `postgres` + `miaospeed` + `web`）
+把单体重写后的 Rust 多进程服务（`gnosis-api` + `gnosis-worker` + `postgres` + `miaospeed` + `web`）
 从「本地能跑」推进到「可运维投产」：
 
 - 用 **Docker Compose** 描述整套运行时拓扑，替换现有单二进制 `Dockerfile` 镜像。
@@ -41,7 +41,7 @@
    数据库（来源、节点、`node_sources` 多对多关系、测活历史、评分快照）与**进行中的 Apalis 任务状态**
    保持一致：已入队的 Job 可被重新认领并继续，未完成的 fetch/check 不丢、不重复产生节点关联。
    - 机器校验：`docker compose down -v` 之外的数据落 `postgres` 命名卷；重起后
-     `docker compose exec postgres psql -U paily -d paily -c "SELECT count(*) FROM nodes;"` 行数不变；
+     `docker compose exec postgres psql -U phlogo -d phlogo -c "SELECT count(*) FROM nodes;"` 行数不变；
      `apalis` 内部任务表无孤儿 `Pending`/`Running` 卡死（重起后 worker 认领并推进）。
 
 2. **日志无秘密（No secrets in logs）** — 对 `check/nodes`、`check/results`、`fetch/*` 等携带秘密的端点
@@ -65,7 +65,7 @@
 | 现状（Phlogo） | P7 目标（Rust 多进程） |
 |---|---|
 | `Dockerfile` 单二进制 `paily-core`，`EXPOSE 21380`，SQLite 默认 `./data/data.db` | 多阶段 `api`/`worker` 镜像（Rust）；统一 PostgreSQL；compose 编排 `postgres`/`api`/`worker`/`miaospeed`/`web`(+`apalis-board`) |
-| `cmd/server/main.go` 单进程装配全部 service + 起 goroutine（`cleanup.Start`、`aliveCache.TriggerRebuild`） | `apps/api/src/main.rs` 仅 API；`apps/worker/src/main.rs` 承担 fetch/check/score/cleanup Job（Apalis PG backend） |
+| `cmd/server/main.go` 单进程装配全部 service + 起 goroutine（`cleanup.Start`、`aliveCache.TriggerRebuild`） | `apps/curse/src/main.rs` 仅 API；`apps/worker/src/main.rs` 承担 fetch/check/score/cleanup Job（Apalis PG backend） |
 | 无备份流程、数据在容器内 SQLite | `pg_dump` / 恢复演练；Postgres 数据命名卷持久化 |
 | `internal/checker/handler.go` 用 zerolog；`main.go` 用 zerolog.ConsoleWriter | `tracing` 结构化日志，secret 字段经 redaction layer |
 | 认证分层在 `main.go` 中间件 dispatch（service bearer/admin JWT/checker secret） | 同分层落到 Axum middleware，并叠加限流；checker secret 仅用于 `/api/v1/check/*` |

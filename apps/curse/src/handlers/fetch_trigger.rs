@@ -11,7 +11,7 @@ use crate::state::AppState;
 
 /// POST /api/v1/fetch/trigger — enqueue one FetchJob per active source.
 pub async fn trigger(State(st): State<AppState>) -> Response {
-    let jobs_dsn = std::env::var("PAILY_DATABASE_JOBS_DSN").unwrap_or_default();
+    let jobs_dsn = std::env::var("PHLOGO_DATABASE_JOBS_DSN").unwrap_or_default();
     if jobs_dsn.is_empty() {
         return (StatusCode::SERVICE_UNAVAILABLE, "jobs dsn not configured").into_response();
     }

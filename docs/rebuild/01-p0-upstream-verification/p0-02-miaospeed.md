@@ -8,10 +8,10 @@
 
 ### 目标 / Goal
 
-- 固定并**可复现地构建** MiaoSpeed Go 二进制（独立进程，不被 Core 链接）。
+- 固定并**可复现地构建** MiaoSpeed Go 二进制（独立进程，不被 Gnosis 链接）。
 - 用最小 Rust WebSocket 客户端完成：连接 → 认证（`Challenge` 签名）→ 提交节点 → 读取结果。
 - **冻结**协议：认证算法、消息 schema、Vendor/Node Payload、Matrix 名称、结果帧与单位、错误行为、版本兼容策略。
-- 明确：**Core 不得硬编码未经验证的 Matrix 名称**；所有协议细节以固定版本源码为准（方案 §8.1 末句）。
+- 明确：**Gnosis 不得硬编码未经验证的 Matrix 名称**；所有协议细节以固定版本源码为准（方案 §8.1 末句）。
 
 ### 范围 / Scope
 
@@ -238,7 +238,7 @@ panel 回 `ReverseAck{Type:"ack",Protocol,Sign=hashMiaoSpeed(token,hello.Sign),.
 
 | Phlogo 现状（Go） | 重构目标（Rust） | 本页动作 |
 |---|---|---|
-| `internal/checker/handler.go`：`POST /api/v1/check/nodes`（拉全量给 checker）、`POST /api/v1/check/results`（`CheckResultsRequest{results:[]}`） | Core Worker 经 MiaoSpeed **WebSocket Adapter** 测活，业务层只依赖 `Checker` trait（`submit`/`collect`/`status`，方案 §8） | 用 WS 客户端替代 HTTP 回调；结果靠 `ProxyInfo.Name` 映射回 `node_id` |
+| `internal/checker/handler.go`：`POST /api/v1/check/nodes`（拉全量给 checker）、`POST /api/v1/check/results`（`CheckResultsRequest{results:[]}`） | Gnosis Worker 经 MiaoSpeed **WebSocket Adapter** 测活，业务层只依赖 `Checker` trait（`submit`/`collect`/`status`，方案 §8） | 用 WS 客户端替代 HTTP 回调；结果靠 `ProxyInfo.Name` 映射回 `node_id` |
 | `checker_runs` + per-tag mutex 串行化 + 四阶段 | Apalis Check Job（P3）+ WS Adapter 结果映射 | 本页只验证「能拿到结果」，四阶段在 P3 重写 |
 | `handler.go` `initial.latency_ms`、`deep.{avg_latency_ms,jitter_ms,speed_kbps,region,streaming,metadata}` | `node_check_results`/`node_status`/`node_scores`（方案 §5.1） | 结果 `InvokeDuration`(ms)、`Matrices[].Payload`(见 D.7) 回填；单位/空值 P3 校准 |
 

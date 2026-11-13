@@ -38,7 +38,7 @@ profile = "default"
 [workspace]
 resolver = "2"
 members = [
-    "apps/api",
+    "apps/curse",
     "apps/worker",
     "crates/domain",
     "crates/database",
@@ -84,7 +84,7 @@ apalis       = { version = "0.7", features = ["postgres"] }   # P3 启用，P1 �
 
 ```powershell
 # 在仓库根（与 Cargo.toml 同级）执行
-cargo new apps/api --bin
+cargo new apps/curse --bin
 cargo new apps/worker --bin
 cargo new crates/domain --lib
 cargo new crates/database --lib
@@ -92,7 +92,7 @@ cargo new crates/config --lib
 cargo new crates/api-contract --lib
 ```
 
-**4. 各 crate 的 `Cargo.toml` 引用 workspace 依赖。** 例如 `apps/api/Cargo.toml`：
+**4. 各 crate 的 `Cargo.toml` 引用 workspace 依赖。** 例如 `apps/curse/Cargo.toml`：
 
 ```toml
 [package]
@@ -114,7 +114,7 @@ api-contract        = { path = "../crates/api-contract" }
 
 **5. 各 crate 写入最小可编译内容**，让 `cargo build --workspace --all-targets` 通过：
 
-- `apps/api/src/main.rs`：一个 `fn main() {}`（p1-02 再填充 Axum）。
+- `apps/curse/src/main.rs`：一个 `fn main() {}`（p1-02 再填充 Axum）。
 - `crates/*/src/lib.rs`：一个 `//! 占位文档` 注释 + `pub mod prelude {}` 或空。
 
 **6. 统一 `.cargo/config.toml`（可选，便于镜像/离线）：**
@@ -131,10 +131,10 @@ api-contract        = { path = "../crates/api-contract" }
 
 **落地结构（仓库根 workspace，遵循 §13）**：
 ```
-Cargo.toml (workspace, resolver=2; members: apps/api apps/worker crates/{domain,database,config,api-contract})
+Cargo.toml (workspace, resolver=2; members: apps/curse apps/worker crates/{domain,database,config,api-contract})
 rust-toolchain.toml (channel=stable, components=[rustfmt,clippy])
 .gitignore (target/ 等)
-apps/api|worker/{Cargo.toml,src/main.rs}     # 占位 fn main()
+apps/curse|worker/{Cargo.toml,src/main.rs}     # 占位 fn main()
 crates/domain|database|config|api-contract/{Cargo.toml,src/lib.rs}
 ```
 > 配置 crate 目录名 `crates/config`，包名 `app-config`（避免与生态 `config` 冲突），依赖键 `app-config`。
@@ -167,10 +167,10 @@ crates/domain|database|config|api-contract/{Cargo.toml,src/lib.rs}
 
 | Rust 交付物 | Phlogo（Go）对应 | 说明 |
 |---|---|---|
-| `apps/api` + `apps/worker` | `cmd/server/main.go`（单体） | 拆分 `cmd/server/main.go` L39-157 的单进程装配为 api/worker 两二进制（CONVENTIONS §3 映射表第 1 行） |
+| `apps/curse` + `apps/worker` | `cmd/server/main.go`（单体） | 拆分 `cmd/server/main.go` L39-157 的单进程装配为 api/worker 两二进制（CONVENTIONS §3 映射表第 1 行） |
 | `crates/api-contract` | `internal/api/generated/server.gen.go` + `api/openapi/spec.yaml` | oapi-codegen → utoipa（CONVENTIONS §2.1 技术栈表、§2.10 API 面） |
 | `crates/database` | `internal/db/**` + `internal/db/model/**` | GORM → SQLx（CONVENTIONS §2.1、§3 第 4 行） |
-| `crates/config` | `internal/config/**` + `config.example.yaml` | Viper（`PAILY_` 前缀）→ Figment（CONVENTIONS §2.1、§2.6） |
+| `crates/config` | `internal/config/**` + `config.example.yaml` | Viper（`PHLOGO_` 前缀）→ Figment（CONVENTIONS §2.1、§2.6） |
 | `crates/domain` | `internal/source/**`、`internal/node/**`、`internal/scoring/**` 等领域实体 | 业务实体与领域服务（CONVENTIONS §3 第 5-11 行） |
 
 ### CI 提示 / CI notes
@@ -185,7 +185,7 @@ crates/domain|database|config|api-contract/{Cargo.toml,src/lib.rs}
 
 ### 风险 / Risks
 
-- **license 一致性**：`workspace.package.license = "AGPL-3.0"` 须与 Phlogo 的 AGPL-3.0 一致（CONVENTIONS §2.11）。任何新增第三方 crate 都需经 `cargo deny` 复核许可证兼容性（MiaoSpeed GPL / VProxy MIT / Mihomo GPL 不得链接进 Core，仅进程隔离）。
+- **license 一致性**：`workspace.package.license = "AGPL-3.0"` 须与 Phlogo 的 AGPL-3.0 一致（CONVENTIONS §2.11）。任何新增第三方 crate 都需经 `cargo deny` 复核许可证兼容性（MiaoSpeed GPL / VProxy MIT / Mihomo GPL 不得链接进 Gnosis，仅进程隔离）。
 - **edition 漂移**：所有 crate 必须继承 `workspace.package.edition`，禁止个别 crate 写死 `edition = "2024"` 之类造成不一致。
 - **rust-toolchain 与 CI 镜像不一致**：CI 镜像若未预装对应 channel，需在 CI 中 `rustup toolchain install` 或让 `rust-toolchain.toml` 自动触发安装。
 - **未验证依赖（`apalis`）**：P1 仅占位声明；在 P0 完成 Apalis PG backend 验证（CONVENTIONS §4 风险之一）前，不要让它进入真实编译路径。

@@ -23,7 +23,7 @@
 - 已安装 `sqlx-cli`（任选其一）：
   - `cargo install sqlx-cli --features postgres --no-default-features`（或 `cargo install sqlx-cli --features native-tls,postgres`）。
   - 或用 `cargo sqlx` 通过 `cargo install cargo-sqlx`（别名相同）。
-- 本地或 CI 有可达的 PostgreSQL（`DATABASE_URL` 形如 `postgres://paily:change-me@localhost:5432/paily`）。CI 用容器或 CI 托管 Postgres。
+- 本地或 CI 有可达的 PostgreSQL（`DATABASE_URL` 形如 `postgres://phlogo:change-me@localhost:5432/phlogo`）。CI 用容器或 CI 托管 Postgres。
 
 ### 步骤 / Steps
 
@@ -37,7 +37,7 @@ sqlx = { workspace = true }   # 已含 runtime-tokio + postgres
 
 ```dotenv
 # .env (本地；不要提交真实密钥)
-DATABASE_URL=postgres://paily:change-me@localhost:5432/paily
+DATABASE_URL=postgres://phlogo:change-me@localhost:5432/phlogo
 ```
 
 > `.env.example` 提交仓库，`DATABASE_URL` 由 CI/部署注入。
@@ -190,7 +190,7 @@ pub async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
 
 ```powershell
 # 在仓库根，DATABASE_URL 指向任一可达 Postgres（含本地）
-$env:DATABASE_URL = "postgres://paily:change-me@localhost:5432/paily"
+$env:DATABASE_URL = "postgres://phlogo:change-me@localhost:5432/phlogo"
 cargo sqlx prepare            # 生成/更新 sqlx-data.json
 cargo sqlx prepare --check    # CI：校验 sqlx-data.json 是否最新
 ```
@@ -204,7 +204,7 @@ cargo sqlx prepare --check    # CI：校验 sqlx-data.json 是否最新
 ```
 initdb -D C:\Users\YiZhidi\pgdata -U postgres --auth=trust -E UTF8 --locale=C
 # 起库用 Start-Process postgres.exe（避免 pg_ctl start 在管道下挂起）；建 role/db：
-CREATE ROLE paily LOGIN PASSWORD 'change-me'; CREATE DATABASE paily OWNER paily;
+CREATE ROLE phlogo LOGIN PASSWORD 'change-me'; CREATE DATABASE phlogo OWNER phlogo;
 cargo run -p database --example migrate     # 应用 migrate! 内嵌迁移
 ```
 实测输出：

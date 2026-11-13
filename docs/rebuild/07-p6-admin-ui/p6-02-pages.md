@@ -32,8 +32,8 @@
 ### 前置 / Prerequisites
 
 1. 已完成 [p6-01-vben-scaffold.md](p6-01-vben-scaffold.md)：`src/api/generated/` 的 client 可用，`request.ts` 已注入 JWT。
-2. Rust `core-api` 业务就绪（P1–P5），27 路径可返回真实数据；本步骤的手动清单需一个真实后端才能逐项验证。
-3. 管理员凭据（`PAILY_AUTH_ADMIN_PASSWORD`，见 `docs/configuration-and-api.md`）用于登录冒烟。
+2. Rust `gnosis-api` 业务就绪（P1–P5），27 路径可返回真实数据；本步骤的手动清单需一个真实后端才能逐项验证。
+3. 管理员凭据（`PHLOGO_AUTH_ADMIN_PASSWORD`，见 `docs/configuration-and-api.md`）用于登录冒烟。
 
 ### 步骤 / Steps
 
@@ -139,14 +139,14 @@
 **落地范围（按契约现实收敛，写进文档）**：规格 7 页中多数消费的端点（stats/checkers/logs/filter-preview/format-configs）
 在 Rust API 尚未实现（规格自身标注的「契约缺口」）。本步交付**三个完全可用页面** + 支撑端点，其余随契约扩展在 P7 补页：
 
-- **后端新端点**（`apps/api/src/handlers/config.rs` + 路由）：`GET /api/v1/config`（全量 KV 读）、
+- **后端新端点**（`apps/curse/src/handlers/config.rs` + 路由）：`GET /api/v1/config`（全量 KV 读）、
   `PUT /api/v1/config`（`{values:{k:v}}` 批量 upsert，事务内）——Scoring 页数据源；`AppState` 增 `pool()` 访问器。
-- **前端三页**（`web/vben-admin/src/views/paily/`）：
+- **前端三页**（`web/vben-admin/src/views/phlogo/`）：
   - `sources.vue`：列表 + 创建（**去重语义分支提示**：201=created / 200=already existed）+ 删除 + ignore-dead。
   - `nodes.vue`：列表 + 删除。
   - `scoring.vue`：`score_*`/`grade_*`/`max_distribute` 键值编辑（读 `ConfigGet`、批量 `ConfigUpdate`）。
-  - `src/api/paily.ts`：**自含** typed API 层（fetch + bearer；不依赖 vben 原生 request 链路）；
-  - `src/router/routes/modules/paily.ts`：Paily 菜单组（Sources/Nodes/Scoring）。
+  - `src/api/phlogo.ts`：**自含** typed API 层（fetch + bearer；不依赖 vben 原生 request 链路）；
+  - `src/router/routes/modules/phlogo.ts`：Phlogo 菜单组（Sources/Nodes/Scoring）。
 - 文件在仓库存于 `web/vben-admin/src/`（自研层）；构建部署到校机固定 checkout。
 
 **实测（校机，PG 18.6 + node 24.22.2/pnpm 10.33.2）**：
@@ -156,8 +156,8 @@
 | `pnpm run build:ele`（含三页面+路由） | **0**（11/11 tasks，dist.zip 1091908 bytes） |
 
 **关键踩坑（写进文档防复发）**：首次部署**覆盖了 vben 原生 `src/api/request.ts`**——登录链路
-`src/api/core/auth.ts` 依赖其 `requestClient/baseRequestClient` 导出，构建报 MISSING_EXPORT。
-修复：从本地 pristine v5.7.0 解压目录恢复原生 request.ts，自研封装独立为 `paily.ts`（自含 fetch + bearer）。
+`src/api/gnosis/auth.ts` 依赖其 `requestClient/baseRequestClient` 导出，构建报 MISSING_EXPORT。
+修复：从本地 pristine v5.7.0 解压目录恢复原生 request.ts，自研封装独立为 `phlogo.ts`（自含 fetch + bearer）。
 **教训：向第三方 monorepo 注入文件前必须先查既有同名导出的消费方。**
 
 **契约缺口升级单（规格 §契约缺口逐条确认仍成立）**：stats/checkers/logs/filter-preview/format-configs、
@@ -175,7 +175,7 @@
 | A2 | `pnpm build` | 退出码 `0` |
 | A3 | `pnpm typecheck`（`vue-tsc --noEmit`） | 退出码 `0` |
 
-**手动清单（需真实 `core-api`，逐项打勾）**：
+**手动清单（需真实 `gnosis-api`，逐项打勾）**：
 
 1. Dashboard：统计卡数字与 `curl localhost:8080/api/v1/stats` 返回的 `total_nodes/alive_nodes/total_sources/
    dead_sources` 一致；地区/协议分布加总等于 `total_nodes`。
@@ -219,7 +219,7 @@
 
 ### 管理页面补齐（已实测，2026-11-11）
 
-契约缺口清零后（见上节），规格 7 页**全部落地**（`web/vben-admin/src/views/paily/`）：
+契约缺口清零后（见上节），规格 7 页**全部落地**（`web/vben-admin/src/views/phlogo/`）：
 
 | 页面 | 文件 | 端点 |
 |---|---|---|
@@ -231,14 +231,14 @@
 | Scoring | `scoring.vue` | 10 个 `score_*`/`grade_*`/`max_distribute` 键编辑 |
 | Subscriptions | `subscriptions.vue` | profile CRUD（更新 bump version）+ token 签发（**明文一次性弹窗**）/撤销/列表 |
 
-路由 `paily.ts` 七项 + NodeDetail `hideInMenu`；`paily.ts` API 层扩至全部端点（typed）。
+路由 `phlogo.ts` 七项 + NodeDetail `hideInMenu`；`phlogo.ts` API 层扩至全部端点（typed）。
 
 **实测**：校机 `pnpm build:ele` → **0**（11/11 tasks，dist.zip 1.10MB，7 页全部编译进产物）。
 
 
 **待暴露端点全部落地**（此前标注的「契约缺口」清零）：
 
-- **视图端点**（`apps/api/src/handlers/views.rs`）：`GET /api/v1/stats`（total/alive nodes、total/dead sources）、
+- **视图端点**（`apps/curse/src/handlers/views.rs`）：`GET /api/v1/stats`（total/alive nodes、total/dead sources）、
   `GET /api/v1/checkers`（distinct tag）、`GET /api/v1/logs/check`（node_check_results 时间线，`?node_id=` 过滤）、
   `GET /api/v1/logs/fetch`（source_fetch_runs 历史，`?source_id=` 过滤）、
   `GET /api/v1/nodes/{id}/checks/initial` 与 `/checks/deep`（按节点测活时间线）。
@@ -254,7 +254,7 @@ checkers=200 ["a","b","default"]  logs_check=200  logs_fetch=200  stats_noauth=4
 PROFILE_CREATE=201 {"id":"df259aac…"}  TOKEN_ISSUE=201 {token:…}
 SUB_VALID=200   （签发的 token 拉 /sub/{token}.yaml 成功）
 ```
-→ Dashboard/Checks/NodeDetail/Subscriptions 四页的数据源齐了；页面文件随需补（`paily.ts` 加对应调用即可）。
+→ Dashboard/Checks/NodeDetail/Subscriptions 四页的数据源齐了；页面文件随需补（`phlogo.ts` 加对应调用即可）。
 
 **过程修正**：profile 的 `output_format NOT NULL`（0009）由 insert/update SQL 提供 `'base64'` 缺省；
 `logs_fetch` 的 success 表达式改 `(status='finished')`；e2e 的 JSON 体再次踩 PS 原生命令引号坑——固定走文件 `--data-binary @file`。
@@ -275,7 +275,7 @@ SUB_VALID=200   （签发的 token 拉 /sub/{token}.yaml 成功）
 
 - **build / typecheck**：同 p6-01 的 `pnpm build` 与 `pnpm typecheck`（A2/A3）。
 - **no-direct-backend-ref**：同 p6-01 A1 的 `grep` 关卡。
-- **e2e 冒烟（需 core-api 真实后端）**：启动 `core-api` + `postgres` 后，用无头浏览器跑「手动清单」7 项，
+- **e2e 冒烟（需 gnosis-api 真实后端）**：启动 `gnosis-api` + `postgres` 后，用无头浏览器跑「手动清单」7 项，
   命令种子：`pnpm exec playwright test --grep "@smoke-admin"`（测试脚本由后续编写，本目录不含）。
 - **视觉回归基线**：Playwright 逐页截图落到 `screenshots/`，与提交基线 diff；仅描述，不写脚本。
 - **契约一致性**：复用 p6-01 的 `openapi:gen:check` —— 任何页面用到的 `api.<Op>()` 必须存在于生成 client；
@@ -283,7 +283,7 @@ SUB_VALID=200   （签发的 token 拉 /sub/{token}.yaml 成功）
 
 ### 风险 / Risks
 
-- **依赖 P1–P5 真实后端**：手动清单与截图都需可返回真实数据的 `core-api`；若后端未就绪，本页只能完成
+- **依赖 P1–P5 真实后端**：手动清单与截图都需可返回真实数据的 `gnosis-api`；若后端未就绪，本页只能完成
   build/typecheck 红线，业务验证推迟。
 - **契约缺口阻塞部分功能**：订阅 Token 管理、批次视图、fetch_policy 编辑在当前契约下无法实现（见上表）；
   若不先推动 API 侧补齐，Subscriptions/Checks/Sources 页将长期不完整。

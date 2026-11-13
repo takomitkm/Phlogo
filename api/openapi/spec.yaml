@@ -1,6 +1,6 @@
 openapi: "3.0.3"
 info:
-  title: Paily Connect Core
+  title: Phlogo Wish Gnosis
   version: "1.0.0"
   description: >
     Proxy node aggregation, filtering and distribution service.

@@ -7,7 +7,7 @@ import { onMounted, reactive, ref } from 'vue';
 
 import { ElMessage } from 'element-plus';
 
-import { getConfig, putConfig } from '#/api/paily';
+import { getConfig, putConfig } from '#/api/phlogo';
 
 const EDITABLE_KEYS = [
   'score_decay_alpha',

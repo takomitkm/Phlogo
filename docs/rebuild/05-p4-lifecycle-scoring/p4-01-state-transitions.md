@@ -10,7 +10,7 @@
 
 > Net-new 声明：Phlogo 当前**没有** `Replace/Accumulate` 区分，也**没有** `Orphaned/Retired`
 > 状态——`internal/node/upsert.go` 的 `removeSourceMappings` 直接物理删除孤儿节点。
-> 下列 `Suspended` 也是相对于 Phlogo 仅 `active/dead` 的新增。这些都是 Rust Core 的新增语义。
+> 下列 `Suspended` 也是相对于 Phlogo 仅 `active/dead` 的新增。这些都是 Rust Gnosis 的新增语义。
 
 ### 范围 / Scope
 

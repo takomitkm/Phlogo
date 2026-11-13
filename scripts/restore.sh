@@ -8,13 +8,13 @@ source "$(dirname "$0")/runtime.sh"
 IN="${1:?usage: restore.sh <file.dump>}"
 runtime_compose -f deploy/compose.yaml down -v
 runtime_compose -f deploy/compose.yaml up -d postgres
-until runtime_compose -f deploy/compose.yaml exec -T postgres pg_isready -U paily -d paily >/dev/null 2>&1; do
+until runtime_compose -f deploy/compose.yaml exec -T postgres pg_isready -U phlogo -d phlogo >/dev/null 2>&1; do
   sleep 1
 done
 runtime_compose -f deploy/compose.yaml exec -T postgres \
-  pg_restore -U paily -d paily --clean --if-exists < "$IN"
+  pg_restore -U phlogo -d phlogo --clean --if-exists < "$IN"
 echo "---- row counts after restore ----"
-runtime_compose -f deploy/compose.yaml exec -T postgres psql -U paily -d paily -tAc \
+runtime_compose -f deploy/compose.yaml exec -T postgres psql -U phlogo -d phlogo -tAc \
   "SELECT 'sources',count(*) FROM sources UNION ALL
    SELECT 'nodes',count(*) FROM nodes UNION ALL
    SELECT 'node_sources',count(*) FROM node_sources UNION ALL

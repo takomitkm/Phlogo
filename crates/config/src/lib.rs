@@ -1,4 +1,4 @@
-//! Configuration layer: Figment-backed config with `PAILY_` env overrides.
+//! Configuration layer: Figment-backed config with `PHLOGO_` env overrides.
 //! Shape mirrors Phlogo `config.example.yaml` (server/database/auth), CONVENTIONS §2.6.
 use figment::{
     providers::{Format, Serialized, Yaml},
@@ -60,7 +60,7 @@ impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
             db_type: "postgres".into(),
-            dsn: "postgres://paily:change-me@localhost:5432/paily".into(),
+            dsn: "postgres://phlogo:change-me@localhost:5432/phlogo".into(),
             max_open_conns: 6,
             max_idle_conns: 2,
             conn_max_lifetime_minutes: 60,
@@ -69,13 +69,13 @@ impl Default for DatabaseConfig {
 }
 
 impl Config {
-    /// Load config: defaults -> optional YAML -> `PAILY_` env overrides.
+    /// Load config: defaults -> optional YAML -> `PHLOGO_` env overrides.
     #[allow(clippy::result_large_err)]
     pub fn load(path: Option<&str>) -> Result<Self, figment::Error> {
         let mut fig = Figment::from(Serialized::defaults(Config::default()));
         let candidate = path
             .map(|s| s.to_string())
-            .or_else(|| std::env::var("PAILY_CONFIG").ok());
+            .or_else(|| std::env::var("PHLOGO_CONFIG").ok());
         if let Some(pf) = candidate {
             if std::path::Path::new(&pf).exists() {
                 fig = fig.merge(Yaml::file(pf));
@@ -88,36 +88,36 @@ impl Config {
         Ok(cfg)
     }
 
-    /// Explicit `PAILY_` env overlay (server.port -> PAILY_SERVER_PORT, etc.).
+    /// Explicit `PHLOGO_` env overlay (server.port -> PHLOGO_SERVER_PORT, etc.).
     fn apply_env(&mut self) {
         use std::env::var;
-        if let Ok(v) = var("PAILY_SERVER_PORT") {
+        if let Ok(v) = var("PHLOGO_SERVER_PORT") {
             if let Ok(n) = v.parse() {
                 self.server.port = n;
             }
         }
-        if let Ok(v) = var("PAILY_SERVER_VERBOSE") {
+        if let Ok(v) = var("PHLOGO_SERVER_VERBOSE") {
             self.server.verbose = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes");
         }
-        if let Ok(v) = var("PAILY_SERVER_PROXY_PROTOCOL") {
+        if let Ok(v) = var("PHLOGO_SERVER_PROXY_PROTOCOL") {
             self.server.proxy_protocol = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes");
         }
-        if let Ok(v) = var("PAILY_SERVER_EXPECT_PROXY") {
+        if let Ok(v) = var("PHLOGO_SERVER_EXPECT_PROXY") {
             self.server.expect_proxy = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes");
         }
-        if let Ok(v) = var("PAILY_DATABASE_TYPE") {
+        if let Ok(v) = var("PHLOGO_DATABASE_TYPE") {
             self.database.db_type = v;
         }
-        if let Ok(v) = var("PAILY_DATABASE_DSN") {
+        if let Ok(v) = var("PHLOGO_DATABASE_DSN") {
             self.database.dsn = v;
         }
-        if let Ok(v) = var("PAILY_AUTH_ADMIN_PASSWORD") {
+        if let Ok(v) = var("PHLOGO_AUTH_ADMIN_PASSWORD") {
             self.auth.admin_password = v;
         }
-        if let Ok(v) = var("PAILY_AUTH_SERVICE_SECRET") {
+        if let Ok(v) = var("PHLOGO_AUTH_SERVICE_SECRET") {
             self.auth.service_secret = v;
         }
-        if let Ok(v) = var("PAILY_AUTH_JWT_SECRET") {
+        if let Ok(v) = var("PHLOGO_AUTH_JWT_SECRET") {
             self.auth.jwt_secret = v;
         }
     }

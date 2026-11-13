@@ -6,14 +6,14 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use api::proxy_protocol;
+use curse::proxy_protocol;
 use app_config::Config;
 
 /// Spawn the API with the PROXY-protocol server loop.
 async fn spawn_proxy_api(expect_proxy: bool) -> SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = api::router::build(Config::default());
+    let app = curse::router::build(Config::default());
     tokio::spawn(async move {
         let _ = proxy_protocol::serve_with_proxy_protocol(listener, app, expect_proxy).await;
     });

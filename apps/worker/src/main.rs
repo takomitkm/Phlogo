@@ -1,5 +1,5 @@
-//! paily worker binary: Apalis PG storage + Fetch/Check workers + periodic jobs.
-//! Apalis storage lives in its own `paily_jobs` database (official apalis migrations);
+//! phlogo worker binary: Apalis PG storage + Fetch/Check workers + periodic jobs.
+//! Apalis storage lives in its own `phlogo_jobs` database (official apalis migrations);
 //! business tables (incl. `check_runs`) stay in the main database.
 use std::time::Duration;
 
@@ -11,7 +11,7 @@ use worker::{handle_check, handle_fetch, CheckJob, FetchJob};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    observability::init("paily-worker");
+    observability::init("phlogo-gnosis-worker");
     let cfg = app_config::Config::load(None)?;
 
     let pool: PgPool = database::connect(&cfg.database.dsn).await?;
@@ -69,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
     Monitor::new()
         .register({
             let p = pool.clone();
-            WorkerBuilder::new("paily-fetch-worker")
+            WorkerBuilder::new("phlogo-fetch-worker")
                 .enable_tracing()
                 .data(p)
                 .backend(fetch_storage)
@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
         })
         .register({
             let p = pool.clone();
-            WorkerBuilder::new("paily-check-worker")
+            WorkerBuilder::new("phlogo-check-worker")
                 .enable_tracing()
                 .data(p)
                 .backend(check_storage)

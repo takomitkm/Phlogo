@@ -8,7 +8,7 @@ import { useRouter } from 'vue-router';
 
 import { ElMessage } from 'element-plus';
 
-import { deleteNode, listNodes, type NodeView } from '#/api/paily';
+import { deleteNode, listNodes, type NodeView } from '#/api/phlogo';
 
 const router = useRouter();
 const rows = ref<NodeView[]>([]);
@@ -49,7 +49,7 @@ onMounted(refresh);
       <el-table-column prop="fingerprint_version" label="FP" width="70" />
       <el-table-column label="Actions" width="180">
         <template #default="{ row }">
-          <el-button size="small" @click="router.push(`/paily/nodes/${row.id}`)">Detail</el-button>
+          <el-button size="small" @click="router.push(`/phlogo/nodes/${row.id}`)">Detail</el-button>
           <el-button size="small" type="danger" @click="onDelete(row)">Delete</el-button>
         </template>
       </el-table-column>

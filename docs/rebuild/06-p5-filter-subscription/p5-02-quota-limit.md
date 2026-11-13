@@ -272,7 +272,7 @@ cargo test -p distribution selector::
 | `topNByScore` / `randomSample` | `top_n_by_score` / `random_sample` |
 | `assembleOutput`（地区 naming order + 组内 score 降序 + seq） | `assemble_output` |
 | `normaliseRegion` / `seqID` / `sortRegionsByNamingOrder` | 同名 Rust 函数 |
-| preset 优先级在 `handler.go` 解析（`URL > tag.default_preset > 全局 default_preset > common`） | 在 `apps/api` 订阅路由解析后传入 `select_with_preset`，逻辑同 CONVENTIONS §2.8 |
+| preset 优先级在 `handler.go` 解析（`URL > tag.default_preset > 全局 default_preset > common`） | 在 `apps/curse` 订阅路由解析后传入 `select_with_preset`，逻辑同 CONVENTIONS §2.8 |
 
 > 关键算法常量均来自源码实证：`max(score,0.01)`、`u==0 ⇒ 1e-10`、`pool ≤ 1.5*quota` 阈值、末位地区吸收余数 `targetCount - assigned`、回退 `collect_all`、common 五地区集合 `["HK","TW","SG","US","JP"]`。
 

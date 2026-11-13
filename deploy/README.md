@@ -1,11 +1,11 @@
 # deploy/ — production topology (p7-01, podman-first)
 
-- `compose.yaml` — postgres / api / worker / miaospeed / web / caddy (+ optional apalis-board via `--profile debug`).
+- `compose.yaml` — postgres / curse / worker / miaospeed / web / caddy (+ optional apalis-board via `--profile debug`).
   postgres and miaospeed publish **no** host ports (plan §16.10); caddy on 21380 is the only ingress.
-- `Dockerfile.api` / `Dockerfile.worker` — multi-stage Rust builds (rust:1.83-slim builder → debian:bookworm-slim).
+- `Dockerfile.curse` / `Dockerfile.worker` — multi-stage Rust builds (rust:1.83-slim builder → debian:bookworm-slim).
   **Buildah/podman compatible**: no BuildKit-only directives (the `# syntax` line is ignored by Buildah).
 - `Caddyfile` — static UI + `/api/*`, `/sub/*`, `/health` reverse proxy; `/metrics` answers 403 at the edge (p7-03).
-  Each reverse proxy to `api` uses `transport http { proxy_protocol v1 }` (A1): the real client
+  Each reverse proxy to the `curse` service uses `transport http { proxy_protocol v1 }` (A1): the real client
   address is carried at the TCP layer, so the API's login rate limiter can bucket per client
   IP instead of seeing one shared proxy address — and it cannot be forged like `X-Forwarded-For`.
 - `.env.example` — copy to `.env` before starting the stack.
@@ -38,11 +38,11 @@ tables + apalis job state; restore drill verifies row counts).
 
 ## PROXY protocol (A1)
 
-`api` publishes **no host port** — it is reachable only from the compose network through caddy.
+`curse` publishes **no host port** — it is reachable only from the compose network through caddy.
 Caddy prepends a PROXY v1 header with the real client address; the API reads it at the TCP layer
-(`apps/api/src/proxy_protocol.rs`) and rejects connections without it when
-`PAILY_SERVER_EXPECT_PROXY=1` (the default in `compose.yaml`).
+(`apps/curse/src/proxy_protocol.rs`) and rejects connections without it when
+`PHLOGO_SERVER_EXPECT_PROXY=1` (the default in `compose.yaml`).
 
 If you run the API **without** caddy (e.g. `cargo run` for local development), leave
-`PAILY_SERVER_PROXY_PROTOCOL` unset — the API then uses the TCP peer address and a plain
+`PHLOGO_SERVER_PROXY_PROTOCOL` unset — the API then uses the TCP peer address and a plain
 `axum::serve` path.

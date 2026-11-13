@@ -39,7 +39,7 @@ pub async fn sub(State(st): State<AppState>, Path(spec): Path<String>) -> Respon
         return err(StatusCode::NOT_FOUND, "unknown format");
     }
 
-    let pepper = std::env::var("PAILY_TOKEN_PEPPER").unwrap_or_default();
+    let pepper = std::env::var("PHLOGO_TOKEN_PEPPER").unwrap_or_default();
     let hash = distribution::token::hash_token(token, &pepper);
 
     // Acceptance #3: unknown OR revoked tokens are rejected BEFORE any output.

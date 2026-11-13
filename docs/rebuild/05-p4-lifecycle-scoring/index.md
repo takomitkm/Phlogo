@@ -8,7 +8,7 @@
 ## 阶段目标 / Phase Goal
 
 把 Phlogo 单体里分散在 `internal/source`、`internal/node`、`internal/checker`、`internal/scoring`
-四处的生命周期与评分逻辑，重写为 Rust Core 的 `crates/registry` + `crates/lifecycle` + `crates/scoring`
+四处的生命周期与评分逻辑，重写为 Rust Gnosis 的 `crates/registry` + `crates/lifecycle` + `crates/scoring`
 中的明确状态机与可解释评分引擎：
 
 1. **状态转换**：定义 `SourceStatus`(Active/Suspended/Dead)、`FetchPolicy`(Replace/Accumulate)、

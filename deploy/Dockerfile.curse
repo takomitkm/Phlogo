@@ -8,14 +8,14 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 COPY apps ./apps
 COPY migrations ./migrations
-RUN cargo build --release --bin api
+RUN cargo build --release --bin curse
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=builder /src/target/release/api /app/api
+COPY --from=builder /src/target/release/curse /app/curse
 COPY migrations /app/migrations
-ENV PAILY_DATABASE_DSN=postgres://paily:change-me@postgres:5432/paily
+ENV PHLOGO_DATABASE_DSN=postgres://phlogo:change-me@postgres:5432/phlogo
 EXPOSE 8080
-ENTRYPOINT ["/app/api"]
+ENTRYPOINT ["/app/curse"]

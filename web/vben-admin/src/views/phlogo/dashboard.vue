@@ -7,7 +7,7 @@ import { computed, onMounted, ref } from 'vue';
 
 import { ElMessage } from 'element-plus';
 
-import { getCheckers, getStats, listNodes, type NodeView, type Stats } from '#/api/paily';
+import { getCheckers, getStats, listNodes, type NodeView, type Stats } from '#/api/phlogo';
 
 const stats = ref<Stats | null>(null);
 const checkers = ref<string[]>([]);

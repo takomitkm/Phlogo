@@ -2,7 +2,7 @@
 
 ### 目标 / Goal
 
-把订阅抓取收编进 `core-worker` 的 **Fetch Worker**，使用 **Reqwest** 直接拉取 `sources.content` 里的订阅 URL，并新增一层 **SSRF 防护**：
+把订阅抓取收编进 `gnosis-worker` 的 **Fetch Worker**，使用 **Reqwest** 直接拉取 `sources.content` 里的订阅 URL，并新增一层 **SSRF 防护**：
 
 - 拦截环回（loopback）、私网（private）、链路本地（link-local）、唯一本地（unique-local）、未指定（unspecified）地址，以及**云元数据地址**。
 - 对每次**重定向目标**重新执行同一套校验（不信任自动跟随）。
@@ -11,12 +11,12 @@
 ### 范围 / Scope
 
 - **新建** crate：`crates/fetch`（Fetch Worker 的抓取与防护内核）。
-- **net-new**：Phlogo 当前**完全没有** SSRF 防护——抓取由外部 `paily-fetch` 服务完成，`internal/fetcher/handler.go` 只是接收结果的 HTTP 回调端点。本步骤把抓取收进 core-worker，因此防护必须在此补齐。
+- **net-new**：Phlogo 当前**完全没有** SSRF 防护——抓取由外部 `paily-fetch` 服务完成，`internal/fetcher/handler.go` 只是接收结果的 HTTP 回调端点。本步骤把抓取收进 gnosis-worker，因此防护必须在此补齐。
 - **不做**：VProxy 解析（见 `p2-02`）、指纹计算（见 `p2-03`）、对账入库（见 `p2-04`）。本步骤只产出 `Bytes`（原始订阅内容）与结构化错误。
 
 ### 前置 / Prerequisites
 
-- P1 已建立 Cargo workspace 与 `core-worker` 骨架（[`CONVENTIONS.md`](CONVENTIONS.md) §2.3）。
+- P1 已建立 Cargo workspace 与 `gnosis-worker` 骨架（[`CONVENTIONS.md`](CONVENTIONS.md) §2.3）。
 - `crates/domain` 已定义 `Source`（至少含 `content` 字段，即订阅 URL 或原始文本）。
 - 工具链：Rust + Cargo、`reqwest`、`tokio`、`ipnetwork`（或等价 CIDR 匹配）、`percent-encoding`（仅防护本身不需要，留给 `p2-03`）、`wiremock` 或 `hyper` 用于本地测试服务器。
 - 协议依据：`paily-core-rust-rebuild-plan.md` §4（HTTP Client = Reqwest）、§16.9（Fetch 防 SSRF 条目）。
@@ -196,7 +196,7 @@ pub async fn fetch(url: &str, policy: &FetchPolicy) -> Result<bytes::Bytes, Fetc
 > **对照基准**：Go 源码已于收口后从工作树移除；本节引用的 `internal/**`、`cmd/**` 文件与行号
 > 以 **fork 根提交 `dda4e6f2`** 为准（`git show dda4e6f2:<path>` 可查任何文件全文）。
 
-- **`internal/fetcher/handler.go`**：`PostResults` 处理 `POST /api/v1/fetch/results`，目前是**被动接收**外部 `paily-fetch` 推送的结果（记录 `source_fetch_histories` → `UpsertFromFetchResult` → 评估死源）。**抓取动作本身不在 core 里，因此没有任何 SSRF 逻辑**。Rust 侧把抓取收进 `core-worker`（方案 §2 的 `FW` 节点），防护必须新建。
+- **`internal/fetcher/handler.go`**：`PostResults` 处理 `POST /api/v1/fetch/results`，目前是**被动接收**外部 `paily-fetch` 推送的结果（记录 `source_fetch_histories` → `UpsertFromFetchResult` → 评估死源）。**抓取动作本身不在 gnosis 里，因此没有任何 SSRF 逻辑**。Rust 侧把抓取收进 `gnosis-worker`（方案 §2 的 `FW` 节点），防护必须新建。
 - 方案 §16.9 明确把「Fetch 防 SSRF」列为安全要求，且 Phlogo 的 `Source.Content` 就是订阅 URL，是 SSRF 攻击面，所以 `crates/fetch` 是这一防护的唯一合理落点。
 
 ### CI 提示 / CI notes（仅描述，不落地 YAML）

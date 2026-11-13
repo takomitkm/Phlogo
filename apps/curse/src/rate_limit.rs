@@ -1,6 +1,6 @@
 //! Rate limiting (P7-03 Step 2): per-IP fixed-window limiter as an Axum layer.
 //! Self-contained to avoid a heavyweight dependency; thresholds are config-driven
-//! (`PAILY_SERVER_RATE_LIMIT_PER_MIN`, default 300) with a document floor.
+//! (`PHLOGO_SERVER_RATE_LIMIT_PER_MIN`, default 300) with a document floor.
 use axum::{
     extract::{Request, State},
     http::StatusCode,

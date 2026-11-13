@@ -2,7 +2,7 @@
 
 > **本实现**：模板经 `GET/PUT /api/v1/format-configs[/{format}]` 管理（`format_configs` 表），**写入时服务端用渲染同款解析器校验**——坏模板当场 400，不会等到订阅请求才失败。未存储覆盖时使用内嵌默认模板（`crates/distribution/src/output.rs` 的 `DEFAULT_CLASH_TEMPLATE` / `DEFAULT_SINGBOX_TEMPLATE`）。
 
-Paily 在首次启动时为每个订阅格式提供内嵌默认模板。管理员可在管理界面（或 API）为 `clash` / `singbox` / `base64` 存放自定义配置。
+Phlogo 在首次启动时为每个订阅格式提供内嵌默认模板。管理员可在管理界面（或 API）为 `clash` / `singbox` / `base64` 存放自定义配置。
 
 当模板为空时，生成器只输出一个包含节点列表的极简文档。模板的具体处理规则由格式转换器实现（`crates/distribution/src/output.rs`），Clash 与 Sing-box 的规则不同。
 

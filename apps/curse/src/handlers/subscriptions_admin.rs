@@ -192,7 +192,7 @@ pub async fn issue_token(State(st): State<AppState>, Path(id): Path<String>) -> 
     if exists == 0 {
         return err(StatusCode::NOT_FOUND, "profile not found");
     }
-    let pepper = std::env::var("PAILY_TOKEN_PEPPER").unwrap_or_default();
+    let pepper = std::env::var("PHLOGO_TOKEN_PEPPER").unwrap_or_default();
     let (plain, hash) = distribution::token::issue(&pepper);
     let token_id = Uuid::new_v4();
     let res = sqlx::query(

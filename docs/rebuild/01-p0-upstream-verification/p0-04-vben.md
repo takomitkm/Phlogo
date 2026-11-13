@@ -56,7 +56,7 @@ ls -la dist/                     # 确认产出存在
 ```bash
 # 以固定版本 Vben 提供的 OpenAPI 生成命令为准（示意，TOTO 标注真实脚本）。
 # 常见形式（openapi-ts / vben 内置）：
-#   pnpm openapi-ts --input ../api/openapi/spec.yaml --output src/api/core
+#   pnpm openapi-ts --input ../api/openapi/spec.yaml --output src/api/gnosis
 # 或 Vben 的 gen 脚本读取 spec 生成 typed client。
 #
 # 关键：输入必须指向 api/openapi/spec.yaml（Phlogo 现有契约），

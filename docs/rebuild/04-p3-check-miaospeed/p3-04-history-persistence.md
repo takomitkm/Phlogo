@@ -22,7 +22,7 @@
 ### 前置 / Prerequisites
 
 - p3-03 已完成：得到 `Vec<NormalizedCheckResult>`、`unreported`（→ Unknown）、per-tag `PerTagHealth`、`cross_tag_alive` 聚合结果。
-- P1 已完成：`database` crate 的 `PgPool` 与 migration 运行机制（`02-p1-core-skeleton-data/`）。
+- P1 已完成：`database` crate 的 `PgPool` 与 migration 运行机制（`02-p1-gnosis-skeleton-data/`）。
 - 配置项 `node_alive_check_window_minutes` 默认 240（CONVENTIONS §2.6）。
 - 已读取：`internal/db/model/node.go`、`internal/checker/handler.go` `buildCheckRecords`（`:194`）+ `applyRegionUpdates`（`:263`）+ Phase 1 事务（`:136`）。
 

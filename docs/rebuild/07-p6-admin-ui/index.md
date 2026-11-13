@@ -7,22 +7,22 @@
 
 ## 阶段目标 / Phase Goal
 
-为重构后的 Rust `core-api` 提供一个 **Vben Admin 5（`web-ele`）** 管理前端，使运营人员可通过 UI 完成
+为重构后的 Rust `gnosis-api` 提供一个 **Vben Admin 5（`web-ele`）** 管理前端，使运营人员可通过 UI 完成
 日常运维，而**绝不**直接访问 PostgreSQL 或 MiaoSpeed。前端通过由 OpenAPI 契约生成的 TypeScript 客户端
 消费 `api/openapi/spec.yaml` 描述的 27 个 API 路径。
 
 要点：
-- 前端仅以 HTTP（REST / OpenAPI）访问 `core-api`；管理员认证用 JWT（先 `POST /api/v1/auth/login` 取 token）。
+- 前端仅以 HTTP（REST / OpenAPI）访问 `gnosis-api`；管理员认证用 JWT（先 `POST /api/v1/auth/login` 取 token）。
 - 所有数据读写都经由 OpenAPI 契约；前端不持有任何数据库连接、不实现测活协议（见方案 §2.1：
   `Vben Admin | 管理界面 | 不负责直接访问数据库或 MiaoSpeed`）。
-- 与 `core-api` 解耦：契约不变、API 行为不变时，前端可独立迭代、独立部署（静态资源由 Caddy/Nginx 提供并反代 `/api`）。
+- 与 `gnosis-api` 解耦：契约不变、API 行为不变时，前端可独立迭代、独立部署（静态资源由 Caddy/Nginx 提供并反代 `/api`）。
 - 本阶段**不**写后端业务逻辑（P1–P5 已定义），**不**写 CI YAML（见各页「CI 提示」）。
 
 ## 子步骤 / Sub-steps
 
 | 子步骤 | 文件 | 内容 |
 |---|---|---|
-| 6-01 | [p6-01-vben-scaffold.md](p6-01-vben-scaffold.md) | Vben `web-ele` 脚手架（固定 tag/commit）、OpenAPI→TypeScript Client 生成、dev 代理到 `core-api`、构建冒烟 |
+| 6-01 | [p6-01-vben-scaffold.md](p6-01-vben-scaffold.md) | Vben `web-ele` 脚手架（固定 tag/commit）、OpenAPI→TypeScript Client 生成、dev 代理到 `gnosis-api`、构建冒烟 |
 | 6-02 | [p6-02-pages.md](p6-02-pages.md) | 业务页面：Dashboard / Sources / Nodes / Node Detail / Checks / Scoring / Subscriptions，逐页映射到 API 路径与 operationId |
 
 ## 阶段级验收 / Phase Acceptance
@@ -54,7 +54,7 @@
   `api/`、`cmd/`、`internal/`、`server/`、`docs/` 与 Go 源文件，无 `web/` 目录，也无 `.vue` / `.tsx` 文件。
 - `docs/configuration-and-api.md`、`docs/source-management.md`、`docs/node-pool.md`、`docs/scoring.md`、
   `docs/distribution.md`、`docs/templates.md` 中描述的「管理界面 / 管理端的 … 页面」是 **上游 paily-core
-  既有管理端的能力文档**，并非本 fork 已实现的前端。本阶段是**全新实现**这些能力，目标后端换成 Rust `core-api`，
+  既有管理端的能力文档**，并非本 fork 已实现的前端。本阶段是**全新实现**这些能力，目标后端换成 Rust `gnosis-api`，
   但复用的契约一致（`api/openapi/spec.yaml` 的 27 个路径）。
 - 组件映射（CONVENTIONS §3）：`web/vben-admin` 为新增项，对应方案 §2.1 中 `Vben Admin | 管理界面` 的职责，
   且明确「不负责直接访问数据库或 MiaoSpeed」。

@@ -3,11 +3,11 @@
 ### 目标 / Goal
 
 把 Vben Admin 5（Vue 3 + TypeScript + Element Plus，`web-ele` 变体）落到仓库的 `web/vben-admin/`，并把它与
-Rust `core-api` 通过**由 OpenAPI 契约生成的 TypeScript 客户端**接起来。做到：
+Rust `gnosis-api` 通过**由 OpenAPI 契约生成的 TypeScript 客户端**接起来。做到：
 
 - 在**固定 tag/commit** 上搭建可构建的最小 Vben 应用（版本冻结由 P0-04 决定）。
 - 从 `api/openapi/spec.yaml` 生成强类型 TS client，所有页面复用，不手写 fetch 拼装。
-- 本地 dev 通过 Vite proxy 把 `/api` 反代到 `core-api`（默认 `http://localhost:8080`）。
+- 本地 dev 通过 Vite proxy 把 `/api` 反代到 `gnosis-api`（默认 `http://localhost:8080`）。
 - 确立「前端只调 API，绝不直连 PostgreSQL / MiaoSpeed」的硬约束。
 
 ### 范围 / Scope
@@ -31,7 +31,7 @@ Rust `core-api` 通过**由 OpenAPI 契约生成的 TypeScript 客户端**接起
 2. 本地工具链（取固定 checkout 中 `package.json#engines` 的精确值，由 P0-04 冻结）：
    - Node.js LTS（Vben 5 要求 `node >= 18.12` 起，以冻结值准）。
    - pnpm（`pnpm >= 8`，以冻结值准）。
-3. Rust `core-api` 至少可达（P1 之后；本步骤冒烟只需一个返回 OpenAPI 文档或 401 的端点，不要求全量业务就绪）。
+3. Rust `gnosis-api` 至少可达（P1 之后；本步骤冒烟只需一个返回 OpenAPI 文档或 401 的端点，不要求全量业务就绪）。
 4. 仓库布局遵循方案 §13：`web/vben-admin/` 与 `api/openapi/spec.yaml` 同仓，生成命令用相对路径 `../../api/openapi/spec.yaml`。
 
 ### 步骤 / Steps
@@ -138,10 +138,10 @@ api.interceptors.response.use(async (ctx) => {
 > 认证模型来自 `spec.yaml` 的 securitySchemes：`AdminJWT`（UI 用）与 `ServiceBearer`（fetcher/checker 用）。
 > 前端只走 `AdminJWT`：`POST /api/v1/auth/login` 拿 `token` + `refresh_token`，`POST /api/v1/auth/refresh` 续期。
 
-#### Step 5 — 配置 Vite dev proxy 到 `core-api`
+#### Step 5 — 配置 Vite dev proxy 到 `gnosis-api`
 
-在 `web/vben-admin/vite.config.ts` 增加（默认 `core-api` 端口见 `docs/configuration-and-api.md` 的
-`server.port` → `PAILY_SERVER_PORT`，内置默认 `8080`）：
+在 `web/vben-admin/vite.config.ts` 增加（默认 `gnosis-api` 端口见 `docs/configuration-and-api.md` 的
+`server.port` → `PHLOGO_SERVER_PORT`，内置默认 `8080`）：
 
 ```ts
 server: {
@@ -149,13 +149,13 @@ server: {
     '/api': {
       target: process.env.CORE_API_URL ?? 'http://localhost:8080',
       changeOrigin: true,
-      // 不重写路径：/api/v1/... 原样转发到 core-api
+      // 不重写路径：/api/v1/... 原样转发到 gnosis-api
     },
   },
 },
 ```
 
-> 说明：`core-api` 的 `server.cors_origins` 默认忽略 `*`（`docs/configuration-and-api.md`），所以本地**必须**靠
+> 说明：`gnosis-api` 的 `server.cors_origins` 默认忽略 `*`（`docs/configuration-and-api.md`），所以本地**必须**靠
 > 反代而非开 CORS；生产同理靠 Caddy/Nginx 反代，不要把 `localhost:8080` 写死进生产构建。
 
 #### Step 6 — 最小冒烟构建
@@ -201,11 +201,11 @@ pnpm build            # 产物到 dist/；预期退出码 0
 | A1 | `pnpm build` | 退出码 `0` | 最小 Vben 应用绿 |
 | A2 | `Test-Path src/api/generated/types.gen.ts` 且 `Test-Path src/api/generated/sdk.gen.ts` | `True` | client 已生成且强类型 |
 | A3 | `grep -rE "AuthLogin\|SourceList\|NodeGet\|StatsGet" src/api/generated/` | 命中 operationId | 生成覆盖 27 路径的 schema/client |
-| A4 | `grep -n "/api" vite.config.ts` | 命中 `/api` proxy（target 指向 `core-api`） | 代理配置存在 |
+| A4 | `grep -n "/api" vite.config.ts` | 命中 `/api` proxy（target 指向 `gnosis-api`） | 代理配置存在 |
 | A5 | `grep -rEi "postgres\|postgresql\|sqlx\|miaospeed\|DSN\|database/sql" src/` | 仅 `NO_DIRECT_DB_REF` | 前端不直连 DB/测活 |
 | A6 | `pnpm typecheck`（即 `vue-tsc --noEmit`） | 退出码 `0` | 生成类型被引用无类型错误 |
 
-> 端到端冒烟（需 P1+ 的 `core-api` 真正就绪）：启动 `core-api` 后
+> 端到端冒烟（需 P1+ 的 `gnosis-api` 真正就绪）：启动 `gnosis-api` 后
 > `pnpm dev`，浏览器登录 → `POST /api/v1/auth/login` 返回 `token`；
 > 用 `curl` 自测：`curl -X POST localhost:8080/api/v1/auth/login -H 'content-type: application/json' -d '{"password":"<ADMIN_PASSWORD>"}'`
 > 预期 `200` + `LoginResponse{token,refresh_token}`。

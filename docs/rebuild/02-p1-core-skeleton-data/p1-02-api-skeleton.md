@@ -2,14 +2,14 @@
 
 ### 目标 / Goal
 
-- 在 `apps/api` 立起 Axum + `tracing` + Figment 配置骨架，端口/配置形状对齐 `config.example.yaml`。
+- 在 `apps/curse` 立起 Axum + `tracing` + Figment 配置骨架，端口/配置形状对齐 `config.example.yaml`。
 - 复刻 `cmd/server/main.go` 的**分层认证分发**逻辑（`/health`、`/auth/*` 公开；`/check/*` checker secret；`/fetch/*` service bearer；`POST /sources` admin-or-service；其余 admin JWT）。
 - 决策：**OpenAPI 仍是唯一契约**（`api/openapi/spec.yaml` 保留），本阶段用 utoipa 描述 P1 涉及的 schema/paths，并挂载 `utoipa-swagger-ui`；既有 YAML 可作为 TS client 生成源（CONVENTIONS §2.1、§2.10）。
 - `GET /health` 返回 200；未授权访问受保护路由返回 401；未知路径返回 404；`cargo test` 通过。
 
 ### 范围 / Scope
 
-**新建 / 改写**：`apps/api/src/main.rs`、`apps/api/src/router.rs`、`apps/api/src/auth.rs`、`apps/api/src/error.rs`；`crates/config/src/lib.rs`（Figment 配置加载）；`crates/api-contract/src/lib.rs`（utoipa schema + 路由 trait 占位）。
+**新建 / 改写**：`apps/curse/src/main.rs`、`apps/curse/src/router.rs`、`apps/curse/src/auth.rs`、`apps/curse/src/error.rs`；`crates/config/src/lib.rs`（Figment 配置加载）；`crates/api-contract/src/lib.rs`（utoipa schema + 路由 trait 占位）。
 
 **不做**：不实现真正的 Source/Node 业务 handler（在 p1-04）；不实现 `/check/*`、`/fetch/*` 业务（P2/P3）；不实现 auth login 的 bcrypt 校验细节（仅接 JWT 校验链路）。
 
@@ -21,7 +21,7 @@
 
 ### 步骤 / Steps
 
-**1. 配置加载（Figment，对齐 `config.example.yaml` 结构 + `PAILY_` 前缀覆盖）。** Phlogo 用 Viper + `PAILY_` 前缀、嵌套键 `.`→`_`（见 `config.example.yaml` 注释 L6-7）。Rust 侧用 Figment 的 `Env::prefixed("PAILY_")` + `.separator("_")`：
+**1. 配置加载（Figment，对齐 `config.example.yaml` 结构 + `PHLOGO_` 前缀覆盖）。** Phlogo 用 Viper + `PHLOGO_` 前缀、嵌套键 `.`→`_`（见 `config.example.yaml` 注释 L6-7）。Rust 侧用 Figment 的 `Env::prefixed("PHLOGO_")` + `.separator("_")`：
 
 ```rust
 // crates/config/src/lib.rs
@@ -37,16 +37,16 @@ pub struct Config {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
-    pub port: u16,                       // PAILY_SERVER_PORT
-    pub cors_origins: Vec<String>,       // PAILY_SERVER_CORS_ORIGINS
-    pub verbose: bool,                   // PAILY_SERVER_VERBOSE
+    pub port: u16,                       // PHLOGO_SERVER_PORT
+    pub cors_origins: Vec<String>,       // PHLOGO_SERVER_CORS_ORIGINS
+    pub verbose: bool,                   // PHLOGO_SERVER_VERBOSE
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DatabaseConfig {
     #[serde(rename = "type")]
-    pub db_type: String,                 // PAILY_DATABASE_TYPE
-    pub dsn: String,                     // PAILY_DATABASE_DSN
+    pub db_type: String,                 // PHLOGO_DATABASE_TYPE
+    pub dsn: String,                     // PHLOGO_DATABASE_DSN
     pub max_open_conns: u32,
     pub max_idle_conns: u32,
     pub conn_max_lifetime_minutes: u64,
@@ -54,9 +54,9 @@ pub struct DatabaseConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthConfig {
-    pub admin_password: String,          // PAILY_AUTH_ADMIN_PASSWORD
-    pub service_secret: String,          // PAILY_AUTH_SERVICE_SECRET
-    pub jwt_secret: String,              // PAILY_AUTH_JWT_SECRET (>= 32 chars)
+    pub admin_password: String,          // PHLOGO_AUTH_ADMIN_PASSWORD
+    pub service_secret: String,          // PHLOGO_AUTH_SERVICE_SECRET
+    pub jwt_secret: String,              // PHLOGO_AUTH_JWT_SECRET (>= 32 chars)
 }
 
 impl Config {
@@ -65,8 +65,8 @@ impl Config {
         if let Some(p) = path {
             fig = fig.merge(Yaml::file(p));
         }
-        // PAILY_ 前缀，嵌套键 "_" 分隔（server.port -> PAILY_SERVER_PORT）
-        fig = fig.merge(Env::prefixed("PAILY_").separator("_"));
+        // PHLOGO_ 前缀，嵌套键 "_" 分隔（server.port -> PHLOGO_SERVER_PORT）
+        fig = fig.merge(Env::prefixed("PHLOGO_").separator("_"));
         fig.extract()
     }
 }
@@ -75,7 +75,7 @@ impl Config {
 **2. tracing 初始化。** 对应 Phlogo `main.go` L44 `zerolog.ConsoleWriter`，Rust 用 `tracing-subscriber` 的 `fmt` + `EnvFilter`（`RUST_LOG` 或 config `server.verbose` 控制级别）：
 
 ```rust
-// apps/api/src/telemetry.rs
+// apps/curse/src/telemetry.rs
 pub fn init(level: &str) {
     use tracing_subscriber::{fmt, EnvFilter, prelude::*};
     let filter = EnvFilter::try_from_default_env()
@@ -90,7 +90,7 @@ pub fn init(level: &str) {
 **3. 分层认证中间件（复刻 `main.go` L117-141 的 switch）。** Phlogo 三层：`ServiceBearerMiddleware`、`AdminJWTMiddleware`、`AdminOrServiceMiddleware`，外加 `CheckerTagMiddleware`（见 `internal/auth/bearer.go`、`internal/auth/jwt.go`）。本阶段实现前两层 + admin-or-service；checker 层在 P3 补：
 
 ```rust
-// apps/api/src/auth.rs
+// apps/curse/src/auth.rs
 use axum::{
     extract::Request,
     middleware::Next,
@@ -140,7 +140,7 @@ fn verify_jwt(secret: &str, token: &str) -> Option<bool> {
 **4. 路由装配（复刻 `main.go` 的分发树）。** 用 `axum::middleware::from_fn_with_state` 按路径前缀挂不同 auth：
 
 ```rust
-// apps/api/src/router.rs
+// apps/curse/src/router.rs
 use axum::Router;
 use axum::routing::get;
 use crate::auth::{require_service_bearer, require_admin_jwt};
@@ -177,7 +177,7 @@ pub fn build(cfg: Config) -> Router {
 本阶段先用 `utoipa-swagger-ui` 挂载文档，保证契约可见：
 
 ```rust
-// apps/api/src/main.rs (片段)
+// apps/curse/src/main.rs (片段)
 let (router, api) = ApiDoc::split_for_parts();
 router.merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api))
 ```
@@ -185,14 +185,14 @@ router.merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api))
 **6. `main.rs` 组合根（对应 `cmd/server/main.go`）。**
 
 ```rust
-// apps/api/src/main.rs
+// apps/curse/src/main.rs
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cfg = config::Config::load(None)?;
     telemetry::init(if cfg.server.verbose { "debug" } else { "info" });
     let app = router::build(cfg.clone());
     let addr = format!("0.0.0.0:{}", cfg.server.port);
-    tracing::info!(%addr, "paily-core-rust api starting");
+    tracing::info!(%addr, "Phlogo Wish Gnosis api starting");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
@@ -204,10 +204,10 @@ async fn main() -> anyhow::Result<()> {
 > 环境：校机 `rustc 1.99.1`；`PATH` 含 cargo bin + `D:\yzd\MSYS2\mingw64\bin`。
 
 **落地结构**：
-- `apps/api` 改为 **lib + bin**：`src/lib.rs`（`pub mod auth/router/telemetry`）+ 薄 `src/main.rs`（组合根）；测试放 crate 内 `#[cfg(test)] mod smoke`（可访问 axum/tower）。
-- `crates/config`（包名 `app-config`）：`Config`（server/database/auth），`Config::load` = 默认值 → 可选 YAML → **显式 `PAILY_` env 覆盖**（`PAILY_SERVER_PORT`/`PAILY_DATABASE_DSN`/`PAILY_AUTH_*` 等），不依赖 Figment env 分隔符魔法，行为确定。
-- `apps/api/src/auth.rs`：`bearer_token` + `verify_jwt`（HS256、校验 `token_type=="access"`）+ 中间件 `require_admin_or_service`（service bearer **或** admin access JWT）。应用于 `/api/v1/*`。
-- `apps/api/src/router.rs`：`/health` 与 `/api-docs/openapi.json` 公开；`/api/v1/*` 统一挂 `require_admin_or_service`；`fallback` 404。
+- `apps/curse` 改为 **lib + bin**：`src/lib.rs`（`pub mod auth/router/telemetry`）+ 薄 `src/main.rs`（组合根）；测试放 crate 内 `#[cfg(test)] mod smoke`（可访问 axum/tower）。
+- `crates/config`（包名 `app-config`）：`Config`（server/database/auth），`Config::load` = 默认值 → 可选 YAML → **显式 `PHLOGO_` env 覆盖**（`PHLOGO_SERVER_PORT`/`PHLOGO_DATABASE_DSN`/`PHLOGO_AUTH_*` 等），不依赖 Figment env 分隔符魔法，行为确定。
+- `apps/curse/src/auth.rs`：`bearer_token` + `verify_jwt`（HS256、校验 `token_type=="access"`）+ 中间件 `require_admin_or_service`（service bearer **或** admin access JWT）。应用于 `/api/v1/*`。
+- `apps/curse/src/router.rs`：`/health` 与 `/api-docs/openapi.json` 公开；`/api/v1/*` 统一挂 `require_admin_or_service`；`fallback` 404。
 - OpenAPI：`/api-docs/openapi.json` 直接输出 utoipa `ApiDoc::openapi().to_json()`。
 
 **实测（校机）**：
@@ -217,7 +217,7 @@ async fn main() -> anyhow::Result<()> {
 | `cargo test -p api` | **TEST_EXIT=0**，`4 passed`（health 200 / protected 401 / unknown 404 / openapi 200） |
 | `cargo fmt --all -- --check` | **FMT_EXIT=0** |
 | `cargo clippy --workspace --all-targets -- -D warnings` | **CLIPPY_EXIT=0** |
-| 运行期冒烟（`PAILY_SERVER_PORT=28099` + `curl`） | **`health=200 post_sources=401 unknown=404`**（env 覆盖生效，服务监听 28099） |
+| 运行期冒烟（`PHLOGO_SERVER_PORT=28099` + `curl`） | **`health=200 post_sources=401 unknown=404`**（env 覆盖生效，服务监听 28099） |
 
 **偏差记录（诚实标注）**：
 - **`utoipa-swagger-ui` 静态 UI 暂缺**：`utoipa-swagger-ui 8.1.0` 的 `build.rs` 与解析到的 `zip 2.6.1` API 不兼容（`ZipError::InvalidArchive` 需 `Cow<'static,str>`），构建失败。**处置**：本轮去掉 swagger-ui 静态资源，改由 `/api-docs/openapi.json` 提供 OpenAPI JSON（文档仍“可访问”）；后续如需 Swagger UI，钉一组兼容的 `utoipa-swagger-ui`+`zip` 版本再启用。
@@ -231,7 +231,7 @@ async fn main() -> anyhow::Result<()> {
 | `curl -i http://localhost:21380/health` | `HTTP/1.1 200 OK`，body `ok` |
 | `curl -i -X POST http://localhost:21380/api/v1/sources -d '{}'` | `HTTP/1.1 401 Unauthorized`（无 Bearer） |
 | `curl -i http://localhost:21380/nonexistent` | `HTTP/1.1 404 Not Found` |
-| 设置 `PAILY_SERVER_PORT=28099` 后启动 | 监听 `28099`（验证 Figment env 覆盖） |
+| 设置 `PHLOGO_SERVER_PORT=28099` 后启动 | 监听 `28099`（验证 Figment env 覆盖） |
 | `cargo test -p api` | 退出码 `0`，含对 stub 路由 401/404 的 `#[tokio::test]` |
 
 示例（本地运行后）：
@@ -255,7 +255,7 @@ missing or invalid JWT
 
 | Rust 交付物 | Phlogo（Go）对应 | 说明 |
 |---|---|---|
-| `config::Config` + Figment | `internal/config/**` + `config.example.yaml` | Viper `PAILY_` 前缀 → Figment `Env::prefixed("PAILY_").separator("_")`（config.example.yaml L6-7） |
+| `config::Config` + Figment | `internal/config/**` + `config.example.yaml` | Viper `PHLOGO_` 前缀 → Figment `Env::prefixed("PHLOGO_").separator("_")`（config.example.yaml L6-7） |
 | `auth::require_*`（3 层） | `internal/auth/bearer.go`（L16-69）+ `main.go` L113-141 | `ServiceBearerMiddleware`/`AdminJWTMiddleware`/`AdminOrServiceMiddleware` 分发树 |
 | `auth::verify_jwt` | `internal/auth/jwt.go`（`IssueAccessToken` 15min / refresh 7d，HS256） | 须复刻 `accessTokenDuration=15m`、`refreshTokenDuration=7d`、`token_type` 校验 |
 | `router::build` | `main.go` L117-144 的 `engine.Use(...)` + `api.RegisterHandlers` | `/health` 公开、`/auth/*` 公开、`/check/*` checker、`/fetch/*` service、其余 admin |
@@ -274,5 +274,5 @@ missing or invalid JWT
 
 - **Auth 分发顺序**：Axum 的 `Router` layer 作用域与 Gin 的全局 `Use` 不同——Phlogo 用单一 `engine.Use` 内按 `FullPath()` 分支；Axum 必须用 `nest`/嵌套 Router + 按前缀挂 layer 才能等价。错配会导致「公开路由被 admin 拦截」或「受保护路由裸奔」。
 - **JWT `token_type` 校验**：Phlogo `parseToken` 强校验 `c.TokenType == expected`（jwt.go L75-77）。Rust 侧若忽略 `token_type`，refresh token 可被当作 access token 用，属安全缺陷。
-- **`PAILY_` env 分隔符**：Figment `separator("_")` 把 `PAILY_SERVER_CORS_ORIGINS` 映射到 `server.cors_origins`，但 Figment 默认对 `Vec` 的处理需要确认（可能需 `.split(" ")` 或逗号）。需实测 env 数组覆盖行为。
+- **`PHLOGO_` env 分隔符**：Figment `separator("_")` 把 `PHLOGO_SERVER_CORS_ORIGINS` 映射到 `server.cors_origins`，但 Figment 默认对 `Vec` 的处理需要确认（可能需 `.split(" ")` 或逗号）。需实测 env 数组覆盖行为。
 - **契约源唯一性**：若同时维护 `spec.yaml` 与 utoipa 生成两份，易漂移。明确「spec.yaml 为单一来源」，utoipa 仅消费或单向生成。

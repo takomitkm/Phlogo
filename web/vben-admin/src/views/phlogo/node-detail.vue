@@ -15,7 +15,7 @@ import {
   type DeepCheckRow,
   type InitialCheckRow,
   type NodeView,
-} from '#/api/paily';
+} from '#/api/phlogo';
 
 const node = ref<NodeView | null>(null);
 const initial = ref<InitialCheckRow[]>([]);

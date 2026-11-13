@@ -6,7 +6,7 @@
 把 Phlogo 当前的「HTTP 拉取/回调」测活模型（`internal/checker/handler.go` `GetNodes` + `PostResults`）重写为**主动提交/收集**模型。
 
 ```rust
-// 方案 §8 的 Core 抽象接口（不是 MiaoSpeed 原生 API；Adapter 负责映射）
+// 方案 §8 的 Gnosis 抽象接口（不是 MiaoSpeed 原生 API；Adapter 负责映射）
 pub trait Checker {
     async fn submit(&self, job: CheckJob) -> Result<CheckJobId>;
     async fn collect(&self, job_id: &CheckJobId) -> Result<Vec<CheckResult>>;
@@ -31,7 +31,7 @@ pub trait Checker {
 
 - 已完成 **P0-02 spike**：固定版本 MiaoSpeed 已启动，Rust WebSocket 握手、auth、提交节点、读取结果跑通（方案 §14 P0 #2、§8.2）。
   > ⚠️ **本页所有具体帧格式（握手帧、auth 挑战、vendor 节点结构、结果帧字段、Matrix/测试名）均为占位/预期形态，
-  > 真实字段以 P0-02 固定版本协议回填。方案 §8.1 明确要求：**Core 不应硬编码未经验证的 Matrix 名称**——preset 名只作为配置项，不在代码中写死未验证的测试名。
+  > 真实字段以 P0-02 固定版本协议回填。方案 §8.1 明确要求：**Gnosis 不应硬编码未经验证的 Matrix 名称**——preset 名只作为配置项，不在代码中写死未验证的测试名。
 - p3-01 已完成：`CheckJob`（`run_id` / `checker_tag` / `node_ids` / `presets`）已定义。
 - `node_payloads` / `NormalizedNode` 在 P2（`03-p2-fetch-parse/`）可用，提供节点的完整协议配置。
 
@@ -53,7 +53,7 @@ thiserror = "1"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }  # 仅测试侧起 mock server
 ```
 
-#### Step 2 — 定义 `CheckJob` / `CheckJobId` / `CheckResult`（Core 侧，非 MiaoSpeed 原生）
+#### Step 2 — 定义 `CheckJob` / `CheckJobId` / `CheckResult`（Gnosis 侧，非 MiaoSpeed 原生）
 
 ```rust
 // crates/checker-miaospeed/src/types.rs
@@ -143,7 +143,7 @@ impl Checker for MiaoSpeedAdapter {
 
 #### Step 4 — 握手与 auth 签名 / challenge
 
-> 下列帧名/算法为**预期骨架**，切实体以 P0-02 固定版本协议回填。Core 侧须保证：
+> 下列帧名/算法为**预期骨架**，切实体以 P0-02 固定版本协议回填。Gnosis 侧须保证：
 > - 握手中完成 auth（如 HMAC 签名 / nonce challenge）；
 > - 失败必须返回 `CheckerError::Auth`，不静默继续；
 > - `secret` 仅用于签名，**不输出到日志/错误回显**（CONVENTIONS §2.11 #8）。
@@ -210,7 +210,7 @@ impl MockMiaoSpeed {
 
 **落地**（`crates/checker-miaospeed`）：
 - `protocol.rs`：P0-02 冻结协议的可执行化——`build_request_body`（jsoniter 字节级形态：Go 字段名/顺序、`Configs` 内嵌展开、零值输出、空切片 `[]`、`Challenge`/`Vendor` 受控）、`hash_miao_speed`（D.4 链式 SHA512 + base64URL 带填充）、`sign_request`（**D.5 quirk：用 `Vendor:""` 克隆签名**）、`finalize_request`（真实 Vendor + Challenge 回填）。`BUILDTOKEN_KEY` 内嵌同 P0。
-- `types.rs`：`CheckerError{Connect,Ws,Auth,Protocol}` + Core 侧 `SubmitRequest/VendorNode/CheckResult/InitialResult/DeepResult/CheckerStatus/CheckJobId`（`latency_ms=-1` 即 dead，Phlogo 约定）。
+- `types.rs`：`CheckerError{Connect,Ws,Auth,Protocol}` + Gnosis 侧 `SubmitRequest/VendorNode/CheckResult/InitialResult/DeepResult/CheckerStatus/CheckJobId`（`latency_ms=-1` 即 dead，Phlogo 约定）。
 - `adapter.rs`：`Checker` trait（`submit`/`collect`/`status`）+ `MiaoSpeedAdapter`——每请求一条新 WS 连接，body 内联 Challenge（认证逐请求内联，D.1/D.2）；收到 `Error` 非空帧 → `CheckerError::Auth`（不静默）；流式读到 `Result` 对象帧为止；`id_map` 维护 `vendor_id ↔ internal_node_id`，结果帧按 `ProxyInfo.Name` 还原（**不按 Index 顺序**，D.6）。`secret` 不进任何日志/错误。
 - `mock.rs`（`#[cfg(test)]`）：按协议实现的最小 mock——用与服务端相同的「Vendor="" 克隆重序列化比对」验签；失败回 `{"Error":"cannot verify..."}`；成功回 Queuing Progress → 逐节点 Progress → 终态 Result 帧（canned results）。
 

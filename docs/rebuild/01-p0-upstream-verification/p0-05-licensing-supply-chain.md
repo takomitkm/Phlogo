@@ -8,7 +8,7 @@
 
 - 建立 **`cargo-deny` 配置脚手架**（licenses / advisories / bans），作为 Rust 依赖的门禁基础。
 - 规划 **SBOM** 产出方式（Rust crate + 第三方二进制）。
-- 记录四大上游的**许可证与固定版本**：MiaoSpeed（AGPL）、Mihomo（GPL）、VProxy（MIT，保留版权）、paily（AGPL，仅架构参考）。
+- 记录四大上游的**许可证与固定版本**：MiaoSpeed（AGPL）、Mihomo（GPL）、VProxy（MIT，保留版权）、phlogo（AGPL，仅架构参考）。
 - 规划 **二进制 SHA-256 与构建信息** 的捕获方式（MiaoSpeed、Vben 构建产物、可选 Mihomo）。
 - 产出 `docs/THIRD_PARTY.md` 草案，承接 P0-01~P0-04 记录的版本/commit/许可证/修改记录/二进制哈希。
 
@@ -136,13 +136,13 @@ echo "MiaoSpeed <PIN MiaoSpeed version> built from <commit>" >> build-artifacts/
 |---|---|---|---|---|---|
 | VProxy | v1.16.9 | `19b9c147631ca0ddfd9e1d214fc2ed9244cd5340` | MIT（保留版权） | **仅移植算法**（非依赖，P0-01） | 保留 MIT 版权声明 |
 | MiaoSpeed | tag `4.7.9`（**自建**） | tag `4.7.9`（GitHub 预编译 commit 不可复现） | AGPL-3.0 | 独立二进制，**WebSocket 进程边界** | 自建 exe SHA-256 `2c302b29…46ab18`（87,692,288 B） |
-| Mihomo | `AirportR/mihomo v1.19.33-x365-miu.2` | 随 MiaoSpeed `go.mod replace` | GPL-3.0 | MiaoSpeed 内部依赖（不链接进 Core） | 见 MiaoSpeed SBOM |
+| Mihomo | `AirportR/mihomo v1.19.33-x365-miu.2` | 随 MiaoSpeed `go.mod replace` | GPL-3.0 | MiaoSpeed 内部依赖（不链接进 Gnosis） | 见 MiaoSpeed SBOM |
 | Apalis | `0.7.4`（+`apalis-sql 0.7.4`；`1.0.0` 为升级候选） | crates.io | MIT | Rust 依赖 | 编译+SQLite 队列 PASS |
 | Vben Admin web-ele | tag `v5.7.0` | `63a38dce49ba109f61607994e21ba921d8e970e9` | MIT | 独立前端 | `dist.zip`，OpenAPI→TS 生成 PASS |
 | paily-core / paily-fetch | 参考 `openpaily/*`（归档） | Phlogo fork `takomitkm/Phlogo` | AGPL-3.0 | **仅架构参考，不复制代码** | — |
 
 **`deny.toml` 脚手架**：已在仓库根 `deny.toml` 落地（licenses/advisories/bans/sources），
-**待 P1 建起 `core-rs/Cargo.toml`（Rust workspace）后正式生效**（当前无 Rust manifest，`cargo deny` 无对象可查）。
+**待 P1 建起 `gnosis-rs/Cargo.toml`（Rust workspace）后正式生效**（当前无 Rust manifest，`cargo deny` 无对象可查）。
 
 **SBOM 计划**：Rust 侧 `cargo cyclonedx`（CycloneDX）产出 `bom.xml`；第三方二进制（MiaoSpeed 自建 exe、Vben `dist.zip`、Mihomo 随 MiaoSpeed）登记到 `THIRD_PARTY.md` + SBOM 附件。CI 构建后 `sha256sum` 并与 `THIRD_PARTY.md` 登记值比对（防篡改）。
 
@@ -165,7 +165,7 @@ test -f docs/THIRD_PARTY.md && echo "THIRD_PARTY exists"  # 期望打印
 
 - **`cargo-deny` 配置脚手架存在**（`deny.toml`），且 `cargo deny check licenses` / `advisories` 通过（仅允许已审批项）。
 - **SBOM 计划存在**：明确 Rust crate SBOM + 第三方二进制清单的产出方式与归档位置。
-- **许可证与固定版本已记录**到 `docs/THIRD_PARTY.md` 草案：MiaoSpeed（AGPL）、Mihomo（GPL）、VProxy（MIT，保留版权）、paily（AGPL，架构参考 only）。
+- **许可证与固定版本已记录**到 `docs/THIRD_PARTY.md` 草案：MiaoSpeed（AGPL）、Mihomo（GPL）、VProxy（MIT，保留版权）、phlogo（AGPL，架构参考 only）。
 - **二进制 SHA-256 与构建信息捕获计划**已记录（至少 MiaoSpeed；Vben dist、可选 Mihomo 同样规划）。
 - 文档中明确写出：**进程隔离 ≠ 许可证豁免**（方案 §16、CONVENTIONS §2.11）。
 
@@ -195,6 +195,6 @@ test -f docs/THIRD_PARTY.md && echo "THIRD_PARTY exists"  # 期望打印
 - **进程隔离 ≠ 许可证豁免（最高优先级）**：MiaoSpeed（AGPL）、Mihomo（GPL）即使以独立二进制运行，其许可证义务（如提供对应源码、保留版权）仍需履行；不能因为「没链接」就忽略（方案 §16 第 1、2 条，CONVENTIONS §2.11）。
 - **copyleft 进入分发产物**：若最终分发包含 AGPL/GPL 组件，需评估（提供源码、许可证兼容）。`deny.toml` 的 allow 列表对 copyleft 要谨慎加白并留评审记录。
 - **VProxy MIT 版权保留**：即使只移植算法，也必须保留 MIT 版权与许可证声明（方案 §3.1、§16 第 3 条）。
-- **paily 代码误移植**：paily-core/paily-fetch 是 AGPL 且「仅架构参考」；不得直接复制其代码（方案 §16 第 4 条、CONVENTIONS §4 差异项 1/2）。
+- **phlogo 代码误移植**：paily-core/paily-fetch 是 AGPL 且「仅架构参考」；不得直接复制其代码（方案 §16 第 4 条、CONVENTIONS §4 差异项 1/2）。
 - **版本漂移**：上游 commit/tag 未固定时，SBOM 与哈希比对会失效；必须等 P0-01~P0-04 锁定后才算基线完成。
 - **npm 依赖许可证**：Vben 的 npm 依赖同样需扫描（前端 SBOM），不能只查 Rust 侧。

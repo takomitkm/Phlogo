@@ -49,7 +49,7 @@ pub fn build(cfg: Config) -> Router {
     // P0-02: login-specific limiter (tight threshold, peer-addr keyed; XFF is not trusted).
     // Login lives OUTSIDE /api/v1 so the matrix middleware doesn't wrap it; the limiter
     // is applied via route_layer on this mini-router only.
-    let login_limit = std::env::var("PAILY_LOGIN_RATE_LIMIT_PER_MIN")
+    let login_limit = std::env::var("PHLOGO_LOGIN_RATE_LIMIT_PER_MIN")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(10);

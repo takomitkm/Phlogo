@@ -1,43 +1,43 @@
-# Paily deployment topology (p7-01, plan §2.2/§13).
+# Phlogo deployment topology (p7-01, plan §2.2/§13).
 # Constraints: postgres/miaospeed have NO public ports (plan §16.10);
 # caddy is the single ingress on the legacy 21380.
 #
 # A1 (PROXY protocol): caddy prepends a PROXY v1 header with the real client
-# address to every connection it forwards to `api`. The API reads it at the TCP
+# address to every connection it forwards to `curse`. The API reads it at the TCP
 # layer (cannot be forged by a client) and uses it as the rate-limit bucket key.
-# `api` therefore must NOT publish a host port — it is reachable only from the
-# compose network, through caddy. See PAILY_SERVER_PROXY_PROTOCOL /
-# PAILY_SERVER_EXPECT_PROXY in the api service.
+# `curse` therefore must NOT publish a host port — it is reachable only from the
+# compose network, through caddy. See PHLOGO_SERVER_PROXY_PROTOCOL /
+# PHLOGO_SERVER_EXPECT_PROXY in the curse service.
 services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: paily
+      POSTGRES_USER: phlogo
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
-      POSTGRES_DB: paily
+      POSTGRES_DB: phlogo
     volumes:
       - pgdata:/var/lib/postgresql/data
       # worker's Apalis queue needs its own database; create it on first boot.
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
     # no ports: -> compose-internal only
 
-  api:
+  curse:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile.api
-    image: localhost/paily-api:local
+      dockerfile: deploy/Dockerfile.curse
+    image: localhost/phlogo-gnosis-curse:local
     environment:
-      PAILY_DATABASE_DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily
+      PHLOGO_DATABASE_DSN: postgres://phlogo:${POSTGRES_PASSWORD}@postgres:5432/phlogo
       # fetch/trigger enqueues into the Apalis queue (same database the worker uses).
-      PAILY_DATABASE_JOBS_DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily_jobs
-      PAILY_AUTH_SERVICE_SECRET: ${SERVICE_SECRET:?set in .env}
-      PAILY_AUTH_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set in .env}
-      PAILY_AUTH_JWT_SECRET: ${JWT_SECRET:?set in .env}
-      PAILY_SERVER_PORT: "8080"
+      PHLOGO_DATABASE_JOBS_DSN: postgres://phlogo:${POSTGRES_PASSWORD}@postgres:5432/phlogo_jobs
+      PHLOGO_AUTH_SERVICE_SECRET: ${SERVICE_SECRET:?set in .env}
+      PHLOGO_AUTH_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set in .env}
+      PHLOGO_AUTH_JWT_SECRET: ${JWT_SECRET:?set in .env}
+      PHLOGO_SERVER_PORT: "8080"
       # A1: read the PROXY v1 header from caddy; require it (the api port is
       # compose-internal only, so a direct connection cannot happen anyway).
-      PAILY_SERVER_PROXY_PROTOCOL: "1"
-      PAILY_SERVER_EXPECT_PROXY: "1"
+      PHLOGO_SERVER_PROXY_PROTOCOL: "1"
+      PHLOGO_SERVER_EXPECT_PROXY: "1"
     depends_on: [postgres]
     expose: ["8080"]
     # no host port: -> only reachable through caddy
@@ -46,11 +46,11 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.worker
-    image: localhost/paily-worker:local
+    image: localhost/phlogo-gnosis-worker:local
     environment:
-      PAILY_DATABASE_DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily
-      PAILY_DATABASE_JOBS_DSN: postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily_jobs
-      PAILY_AUTH_SERVICE_SECRET: ${SERVICE_SECRET:?set in .env}
+      PHLOGO_DATABASE_DSN: postgres://phlogo:${POSTGRES_PASSWORD}@postgres:5432/phlogo
+      PHLOGO_DATABASE_JOBS_DSN: postgres://phlogo:${POSTGRES_PASSWORD}@postgres:5432/phlogo_jobs
+      PHLOGO_AUTH_SERVICE_SECRET: ${SERVICE_SECRET:?set in .env}
     depends_on: [postgres]
 
   miaospeed:
@@ -71,11 +71,11 @@ services:
       - "21380:80" # the only published ingress
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-    depends_on: [api, web]
+    depends_on: [curse, web]
 
   apalis-board:
     image: ${APALIS_BOARD_IMAGE:-caddy:2-alpine}
-    command: ["--database-url", "postgres://paily:${POSTGRES_PASSWORD}@postgres:5432/paily"]
+    command: ["--database-url", "postgres://phlogo:${POSTGRES_PASSWORD}@postgres:5432/phlogo"]
     profiles: ["debug"] # opt-in via compose --profile debug
 volumes:
   pgdata:

@@ -1,4 +1,4 @@
-//! Core-side check types (plan §8 / p3-02 Step 2). Not MiaoSpeed-native shapes.
+//! Gnosis-side check types (plan §8 / p3-02 Step 2). Not MiaoSpeed-native shapes.
 use serde_json::Value;
 use uuid::Uuid;
 

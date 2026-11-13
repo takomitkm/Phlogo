@@ -5,5 +5,5 @@ pub fn init(level: &str) {
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", level);
     }
-    observability::init("paily-api");
+    observability::init("phlogo-gnosis-curse");
 }
