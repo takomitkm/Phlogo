@@ -936,3 +936,30 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 **唯一清理**：README 的「从旧版（`paily` 命名）升级」说明段——用户裁定「彻底改名、不管兼容」，故删除（保留它反而暗示需要迁移路径）。
 
 > 判定口径（供后续复查复用）：**引用上游真实名字 ≠ 改名遗漏**。凡 `paily` 指向一个真实存在的外部仓库/服务/文件名，就不是残留。
+
+---
+
+## [UTC 2026-11-13T10:00:00Z] S52 · 最新 mihomo / sing-box 协议支持度审计与修复
+
+**触发**：用户报「校机有 mihomo 在跑，检查对最新 mihomo 和 sing-box 的支持」。
+
+**环境事实**：校机 mihomo **v1.19.32**（run2 监听 mixed 7890 + controller 9090），真实订阅样本 4 份（各 52 节点：**vless 36 + hysteria2 16**），校机**无 sing-box**（清单取自 sing-box v1.14.0 官方文档）。
+
+**审计发现（真 bug）**：
+- `vproxy-adapter::cred_for` 只认 5 类协议 → **hysteria2 / anytls / hysteria / tuic / snell / wireguard / socks5 / http / mieru / sudoku / ssr 全部静默丢弃**；
+- 真实样本实测 **keep_rate 69.2%**（156 节点丢 48）；
+- 讽刺的是 **身份层早就支持**——`domain::Credential` 有 `Tuic`/`PrivateKey`/`UsernamePassword`/`Psk`/`Key`，`fingerprint::node_auth` 也逐协议对齐了上游 `nodeAuth`；**缺的只是解析层接线**；
+- sing-box 发射层是硬编码简版（只认 vmess/vless/trojan）→ hysteria2 节点输出时**丢 password**。
+
+**修复**：
+1. `cred_for` 按上游 `nodeAuth` **逐协议**补齐 11 类（含 tuic v5 的 `uuid:password`）；**移除 `cipher` 回退**——加密算法不是凭据，会污染身份；
+2. 新增 `singbox_outbound_from_clash(payload, name)`：从完整 Clash payload 做全保真 sing-box 转换（`cipher`→`method`、`private-key`→`private_key`、Clash 扁平 TLS→sing-box `tls` 对象、`network`+`ws-opts`/`grpc-opts`→`transport`、丢弃 Clash 专有键）；`render_subscription` 改用它；
+3. 回归测试 5 个（解析 2 + 发射 3），含「凭据口径与上游 `nodeAuth` 逐条一致」断言。
+
+**修复后真实样本回归**：**keep_rate 69.2% → 100.0%**（156/156）。
+
+**踩坑**：① transport 转换必须早于「丢弃 Clash 专有键」，否则 `network` 先被删 → transport 变 Null（顺序 bug）；② `json!({"host": ...})` 赋给 `t["host"]` 时 `unwrap_or_else` 需显式 `Value`（类型推断走偏）；③ 测试块插入位置撞到原 doc comment（clippy `empty line after doc comment`）。
+
+**文档**：新增 [`12-protocol-coverage-audit.md`](12-protocol-coverage-audit.md)（含仍未覆盖项的如实清单：shadowtls / wireguard 多字段 / hysteria2 obfs 与端口跳跃 / mihomo 1.19 的 ech-opts 与 x25519mlkem768）。
+
+**校机验证**：`cargo test --workspace` **FULL_TEST_EXIT=0**（43 个测试二进制）、fmt 0、clippy 0。

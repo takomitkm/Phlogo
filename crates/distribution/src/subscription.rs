@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::naming::{fields_for, render, GradeThresholds};
 use crate::output::{
-    base64_subs, clash_proxy_from, mihomo_yaml, singbox_json, singbox_outbound_from, OutputNode,
+    base64_subs, clash_proxy_from, mihomo_yaml, singbox_json, singbox_outbound_from_clash, OutputNode,
 };
 use crate::{select_with_preset, Candidate};
 
@@ -140,15 +140,10 @@ pub fn render_subscription_with_sponsor(
         outputs.push(OutputNode {
             selected: sel.clone(),
             clash_proxy: clash_proxy_from(node.clash_proxy.clone(), &name),
-            singbox_outbound: singbox_outbound_from(
-                &node.protocol,
-                &node.server,
-                node.port,
-                &node.credential,
-                node.tls_sni.as_deref(),
-                node.ws_path.as_deref(),
-                &name,
-            ),
+            // Full-fidelity sing-box conversion from the Clash-shaped payload, so
+            // protocol-specific fields (hysteria2 password, tuic uuid+password,
+            // shadowsocks method, …) survive — not just vmess/vless/trojan.
+            singbox_outbound: singbox_outbound_from_clash(&node.clash_proxy, &name),
             name,
         });
     }
