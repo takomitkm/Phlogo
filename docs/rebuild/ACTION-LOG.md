@@ -1219,3 +1219,39 @@ README 与 Rust Workspace 一致性提醒；随后裁定「把这些核查记录
 - **两道门禁**：可部署门禁 = M1–M5 + M15；生产级门禁 = M6–M14 + M18–M22。**全部要做**（用户裁定），
   区别只在顺序与验收时点，不是做不做。
 - 本节同样**只做记录与排期，未改代码**。
+
+---
+
+## [UTC 2026-11-13T18:25:00Z] S60 · 最初计划逐节核查 → 并入缺口总账（M23–M27，全部要做）
+
+**用户指令**：「检查一下最初的计划是不是都完成了」（对照 `S:\Downloads\paily-core-rust-rebuild-plan.md`）；
+随后裁定「要」——把对照结果并入 §D 台账。
+
+### 执行的每一步 / 每条只读命令
+
+| # | 命令 / 动作 | 结果 |
+| --- | --- | --- |
+| 1 | `grep "^#{1,3} " 计划文档` | 提取 50 个标题定位章节（§14 在 533 行、§15 在 614 行） |
+| 2 | `read 计划 533-712`（§14 分阶段验收 / §15 核心验收 17 条 / §16 安全 10 条 / §17 MVP 不做 / §18 冻结规格 10 份 / §19 技术基线 / §20 索引） | 取得全部验收条款原文 |
+| 3 | `glob docs/*.md` | §18 十份规格文件**只有 `THIRD_PARTY.md` 存在**，其余 9 份缺 |
+| 4 | `read migrations/0007_node_scores.up.sql` | `PK(node_id,checker_tag)` 仅当前行 → **P4「评分历史/快照」未做** |
+| 5 | `grep score_history\|score_snapshot\|identity_material` | 评分历史零命中；指纹 golden 位于 domain/vproxy-adapter |
+| 6 | `grep p2-03 "name\|测试"` | golden 全表：`name_change` 相同 / 各字段变化不同 / `field_order`、`null_default` 相同（14 passed） |
+| 7 | 复用 S58/S59 证据（`check_job.rs`、`adapter.rs:112`、`subscription.rs`、`compose.yaml`、`Dockerfile.*`） | P3/P5/P7 的 ⚠️ 判定 |
+| 8 | `edit 09-self-completed-gaps.md`（新增 §D.6 + M23–M27）、`edit 00-index.md`（总账 M1–M27 + 两道门禁） | 记录落地 |
+
+### 判定（三层，已写入 §D.6）
+
+1. **阶段实现层基本完成**：P0–P7 全有实现+测试+文档；⚠️ 四个：P3（M2/M3 桩）、P4（M5 未接线 + **M23 评分历史缺**）、
+   P5（M6 丢档案 + M27）、P7（M14 CI + M25 SBOM + M26 演练）。
+2. **计划验收条款未全达成**：§15 **15/17 有测试但零件级**（无一条在真实 MiaoSpeed + 真实订阅下端到端）；
+   #15/#17 缺（M27）；§16 四条 ⚠️（M1/M25/M26）；**§18 冻结规格 9/10 缺（M24）**——含 p0-02 遗留未勾选项
+   `MIAOSPEED_PROTOCOL.md` 与 crosscheck 引用悬空的 `LIFECYCLE.md`。
+3. **系统目标未达**：即 D.2 的 M1–M5。
+
+### 口径
+
+- 新增 **M23–M27**（评分历史 / §18 规格九份 / SBOM+deny+ScanCode / 备份演练 / §15 两条验收），
+  总账 **M1–M27 全部要做**（用户裁定）。
+- 门禁：可部署 = M1–M5 + M15；生产级 = M6–M14 + M18–M27。
+- 本节**只做记录与排期，未改代码**；VProxy「最小移植」与 sing-box 完整转换为已记录的决策分歧/计划外新增，不算未完成。

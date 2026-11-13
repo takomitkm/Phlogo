@@ -178,6 +178,86 @@
 
 > 与 D.4 一致：本节**只做记录与排期，未改代码**；未改动 A/B/C 节历史结论。
 
+### D.6 计划对照：`paily-core-rust-rebuild-plan.md` 逐节核查（2026-11-14，用户裁定全部要做）
+
+> 对照对象：`S:\Downloads\paily-core-rust-rebuild-plan.md`（§14 分阶段验收、§15 核心验收 17 条、
+> §16 安全供应链 10 条、§17 MVP 不做、§18 冻结规格 10 份、§19 技术基线）。
+> **结论分三层**：① 阶段实现层基本完成（P0–P7 有实现有测试有文档，3 个 ⚠️）；② 计划验收条款**未全达成**
+> （§18 规格 9/10 缺、P4 评分历史 ❌、§15 #15/#17、§16 四条 ⚠️）；③ 系统目标（§1.1 能实际提供订阅服务）未达——
+> 即 D.2 的 M1–M5。新增 **M23–M27**，与既有 M1–M22 合并为完整 MUST-DO 总账。
+
+#### D.6.1 §14 分阶段验收逐条判定
+
+| 阶段 | 计划验收要点 | 判定 | 证据 / 缺口 |
+|---|---|---|---|
+| P0 | 独立示例+测试+固定版本+许可证（VProxy/MiaoSpeed/Apalis/Vben） | ✅ PASS | 5 页全过；VProxy 改「最小移植」为 P0-01 判定的分歧路径（已记录） |
+| P1 | 两来源一节点、两关联 | ✅ | p1-04 去重/关联集成测试 |
+| P2 | Replace 删消失、失败不清空、Accumulate 不删 | ✅ | p2-04 reconcile 6 测试 + `fetch_loop` e2e（§A1） |
+| **P3** | 批量测活准确映射、断连重试不重复 | ⚠️ **零件绿、整机桩** | adapter/映射/幂等/持久化全有测试；但 `handle_check` 未接 adapter、无入队点 → **M2/M3**；真机仅 P0-02 一次 spike |
+| **P4** | tag 独立、不可达不删关联、评分公式+版本、**评分历史/快照**、orphan | ⚠️ | 状态机/orphan/ewma-v1 golden ✅；**评分历史 ❌ → M23**（`0007_node_scores` 仅当前行 `PK(node_id,checker_tag)`，grep `score_history/snapshot` 零命中）；评分未接线（M5） |
+| **P5** | 结果符合条件、**Mihomo 校验**、撤销立即失效 | ⚠️ | AST/配额/token ✅；`/sub` 丢 `filter_ast`/`preset`（M6）；Mihomo 校验仅到转换映射层（S54 真 `mihomo -t` 13 协议全 PASS），**`mihomo_yaml` 完整模板产物未过真二进制 → M27**（p5-03 自陈留 P7） |
+| P6 | 不碰库即可管理、可看来源/历史/评分解释 | ✅ | Vben 5.7.0、页面+端点+e2e（§A6） |
+| **P7** | compose、**备份/恢复演练**、日志指标、任务恢复、限流认证、SSRF、**SBOM 扫描** | ⚠️ | compose/脚本/日志/限流/SSRF ✅；**SBOM ❌ → M25**、**备份恢复演练 ❌ → M26**（B4 无容器运行时）、cargo-deny/ScanCode ❌（M25）、CI ❌（M14） |
+
+#### D.6.2 §15 核心验收测试 17 条对照
+
+**15 条有直接测试证据**：#1 两来源一节点（p1-04）；#2–4 指纹 golden 全表——`name_change` 相同 /
+`uuid·password·transport·tls·server·port_change` 不同 / `field_order`、`null_default` 相同
+（`p2-03-fingerprint.md:152`，`cargo test -p domain` 14 passed）；#5–9 fetch/对账/孤儿（p2-04、p4-02）；
+#10–14 tag 独立（`0007` PK）、批量映射（p3-03）、迟到不覆盖（`should_overwrite`）、重试幂等（同 run 4 次 1 行）。
+
+**2 条未达成 → M27**：
+- **#15 订阅不输出 Retired 节点**：结构上满足（`/sub` SQL 过滤 `membership='Linked'`），**无专门断言测试**；
+- **#17 生成的 Mihomo YAML 过目标版本校验**：见 D.6.1 P5 行。
+
+> **关键口径**：这 15 条 ✅ 是**零件级**（mock/单测/集成）。P0-02 只做过一次真机 spike——
+> **没有任何一条在「真实 MiaoSpeed 常驻 + 真实订阅」下端到端跑出来**。计划的验收意图是系统级，
+> 所以 P3/P4/P5 的系统级验收实际未达成（M2–M5 接线后才算）。
+
+#### D.6.3 §16 安全/许可证/供应链 10 条对照
+
+✅ 6 条：MiaoSpeed AGPL + 自建哈希（THIRD_PARTY）、Mihomo GPL 义务登记、VProxy MIT 保留版权（最小移植）、
+AGPL 参考不复制（B3 clean-room）、SSRF（6 测试 + 重定向二次拦截）、端口隔离（PG/MiaoSpeed 零公网，compose）。
+Koipy 未用 = 符合 §17。
+
+⚠️ 4 条：**SBOM 未产出**（`p0-05` 仅规划）、**cargo-deny / ScanCode 未跑**（deny.toml 脚手架在；audit 用
+B4 离线匹配器部分覆盖）、**凭据加密层未做**（§16.8——当前恰好未存凭据是因为载荷占位，M1）、
+**备份恢复演练未做**（M26）。
+
+#### D.6.4 §18 冻结规格文件：**9/10 缺 → M24**
+
+计划要求 P0/P1 完成的 10 份，`docs/` 下只有 **`THIRD_PARTY.md`** ✅。
+缺：`SPEC.md`、`ARCHITECTURE.md`、`DATA_MODEL.md`、`NORMALIZED_NODE.md`、`LIFECYCLE.md`、
+`MIAOSPEED_PROTOCOL.md`、`SUBSCRIPTION_SPEC.md`、`SECURITY.md`、`ADR/`。
+
+内容**散落在** `CONVENTIONS.md`、rebuild 各页与 `docs/{scoring,node-pool,distribution,templates,source-management,configuration-and-api}.md`，
+但计划点名的命名文件不存在。**佐证**：`p0-02` 验收里留有未勾选方框
+「`[ ] docs/MIAOSPEED_PROTOCOL.md 独立成档（P3 前完成）`」；且 `10-review-crosscheck.md` 引用了
+不存在的 `LIFECYCLE.md`（"Degraded 规则一并冻结于 LIFECYCLE.md"）——文档互相引用悬空。
+
+**M24**：9 份文件落地，内容**单源化**（从既有 rebuild 页抽取/互链，不复制两份导致漂移）；
+`MIAOSPEED_PROTOCOL.md` 直接以 `p0-02` D 节为源抽出。验收：9 份存在、交叉引用不再悬空、
+CI 可断言文件存在。
+
+#### D.6.5 其余节
+
+- **§17 MVP 不做**：全部遵守 ✅（sing-box 完整转换是计划标注「第一版不做」的项，S52–S54 做了——超出计划，不算违规）。
+- **§19 技术基线**：与实现一致 ✅；VProxy 一项为 P0-01 记录在案的决策分歧（计划允许「P0 验证后复用或最小化移植」）。
+- **计划外新增（在案）**：S52–S54 协议覆盖 100% + 双真二进制校验、S57 Sub-Store sidecar、S58/S59 审计。
+
+#### D.6.6 新增 MUST-DO（M23–M27，全部要做）
+
+| ID | 项 | 现状证据 | 验收标准 | 优先级 / 依赖 |
+|---|---|---|---|---|
+| **M23** | **评分历史/快照**（P4 计划要求） | `0007_node_scores` 仅当前行，无历史表 | 历史表 + 评分接线后每轮落一行；能回答「该节点 N 天前分数」；保留天数可配 | **P1**，依赖 M5 |
+| **M24** | **§18 冻结规格 9 份落地** | D.6.4 | 9 份存在、内容单源化、交叉引用不悬空、CI 断言文件存在 | **P1**，无依赖（纯文档可先做） |
+| **M25** | **SBOM + cargo-deny + ScanCode**（§16.6/16.7） | deny.toml 脚手架在、SBOM 未产出 | 有网环境跑 `cargo deny check licenses/bans` + `cargo cyclonedx`（SBOM）+ ScanCode 抽样；与 THIRD_PARTY 哈希一致；进 CI（M14） | **P1**，依赖 M14 |
+| **M26** | **备份/恢复演练**（P7 + B4） | 脚本在、演练未做 | 容器运行时环境：compose 全栈拉起 → `backup.sh` → 清库 → `restore.sh` → 数据/来源关系/任务状态一致 | **P2**，依赖容器运行时（B4） |
+| **M27** | **§15 #15 + #17 两条验收** | D.6.2 | #15：集成测试断言 Retired 节点不出现在 `/sub` 输出；#17：校机真 `mihomo -t` 校验 `mihomo_yaml` **完整模板产物** | **P1**，#17 依赖 M6 + 真 mihomo 环境 |
+
+**门禁归属**：M23–M27 全部归**生产级门禁**（M6–M14 + M18–M22 扩为 M6–M27）；可部署门禁仍是 M1–M5 + M15。
+**总量：M1–M27，全部要做**（用户裁定）。
+
 ---
 
 ## 提交记录
