@@ -182,9 +182,47 @@ hysteria v1 / anytls / tuic / wireguard / snell(+obfs) / socks5 / http。
 | 9 | `hysteria2.obfs` 语义 | mihomo `obfs`=**类型**、`obfs-password`=密码 | `obfs{type,password}` 正确拆分 |
 | 10 | `hysteria` v1 的凭据是 `auth-str`（mihomo）不是 `password` | 解析层会丢节点 | 解析层加 `auth-str`/`auth` 回退 |
 
-**第 6 条特别值得记**：sing-box 官方文档写 `"2080:3000"`（冒号），而上游 issue #2416 声称应是 dash
-（`"2080-3000"`）——**实测二进制只接受 dash？** 实测结论是：**冒号被拒**（`bad port range`），
-即文档正确、issue 的说法有误（该 issue 报告的是文档笔误但结论反了）。这正是「以二进制为准」的例证。
+**第 6 条的完整来龙去脉**（含一处对早先表述的更正）：
+
+- [issue #2416](https://github.com/SagerNet/sing-box/issues/2416)（KdeInit 提，2024-12-29T05:12Z，
+  **sing-box 1.11.0-beta.17**）报的日志是 `FATAL initialize outbound[1]: bad port range: 2080:3000`，
+  作者据此断言「文档的冒号写错了，应该改 dash」。
+- **真实原因是 beta 期的代码/文档不一致**：当时端口范围解析在 sing-box 的 `sing-quic` 依赖里，
+  还不接受冒号形式，而文档已经写成冒号。所以这**不是文档笔误**，是代码落后于文档。
+- 维护者 nekohasekai 在同日 07:40Z 提交
+  [sing-quic 8e6a84e](https://github.com/SagerNet/sing-quic/commit/8e6a84e8211b040a976509381436c53f2eba508e)
+  *Add port hopping for hysteria2*，新增的 `parsePorts` **强制要求冒号**：
+  ```go
+  if !strings.Contains(portRange, ":") {
+      return nil, E.New("bad port range: ", portRange)
+  }
+  ```
+  提案人随后自行关闭 issue，评论是「文档现在与代码一致，用的是冒号」。
+  ——即**改的是代码（向冒号靠），不是文档（向 dash 靠）**，提案里 dash 的建议没被采纳。
+- **当前（v1.14.4）仍是冒号**。我们用真二进制做了 A/B 复核：
+
+  | `server_ports` | 二进制判定 |
+  | --- | --- |
+  | `["60000:65530"]` | ✅ ACCEPTED |
+  | `["2080:3000"]` | ✅ ACCEPTED |
+  | `["60000:"]`（开口，表示到 65535） | ✅ ACCEPTED |
+  | `["60000-65530"]` | ❌ `bad port range: 60000-65530` |
+  | `["60000"]`（裸端口） | ❌ `bad port range: 60000` |
+  | `["60000:65530","443"]`（混合，第二个裸端口） | ❌ `bad port range: 443` |
+
+  结论：**冒号正确**。所以早先本页写的「issue 的结论有误、文档笔误」这个措辞不准确——
+  准确说法是：**issue 诊断的现象真实存在（beta 期冒号确实被拒），但它给出的修法方向反了，
+  上游最终是让代码接受冒号。**
+
+### 5.6 由此补上的一个真实漏洞：裸端口必须写 `N:N`
+
+上表第 5、6 行暴露了我们转换器的一个真 bug：`parsePorts` 要求**每个元素都含冒号**，
+而 mihomo 的 `ports` 允许写成单端口（`ports: "443"`）。原先的 `server_ports_of()`
+只做 `-` → `:` 替换，会原样产出 `["443"]`，被 sing-box 拒收。
+
+**修复**：新增 `normalize_port_range()` —— 替换 dash 后若不含冒号，补成 `"N:N"`
+（`"443"` → `"443:443"`；`"60000:"` 保持开口语义）。回归测试
+`singbox_port_ranges_always_carry_a_colon` 覆盖四种输入。
 
 ### 5.4 行为变更：不可表示的协议被**跳过**
 

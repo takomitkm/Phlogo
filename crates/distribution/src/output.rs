@@ -271,24 +271,57 @@ fn duration_ms(v: &Value) -> Value {
 
 /// Convert a mihomo port-range list into sing-box's `server_ports` array.
 ///
-/// mihomo: `ports: "60000-65530"` (string, dash-separated).
-/// sing-box: `server_ports: ["60000:65530"]` (array, **colon**-separated — the
-/// binary rejects the dash form with "bad port range"; note the sing-box docs
-/// use the colon form while upstream issue #2416 argues for dashes — the
-/// **binary** is the authority here).
-fn server_ports_of(v: &Value) -> Value {
-    match v {
-        Value::Array(_) => v.clone(),
-        Value::String(s) => {
-            let parts: Vec<String> = s
-                .split(',')
-                .map(|p| p.trim().replace('-', ":"))
-                .filter(|p| !p.is_empty())
-                .collect();
-            json!(parts)
-        }
-        other => json!([other.to_string()]),
+/// Normalise one port-range element to the form sing-box accepts.
+///
+/// sing-box's `parsePorts` (sing-quic `hysteria2/client.go`) **requires a colon in
+/// every element**:
+///
+/// ```go
+/// if !strings.Contains(portRange, ":") {
+///     return nil, E.New("bad port range: ", portRange)
+/// }
+/// ```
+///
+/// so `"443"` (a bare single port, legal in mihomo) must become `"443:443"`.
+/// A trailing colon is allowed and means "to 65535" (`"60000:"`).
+fn normalize_port_range(p: &str) -> Option<String> {
+    let s = p.trim().replace('-', ":");
+    if s.is_empty() {
+        return None;
     }
+    if s.contains(':') {
+        Some(s)
+    } else {
+        Some(format!("{s}:{s}"))
+    }
+}
+
+/// Convert a mihomo port-range list into sing-box's `server_ports` array.
+///
+/// - mihomo: `ports: "60000-65530"` (string, dash-separated, comma for several);
+/// - sing-box: `server_ports: ["60000:65530"]` (array, **colon**-separated).
+///
+/// The colon is not a style choice: sing-box v1.14.4 rejects the dash form with
+/// `bad port range: 60000-65530`, and rejects a bare port too. Verified with the
+/// real binary (2026-11-13) — see docs/rebuild/13-*.md §5.6.
+fn server_ports_of(v: &Value) -> Value {
+    let raw: Vec<String> = match v {
+        Value::Array(items) => items
+            .iter()
+            .map(|x| {
+                x.as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| x.to_string())
+            })
+            .collect(),
+        Value::String(s) => s.split(',').map(|p| p.trim().to_string()).collect(),
+        other => vec![other.to_string()],
+    };
+    let parts: Vec<String> = raw
+        .iter()
+        .filter_map(|p| normalize_port_range(p))
+        .collect();
+    json!(parts)
 }
 
 /// Protocols whose sing-box outbound has **no** `tls` block.
@@ -903,5 +936,27 @@ mod output_tests {
         assert_eq!(sb["type"], "socks");
         assert_eq!(sb["version"], "5");
         assert_eq!(sb["username"], "u");
+    }
+
+    /// sing-box's `parsePorts` requires a **colon in every** `server_ports`
+    /// element (sing-quic `hysteria2/client.go`: `if !strings.Contains(portRange, ":")`),
+    /// so a bare single port has to become `N:N`. Verified against the real
+    /// sing-box v1.14.4 binary: `["60000"]` -> "bad port range: 60000".
+    #[test]
+    fn singbox_port_ranges_always_carry_a_colon() {
+        let cases: &[(&str, serde_json::Value)] = &[
+            ("60000-65530", serde_json::json!(["60000:65530"])),
+            ("443", serde_json::json!(["443:443"])),
+            ("443,8443-8444", serde_json::json!(["443:443", "8443:8444"])),
+            ("60000:", serde_json::json!(["60000:"])),
+        ];
+        for (input, expected) in cases {
+            let payload = serde_json::json!({
+                "name": "h", "type": "hysteria2", "server": "h.example.com",
+                "port": 443, "password": "pw", "ports": input
+            });
+            let sb = singbox_outbound_from_clash(&payload, "h").expect("hysteria2");
+            assert_eq!(&sb["server_ports"], expected, "input was {input}");
+        }
     }
 }

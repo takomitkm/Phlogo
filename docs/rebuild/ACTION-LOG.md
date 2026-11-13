@@ -1041,3 +1041,39 @@ wireguard 多字段 / mihomo 1.19 的 ech-opts 与 x25519mlkem768）。
 **回归测试**：新增 7 个（hysteria2 端口跳跃+obfs、tuic、ss plugin、tls 条件化、跳过不可表示协议、snell obfs、socks5→socks）。
 
 **校机验证**：`cargo test --workspace` **FULL_TEST_EXIT=0**（43 个测试二进制；distribution 35 个用例）、fmt 0、clippy 0。
+
+---
+
+## [UTC 2026-11-13T12:10:00Z] S55 · 复核 issue #2416 并更正表述 + 修出「裸端口」真漏洞
+
+**触发**：用户追问「上游 issue #2416 声称该改成 dash，给我链接和分析」。
+
+**核查来源**（全部走 REST，无浏览器）：
+- issue 正文与评论：`api.github.com/repos/SagerNet/sing-box/issues/2416`（+ `/comments`）
+- 结案指向的提交：[sing-quic 8e6a84e](https://github.com/SagerNet/sing-quic/commit/8e6a84e8211b040a976509381436c53f2eba508e)（*Add port hopping for hysteria2*）
+- 该提交里 `parsePorts` 的实际实现（强制冒号）
+- v1.11.0-beta.17 的 `protocol/hysteria2/outbound.go`（确认解析当时在 sing-quic 依赖里）
+
+**事实链（更正 S54 的表述）**：
+- issue #2416 于 2024-12-29T05:12Z 提在 **1.11.0-beta.17**，日志 `bad port range: 2080:3000`；
+  作者断言「文档的冒号错了，应该改 dash」。
+- **真实原因是 beta 期代码落后于文档**（不是文档笔误）：解析在 sing-quic 里，当时还不认冒号。
+- 维护者同日 07:40Z 在 sing-quic 新增 `parsePorts`：`if !strings.Contains(portRange, ":") { return bad port range }`
+  ——**改的是代码（向冒号靠）**，提案的 dash 方向没被采纳；提案人随后自行关闭 issue。
+- 因此 S54 写的「该 issue 报告的是文档笔误但结论反了」**措辞不准确**，已在
+  `13-substore-compare-and-singbox-test.md` §5.3 更正为准确事实链。
+- 真二进制 A/B（v1.14.4）：`["60000:65530"]` ✅、`["2080:3000"]` ✅、`["60000:"]` ✅（开口）；
+  `["60000-65530"]` ❌、`["60000"]` ❌、`["...","443"]` ❌（`bad port range: 443`）。
+
+**由此修出真漏洞**：`parsePorts` 要求**每个元素都含冒号**，而 mihomo 允许写单端口（`ports: "443"`）。
+原 `server_ports_of()` 只做 dash→colon，会产出裸端口 `["443"]` → sing-box 拒收（整份配置起不来）。
+修复：新增 `normalize_port_range()`，替换 dash 后若不含冒号则补成 `"N:N"`（`"443"`→`"443:443"`，
+`"60000:"` 保持开口）。回归测试 `singbox_port_ranges_always_carry_a_colon`（4 组输入）。
+二进制复核：`["443:443"]` ✅、`["443:443","8443:8444"]` ✅。
+
+**过程教训（假绿）**：首次验证时 `cargo test` 显示 `0 passed / 35 filtered out` —— 新测试根本没编译进去。
+原因：`scp -r localdir host:destdir` 在 destdir 已存在时会把 localdir 复制**到 destdir 内部**（得到
+`crates/crates`），真实树保持陈旧。原 `rename-full-verify2.ps1` 第 10 行有前置 `rmdir` 才是正确姿势。
+**判据：测试名过滤后若 `0 passed` 且 `N filtered out`，就是没编译进去，不是通过。**
+
+**校机验证**：`cargo test --workspace` 全绿、fmt 0、clippy 0。
