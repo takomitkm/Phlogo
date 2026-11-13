@@ -41,9 +41,9 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 | **评审** | 旧 Go 评审 × Rust 实现交叉审查 | `10-review-crosscheck.md` | 逐节对照（权限/DB/评分/契约/表达式/分发/工程化/架构）+ 真实缺口 + 已废弃建议 + P0 验收 |
 | **等价性** | 上游等价性审计（B3 答复） | `11-equivalence-audit.md` | 26 条上游路径逐条判定（等价/架构取代/缺失）+ **配置键悬挂审计**（13 键无消费者、6 键值被静默忽略） |
 
-### 实施状态总览（2026-11-11 收口）
+### 实施状态总览（2026-11-13 更新）
 
-**P0–P7 全部子步骤已实现、验证并推送**（实现 + 各页「验证结果」实测记录 + ACTION-LOG S05–S33）。
+**P0–P7 全部子步骤已实现、验证并推送**（实现 + 各页「验证结果」实测记录 + ACTION-LOG S05–S47）。
 关键决策与偏差均写入对应页面：
 
 - **P0**：VProxy 最小化移植（不作依赖）；MiaoSpeed 自建 `4.7.9`（sha256 记录）；Apalis `0.7.4` PG backend；Vben `v5.7.0`。
@@ -52,14 +52,20 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 - **P3**：Apalis CheckJob（**独立 `paily_jobs` 库**——setup 内嵌 migration 与业务迁移冲突的解法）；MiaoSpeed WS Adapter（**golden 签名与 Go 逐字节一致**）；结果规范化（迟到不覆盖/跨 tag 合并）；历史持久化（幂等重跑、JSONB roundtrip）。
 - **P4**：状态机 + 事务化清理（仅赢家清理）；cleanup cycle + 跨 tag 聚合；EWMA 评分（**golden 0.967722 更正规格手算误差**；speed 分支/jitter 阈值/tie-break 三决策定稿）。
 - **P5**：类型化 Filter AST（白名单 + 参数化 SQL + 手写反序列化）；selector.go 逐函数移植（E-S A-Res 加权抽样，统计验收）；订阅输出（三格式 + **白名单命名模板**替代 expr + token 哈希）。
-- **P6**：OpenAPI 契约（utoipa 实 paths）+ spec.json；Vben 三页面（Sources/Nodes/Scoring）+ `build:ele` 绿（vben monorepo 不 vendor，构建用固定 checkout）。
-- **P7**：compose 六服务拓扑 + 双 Dockerfile + 备份/恢复脚本（release 构建 + 拓扑 lint 绿；docker runtime 集成留 CI）；observability（JSON 日志 + redaction + `/metrics`）；`/sub/{token}` 订阅路由（哈希校验/撤销即 401）+ 限流层 + supply-chain 脚本。
+- **P6**：OpenAPI 契约（utoipa 实 paths）+ spec.json；Vben 页面（Sources/Nodes/Scoring + Dashboard/Checks/NodeDetail/Subscriptions/**Sponsors**）+ `build:ele` 绿（vben monorepo 不 vendor，构建用固定 checkout）。
+- **P7**：compose 六服务拓扑 + 双 Dockerfile + 备份/恢复脚本；observability（JSON 日志 + redaction + `/metrics`）；`/sub/{token}` 订阅路由（哈希校验/撤销即 401）+ 限流层 + supply-chain 脚本。
 
-**已知收口项**（后续迭代/CI，非阻塞）：stats/checkers/logs/filter-preview 等 API 端点的 Axum 暴露（对应管理页补齐）、
-`mihomo check`/compose 全栈/备份恢复演练（docker 环境 CI job）、`cargo audit`（需 crates.io 网络）、
-`node_payloads` 凭据加密存储（订阅 proxy 载荷现用占位）。
+**收口后批次（S34–S47）**：
+- **S34–S37 自补**：fetch 闭环接线（FetchJob+run_fetch）、worker 双循环调度、登录端点、fetch/trigger、SSRF 测试逃生口、前端三页补齐。
+- **S38–S39**：Go 源清除（对照基准 `dda4e6f2`）；旧评审交叉审查（`10-review-crosscheck.md`）；**P0 安全修复**——路由权限矩阵（fail-closed，nest 内路径归一化）+ 登录限流（IP 桶、XFF 不信任）。
+- **S40–S41**：等价性审计（`11-equivalence-audit.md`，26 路径逐条判定）；**配置键修复**（6 键值被静默忽略→小数/百分数兼容解析；`grade_*` 阈值/`check_run_history_days` 14 天/`cleanup_interval_minutes` 接线）；B3 缺口 #1（搜索三端点）+ #3（format-configs）；migration 0010。
+- **S42**：**A1 PROXY protocol v1**（自建 accept loop + hyper；Caddy `proxy_protocol v1`；api 不发布宿主端口；顺带修限流桶键真 bug——原读裸 SocketAddr 恒为 0.0.0.0）。
+- **S43–S44**：**B4 本机 compose 全栈演练 ✅**（5 服务 Up、PROXY 链路 + 订阅全链路 + 权限矩阵实测；修 `type=content` 源被当 URL 的真 bug；`postgres-init` 建队列库）；搜索 **SQL 下推**（`to_search_sql` 聚合视图 + contains→ILIKE；删内存复检）。
+- **S45–S47**：配置键收尾复查（12 生效/8 空心有标注）；**sponsor 域恢复**（0011 + registry 引擎上游语义对齐 + AdminOnly CRUD + 订阅注入 + Vben 页面，`build:ele` 11/11 绿）；领域文档全面更新（README 重写 + 六份 docs 去陈旧）。
 
-实施顺序严格遵循：**P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7**。P0 未通过前不锁定 Cargo 依赖。
+**已知收口项**（后续迭代/CI，非阻塞）：`auth/refresh`（单管理员重新登录覆盖）；`node_payloads` 凭据加密（XChaCha20 方向已裁定）；`unlock` 流媒体筛选（待 `node_streaming` 表随 deep-check 接线）；sponsor 档案外的管理前端细节打磨；CI（用户裁定暂不写，各页「CI 提示」+ `11 §5` 复现命令为种子）。
+
+实施顺序严格遵循：**P0 → P1 → … → P7 → 收口 → 评审修复 → 等价性收口**。
 完整验收清单见方案 §15；各阶段验收见对应 `index.md`。
 
 ---

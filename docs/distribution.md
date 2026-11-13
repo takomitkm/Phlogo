@@ -1,58 +1,33 @@
 # 分发
 
-本文档介绍公开订阅接口、查询参数、地区策略与选节点算法。
+本文档介绍公开订阅接口、档案（profile）、地区策略与选节点算法。
+
+> **本实现的差异**（相对上游 Go 版）：订阅地址为 **`/sub/{token}.{fmt}`**——必须持有订阅 token
+> （哈希存储、可吊销、撤销即时 401）；上游的无认证 `/{fmt}` 公开地址已被此方案取代。
+> 地区策略/配额算法与上游一致（`selector.go` 逐函数移植，E-S A-Res 加权抽样，统计验收）。
 
 ## 工作流程
 
-终端用户请求订阅时，Paily 主服务按以下顺序处理：
+终端用户请求 `GET /sub/{token}.{fmt}` 时按以下顺序处理：
 
-1. 根据 `tag` 参数选择对应测活视角的存活节点缓存；未指定时使用全局缓存。
-2. 若提供 `filter_unlock`，按 `filter_mode` 指定的语义过滤节点。
-3. 根据 `preset` 决定地区与节点选择策略。
-4. 按 `max_distribute` 限制输出数量。
-5. 对选中节点重新命名，并交由对应格式生成器输出。
-
-整个过程读取内存缓存，不会为每次请求扫描完整数据库。缓存会在测活结果入库后按需重建。
+1. **token 校验**：哈希比对，仅 `active` token 且其档案 `enabled` 才放行；否则 401。
+2. **候选集**：`Linked` 节点 + 各自评分（后续接入档案 `filter_ast`/region/health/min_score 硬条件）。
+3. **preset 选择**：按档案的 preset（`common`/`all`/`other`）执行地区配额与抽样。
+4. **数量限制**：`min(档案 limit_count, max_distribute 配置)`。
+5. **命名**：`{{field}}` 白名单模板（档案 `naming_rule` 或默认模板）+ **sponsor 文案注入**（priority 升序、后命中覆盖、无命中用 `default_sponsor_text`）。
+6. **输出**：Clash YAML / Sing-box JSON / Base64，由档案的 `output_format` 决定。
 
 ## 订阅地址
 
 ```text
-https://your-domain.example/clash
-https://your-domain.example/singbox
-https://your-domain.example/base64
+https://your-domain.example/sub/{token}.yaml
+https://your-domain.example/sub/{token}.json
+https://your-domain.example/sub/{token}.base64
 ```
 
-| 地址 | 输出 | 默认下载文件名 |
-| --- | --- | --- |
-| `/clash` | Clash YAML | `Paily Connect.yaml` |
-| `/singbox` | Sing-box JSON | `Paily Connect.json` |
-| `/base64` | Base64 文本 | `Paily Connect.txt` |
-
-以上地址无需认证。基础链接可在管理界面的仪表盘和格式配置页面复制。
-
-## 查询参数
-
-| 参数 | 可选值 | 说明 |
-| --- | --- | --- |
-| `preset` | `common`、`all`、`other` | 地区与节点选择策略。 |
-| `tag` | 已配置的测活后端 tag | 仅使用该测活视角最近一次初筛成功的节点。 |
-| `filter_unlock` | 以 `\|` 分隔的服务名 | 例如 `netflix\|disney`。 |
-| `filter_mode` | `select`、`mark` | 指定流媒体筛选语义，应与 `filter_unlock` 一起显式传入。 |
-
-示例：
-
-```text
-/clash?preset=common
-/singbox?tag=hk&preset=all
-/base64?filter_unlock=netflix|disney&filter_mode=select
-/clash?filter_unlock=netflix|youtube&filter_mode=mark
-```
-
-实际使用的 preset 优先级如下：
-
-```text
-URL preset > 当前 tag 的 default_preset > 全局 default_preset > common
-```
+- token 在**签发时一次性明文展示**（服务端只存哈希），丢失即作废重签。
+- 管理界面 Subscriptions 页可签发/吊销；吊销即时生效（401）。
+- 空候选时返回 404 `no nodes matched`（与上游"200 空内容"不同，客户端应同时处理两种）。
 
 ## 地区策略
 
@@ -82,21 +57,8 @@ URL preset > 当前 tag 的 default_preset > 全局 default_preset > common
 
 `other` 排除 `HK`、`TW`、`SG`、`US`、`JP`，其余规则与 `all` 相同。
 
-## 流媒体筛选
-
-服务名不区分大小写。
-
-| 模式 | 语义 |
-| --- | --- |
-| `select` | 节点必须解锁全部指定服务，即交集。 |
-| `mark` | 节点至少解锁一个指定服务，即并集；节点名称会显示实际解锁的标记。 |
-
-建议始终显式传入 `filter_mode`。若未传入，服务端不会自动应用 `select` 过滤。
-
 ## 输出数量与排序
 
-`max_distribute` 决定单次订阅最多输出的节点数，默认 `200`。若存活节点总数不足该值，则全部输出。
+`max_distribute` 配置决定单次订阅的硬上限（默认 200），档案 `limit_count` 不得超过它。
 
-输出结果按地区展示顺序排列，同一地区内按评分降序编号。节点名称由命名模板生成，包含解锁标记、等级、国旗、地区、序号和 sponsor text，详见 [配置与 API](configuration-and-api.md)。
-
-当前实现下，若没有候选节点，接口仍可能返回 HTTP `200` 及空的格式内容。订阅客户端不应仅依据 HTTP 状态码判断订阅是否包含节点。
+输出按地区命名顺序排列，同一地区内按评分降序编号。节点名由命名模板生成：解锁标记、等级、国旗、地区、序号和 **sponsor 文案**，详见 [配置与 API](configuration-and-api.md)。

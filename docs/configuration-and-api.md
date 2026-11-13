@@ -19,20 +19,19 @@ Paily 主服务的配置分为两层：
 
 ## 启动配置
 
-| YAML 键 | 环境变量 | 说明 |
-| --- | --- | --- |
-| `server.port` | `PAILY_SERVER_PORT` | HTTP 监听端口，内置默认值 `8080`。 |
-| `server.cors_origins` | `PAILY_SERVER_CORS_ORIGINS` | 精确允许的浏览器 Origin；`*` 会被忽略。 |
-| `server.verbose` | `PAILY_SERVER_VERBOSE` | 是否记录全部请求。 |
-| `database.type` | `PAILY_DATABASE_TYPE` | `sqlite` 或 `postgres`。 |
-| `database.dsn` | `PAILY_DATABASE_DSN` | SQLite 文件路径或 PostgreSQL DSN。 |
-| `auth.admin_password` | `PAILY_AUTH_ADMIN_PASSWORD` | 管理员密码或 bcrypt 哈希。 |
-| `auth.service_secret` | `PAILY_AUTH_SERVICE_SECRET` | Paily Fetch、Paily 测活后端和源提交器使用的服务密钥。 |
-| `auth.jwt_secret` | `PAILY_AUTH_JWT_SECRET` | JWT HMAC 密钥。 |
-| `checkers[].tag` | 配置文件 | 测活后端 tag。 |
-| `checkers[].secret` | 配置文件 | 该测活后端专用密钥。 |
-| `checkers[].default_preset` | 配置文件 | 该 tag 订阅未指定 preset 时的默认预设。 |
-| `default_preset` | `PAILY_DEFAULT_PRESET` | 全局默认预设。 |
+| YAML 键 / 环境变量 | 说明 |
+| --- | --- |
+| `server.port` / `PAILY_SERVER_PORT` | HTTP 监听端口，内置默认值 `21380`。 |
+| `server.proxy_protocol` / `PAILY_SERVER_PROXY_PROTOCOL` | 接受 PROXY protocol v1 头（反代后取真实客户端 IP，限流按真实 IP 分桶）。 |
+| `server.expect_proxy` / `PAILY_SERVER_EXPECT_PROXY` | 与上项连用：**要求**每个连接都带 PROXY 头（API 端口不对外时的纵深防御）。 |
+| `server.verbose` / `PAILY_SERVER_VERBOSE` | 是否记录 debug 级日志。 |
+| `database.dsn` / `PAILY_DATABASE_DSN` | PostgreSQL DSN（**仅支持 PostgreSQL**）。 |
+| `PAILY_DATABASE_JOBS_DSN` | Apalis 队列库 DSN（默认由主 DSN 推导出 `paily_jobs`）。 |
+| `auth.admin_password` / `PAILY_AUTH_ADMIN_PASSWORD` | 管理员密码（登录用）。 |
+| `auth.service_secret` / `PAILY_AUTH_SERVICE_SECRET` | 服务身份密钥（读面 + 源 intake + fetch trigger）。 |
+| `auth.jwt_secret` / `PAILY_AUTH_JWT_SECRET` | JWT HMAC 密钥。 |
+| `PAILY_LOGIN_RATE_LIMIT_PER_MIN` | 登录限流阈值（默认 10/min，按真实客户端 IP 分桶）。 |
+| `PAILY_TOKEN_PEPPER` | 订阅 token 哈希 pepper。 |
 
 ## 动态配置
 
@@ -107,13 +106,16 @@ AST 形状（逻辑节点带 `operator: and|or|not`，叶子是条件对象）�
 
 ## API 与权限
 
+三层身份，按**路由权限矩阵**强制（代码：`apps/api/src/auth.rs::auth_kind`；**fail-closed**——任何未列入矩阵的 `/api/v1` 路由一律要求 AdminJWT）：
+
 | 身份 | 凭据 | 可访问范围 |
 | --- | --- | --- |
-| 终端用户 | 无 | `/health`、`/clash`、`/singbox`、`/base64`、登录和刷新。 |
-| 管理员 | access JWT | 全部管理 API。 |
-| Paily Fetch / 源提交器 | `service_secret` | `/api/v1/fetch/*` 与 `POST /api/v1/sources`。 |
-| Paily 测活后端 | 专用测活密钥或 `service_secret` | `/api/v1/check/*`。专用密钥对应配置的 tag；`service_secret` 使用 `default` tag。 |
+| 终端用户 | 订阅 token（URL 内） | `GET /sub/{token}.{fmt}`；以及 `/health`、`/api-docs/openapi.json`。 |
+| 管理员（AdminJWT） | 登录签发的 access JWT（24h） | 全部管理 API（含所有写操作）。 |
+| 服务身份（ServiceBearer） | `service_secret` | **最小面**：全部 GET 读、`POST /api/v1/sources`（intake）、`POST /api/v1/fetch/trigger`。**管理写（PATCH/DELETE/PUT）返回 403**。 |
 
-`POST /api/v1/sources` 同时允许管理员 JWT 与 `service_secret`，用于管理界面手工建源和源提交器自动提交。其他普通管理资源不接受 `service_secret`。
+- MiaoSpeed WebSocket 是 worker 内部调用，不经 HTTP 权限面。
+- 登录限流：按真实客户端 IP（PROXY protocol）分桶，默认 10 次/分钟，超限 429；`X-Forwarded-For` 永不信任。
+- 错误码语义：401 = 缺失/无效凭据；403 = 凭据有效但身份越权（ServiceBearer 打管理写）。
 
-完整接口定义见 [`../api/openapi/spec.yaml`](../api/openapi/spec.yaml)。
+完整接口定义见运行时 `GET /api-docs/openapi.json`（utoipa 源头生成，27 条路径），源文件 `crates/api-contract/src/`。

@@ -1,125 +1,118 @@
-# Paily Connect Core
+# Paily Connect Core（Rust 重构版）
 
-> [!WARNING]
-> **该代码库非直接生产可用**
->
-> Paily Connect 系列是我们的内部项目，其仍处于早期开发阶段，目前该公开版本部分功能仍存在较多问题。
->
-> **我们极度不建议您直接部署此版本**。该版本可能会有潜在的未知问题并可能造成数据丢失等异常。
->
-> Paily Connect 系列开源仓库在近期尚无继续推进计划，我们建议您等待可用的分支版本部署。
+> 本仓库是 [`openpaily/paily-core`](https://github.com/openpaily/paily-core) 的 **Rust 重构 fork**。
+> 原始 Go 实现已从本仓库移除，其行为以 fork 根提交 **`dda4e6f2`** 为对照基准
+> （`git show dda4e6f2:<path>` 可查看任何原始文件）。逐路径等价性审计见
+> [`docs/rebuild/11-equivalence-audit.md`](docs/rebuild/11-equivalence-audit.md)。
 
-本仓库是 Paily Connect 开源代码仓库。Paily Connect 是一个免费订阅项目，它从互联网上的订阅源和节点源收集节点，经过解析、去重和测活后，根据节点的各种表现综合评分，最后按地区和评分筛选，生成 Clash、Sing-box 或 Base64 订阅。
+Paily Connect 是一个免费订阅项目：从互联网上的订阅源和节点源收集节点，经过解析、去重和测活后，
+根据节点的各种表现综合评分，最后按地区和评分筛选，生成 Clash、Sing-box 或 Base64 订阅。
 
-平台由三个协作的服务组成：
+## 与上游的架构差异
 
-| 服务 | 仓库 | 职责 |
-| --- | --- | --- |
-| **Paily 主服务** | [paily-core](https://github.com/openpaily/paily-core) | 维护源库与节点池，负责去重、存活判定、评分、分发和管理 API。 |
-| **Paily Fetch** | [paily-fetch](https://github.com/openpaily/paily-fetch) | 从源库获取来源，下载订阅、解析内容、校验节点，并上报结果。 |
-| **Paily 测活后端** | [paily-check](https://github.com/openpaily/paily-check) | 从节点池获取节点，执行初筛与复筛，并上报检测结果。 |
+上游由三个协作服务组成（paily-core / paily-fetch / paily-check，经 HTTP API + `service_secret` 通信）。
+本重构将它们收敛为**一个进程对**，外部服务面被显式取消：
 
-本仓库是 **Paily 主服务**（`paily-core`），也是平台的中枢。各服务之间通过 HTTP API 通信，统一使用 `service_secret` 完成服务间认证。
+| 上游 | 本实现 |
+| --- | --- |
+| `paily-core`（Go + Gin + GORM） | `apps/api`（**Rust** + Axum + SQLx）— 管理面、订阅分发、评分、生命周期 |
+| `paily-fetch`（外部抓取服务） | **取消** — `apps/worker` 的 Fetch 闭环直读数据库（Apalis 队列驱动），并新增上游没有的 **SSRF 防护**（`crates/fetch`） |
+| `paily-check`（外部测活服务） | **取消** — worker 经 **MiaoSpeed WebSocket Adapter**（`crates/checker-miaospeed`）主动测活；协议认证签名与上游 Go 实现**逐字节一致**（golden 测试钉死） |
+| expr-lang 字符串表达式 | **类型化 Filter-AST JSON**（`crates/filter`）：字段/运算符双白名单、参数化 SQL、深度/数量限制 |
+| OpenAPI spec-first（oapi-codegen 生成） | **utoipa 为源头**：代码即契约，`GET /api-docs/openapi.json` 导出 27 条路径 |
 
-Paily 主服务另配有网页前端，请访问 [paily-frontend](https://github.com/openpaily/paily-frontend) 以获取详情。
+ Worker 与数据库直连；队列使用独立的 `paily_jobs` 数据库（Apalis 内嵌迁移与业务迁移隔离，方案 §3.1）。
 
 ## 工作流程
 
-平台的完整数据流转分为四个阶段。
-
-1. **提交来源。** Paicatch 或管理员通过管理界面，把订阅源（`subscribe`）或节点（`node`）提交到源库。源库按类型和内容去重。
-
-2. **抓取与入库。** Paily Fetch 定期向 Paily 主服务获取启用中的来源，下载、识别、解析并校验节点，然后上报。Paily 主服务合并重复节点，写入节点池，并保留节点与来源的关联关系。
-
-3. **测活与评分。** Paily 测活后端从节点池拉取节点，先做初筛判断是否存活，再对存活节点做复筛，测量详细延迟、抖动、出口地区、流媒体解锁情况和可选下载速度，最后把结果上报。Paily 主服务据此更新节点的存活状态，并根据节点的各种表现综合评分。
-
-4. **筛选与分发。** 每次测活结果入库后，Paily 主服务构建一份分发缓存。终端用户请求 `/clash`、`/singbox` 或 `/base64` 时，主服务按地区比例和评分筛选节点，重新命名后生成对应格式的订阅。
-
 ```text
-  订阅源 / 节点
+  订阅源 / 节点（管理 API 或 fetch intake 提交）
         │
         ▼
-   Paily Fetch        下载 · 识别 · 解析 · 校验
+  worker · Fetch 闭环        SSRF 守卫 → 解析 → 指纹 → 对账（原子替换/累积）
         │
         ▼
-   Paily 主服务  ◄────── 管理界面 / Paicatch
-  源库 · 节点池 · 去重 · 历史
+  api · 节点池               去重（fingerprint v1）· 节点↔来源关联 · 生命周期状态机
         │
         ▼
-   Paily 测活后端        初筛 · 复筛（延迟 · 地区 · 流媒体 · 速度）
+  worker · 测活闭环          Apalis CheckJob → MiaoSpeed WS（初筛 + 复筛）
         │
         ▼
-   Paily 主服务         存活判定 · 评分 · 缓存 · 筛选
+  api · 评分与分发           EWMA 评分（ewma-v1，分项可解释）→ Filter-AST 筛选 → 地区配额
         │
         ▼
- /clash  /singbox  /base64
+  /sub/{token}.base64  /sub/{token}.yaml  /sub/{token}.json
 ```
+
+- **抓取**：周期调度（worker 内置 300s tick）或 `POST /api/v1/fetch/trigger` 手动触发；`type=url` 源走 SSRF 守卫的 HTTP 抓取，`type=content` 源直接解析内联内容。
+- **测活**：CheckJob 幂等（`check_run_id` 键控），结果迟到不覆盖、跨 tag 合并；历史按 `check_run_history_days`（默认 14 天）自动清理。
+- **评分**：EWMA 时间加权，分项（延迟/抖动/稳定性/质量/速度）写入 `node_scores.components`，权重全部可配（`configs` 表）。
+- **分发**：订阅经**哈希校验的一次性 token** 访问（可吊销、即时 401）；按档案（`subscription_profiles`）筛选——地区、健康、最低分、Filter-AST、地区配额（common/all/other 预设）、`{{field}}` 白名单命名模板 + **sponsor 文案注入**（priority 升序、后命中覆盖、`default_sponsor_text` 兜底）。
 
 ## 主要能力
 
-- 维护源库，区分订阅源和节点，按类型和内容去重，并根据历史自动裁掉长期失效的来源。
-- 维护节点池，按协议、地址、端口和密码去重，保留节点与多个来源的对应关系。
-- 接收 Paily 测活后端的初筛与复筛结果，判断节点存活，并根据节点的各种表现综合评分。
-- 支持按地区、存活状态、协议、来源、评分、流媒体解锁能力和自定义表达式筛选节点。
-- 支持使用赞助商名称与表达式命名模板，自动生成节点名称。
-- 公开分发 Clash、Sing-box、Base64 三种订阅格式，支持按检测视角、地区策略和流媒体能力分发。
+- 源库管理：订阅源/节点源去重、手动触发抓取、抓取历史、失效源忽略。
+- 节点池：fingerprint 去重、多来源关联、原子对账（失败保留旧关联）、孤儿节点保留窗口后物理删除。
+- 测活与评分：MiaoSpeed WS 初筛+复筛、跨 tag 存活合并、EWMA 可解释评分、分级阈值可配。
+- 筛选引擎：类型化 AST（白名单字段/运算符）、SQL 下推（`nodes/search`、`sources/search`、`filter/preview`）。
+- 分发：Clash/Sing-box/Base64 三格式、每格式模板可自定义（`format-configs`，写入时校验）、ETag 语义的档案版本失效。
+- 管理 API + Web 前端（Vben）：Dashboard / Sources / Nodes / Node Detail / Checks / Scoring / Subscriptions / **Sponsors** / 配置。
+- 可观测性：`/metrics`（Prometheus）、JSON 结构化日志 + 敏感字段 redaction。
+- 安全：三层身份（Public / AdminJWT / ServiceBearer）按**路由权限矩阵**强制（fail-closed，管理写仅 AdminJWT）、登录限流（IP 桶、PROXY protocol 真实 IP、不信任 XFF）、服务面最小化（仅 GET 读 + 源 intake + fetch trigger）。
 
-## 启动
+## 部署
 
 > [!IMPORTANT]
-> 目前对于 Sqlite 的支持尚不完整，**请使用 PostgreSQL 部署**。
-> 我们建议您将数据库部署在配备 NVMe 存储、至少 2 核 4G 的服务器上。当数据量较大时，数据库的存储容量和读写压力都会显著增加。
+> **仅支持 PostgreSQL**（SQLx 迁移 0001–0011）。建议数据库配 NVMe、至少 2 核 4G。
 
-需要 Go 1.24，以及可用的 Paily Fetch 和 Paily 测活后端。
-
-复制示例配置并按需修改：
+容器化部署（podman 优先，docker 兼容）：
 
 ```bash
-cp config.example.yaml config.yaml
+cd deploy
+cp .env.example .env        # 填 POSTGRES_PASSWORD / SERVICE_SECRET / ADMIN_PASSWORD / JWT_SECRET
+podman machine start        # 仅 Windows/macOS 需要
+podman compose -f compose.yaml up -d --no-build postgres api worker caddy
+curl -s http://127.0.0.1:21380/health
 ```
 
-完整配置项及说明见 [`config.example.yaml`](config.example.yaml)。
+- caddy 是**唯一入口**（21380），并经 **PROXY protocol v1** 向 api 透传真实客户端 IP（限流按真实 IP 分桶；api 不发布宿主端口）。
+- 镜像构建：`podman build -f deploy/Dockerfile.api -t paily-api:local .`（worker 同理）。
+- 备份/恢复：`scripts/backup.sh` / `scripts/restore.sh`（`pg_dump -Fc` 覆盖业务表 + 队列库）。
 
-构建并启动：
+本地开发（不经反代）：
 
 ```bash
-go build -o paily-core ./cmd/server
-./paily-core -config ./config.yaml
+export DATABASE_URL=postgres://paily:change-me@localhost:5432/paily
+cargo run -p api        # 管理面（默认 21380）
+cargo run -p worker     # 抓取/测活/清理闭环
 ```
 
-## 管理界面
+登录：`POST /api/v1/auth/login`（`ADMIN_PASSWORD`）→ JWT（24h）。完整接口见运行时的
+`/api-docs/openapi.json`，权限矩阵见 `apps/api/src/auth.rs::auth_kind`。
 
-Paily Connect 配套提供 Web 管理界面，用于日常管理：
+## 仓库结构
 
-- **仪表盘**：查看节点与来源统计，复制基础订阅链接。
-- **来源管理**：创建、编辑、删除来源，查看抓取记录与关联节点。
-- **节点管理**：筛选节点，查看原始配置、来源和测活历史。
-- **Sponsor、筛选引擎预览、运行时配置和格式配置**。
-- **日志**：查看抓取日志与初筛检测日志。
+```text
+apps/api       管理面：路由、权限矩阵、处理器、订阅分发
+apps/worker    抓取/测活/清理闭环（Apalis PG 队列）
+crates/        domain · database · registry · fetch · vproxy-adapter · checker-miaospeed
+               lifecycle · scoring · filter · distribution · observability · config · api-contract
+web/vben-admin 管理前端（Vben 5 + Element Plus）
+deploy/        compose 拓扑 · Dockerfile · Caddyfile · postgres-init
+migrations/    SQLx 版本化迁移（0001–0011）
+docs/          领域文档 + rebuild/（重构全程记录）
+```
 
 ## 开发
 
-接口采用 spec-first 流程：`api/openapi/spec.yaml` 是 API 契约的唯一来源，服务端代码由 `oapi-codegen` 生成。
-
-安装与生成文件版本一致的工具：
-
 ```bash
-go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.6.0
+cargo build --workspace
+cargo test --workspace                  # 单测 + 真实 PG 集成（需 DATABASE_URL）
+cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-修改 `api/openapi/spec.yaml` 后，重新生成服务端接口：
-
-```bash
-oapi-codegen -config oapi-codegen.yaml api/openapi/spec.yaml
-```
-
-生成配置见 `oapi-codegen.yaml`，输出到 `internal/api/generated/server.gen.go`，其中包含 Gin 路由注册、请求模型和 `ServerInterface`。当前生成文件由 `v2.6.0` 生成，建议使用相同版本，避免产生无关差异。
-
-开发约定：
-
-- 不要手动修改 `internal/api/generated/` 下的生成文件。
-- 业务实现在 `internal/api/handler/`，实现生成的 `ServerInterface`。
-- 变更接口时先修改 `spec.yaml`，再运行生成命令，最后补齐 handler 实现并通过 `go build ./...`。
+- API 契约以 `crates/api-contract` 的 utoipa 注解为源头，`api/openapi/openapi.json` 为导出物（改动后重新生成）。
+- 重构全程的分步实现记录、验收标准与踩坑：[`docs/rebuild/`](docs/rebuild/00-index.md)（00 索引 → 11 等价性审计）。
 
 ## 文档
 
@@ -127,11 +120,13 @@ oapi-codegen -config oapi-codegen.yaml api/openapi/spec.yaml
 | --- | --- |
 | [源库与来源管理](docs/source-management.md) | 订阅源与节点、源库去重、死源判定、管理界面操作。 |
 | [节点池](docs/node-pool.md) | 节点去重、节点与来源的关联、存活判定。 |
-| [评分机制](docs/scoring.md) | Paily 主服务如何根据节点表现计算评分。 |
-| [分发](docs/distribution.md) | 订阅地址、查询参数、地区策略与选节点算法。 |
+| [评分机制](docs/scoring.md) | 评分参数与计算（EWMA，`configs` 可配）。 |
+| [分发](docs/distribution.md) | 订阅地址、档案、地区策略与选节点算法。 |
 | [订阅模板](docs/templates.md) | 分发时的订阅模板配置与制作方法。 |
-| [配置与 API](docs/configuration-and-api.md) | 启动配置、动态参数、筛选引擎、命名与 Sponsor、API 权限。 |
+| [配置与 API](docs/configuration-and-api.md) | 启动配置、动态参数（含生效状态标注）、筛选引擎（Filter-AST）、命名与 Sponsor、API 权限。 |
+| [rebuild/](docs/rebuild/00-index.md) | Rust 重构全程：11 个阶段页 + 交叉审查 + 等价性审计 + 行为总账。 |
 
 ## 许可证
 
 本项目基于 GNU Affero General Public License v3.0（AGPL-3.0）发布，详见 [LICENSE](LICENSE)。
+第三方组件义务见 [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md)（MiaoSpeed 为外部进程，协议隔离不豁免 AGPL 义务）。
