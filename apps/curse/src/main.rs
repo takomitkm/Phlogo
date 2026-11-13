@@ -7,7 +7,7 @@ async fn main() -> anyhow::Result<()> {
     telemetry::init(if cfg.server.verbose { "debug" } else { "info" });
 
     let addr = format!("0.0.0.0:{}", cfg.server.port);
-    tracing::info!(%addr, "Phlogo Wish Gnosis api starting");
+    tracing::info!(%addr, "Phlogo Gnosis api starting");
     let app = router::build(cfg.clone());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 

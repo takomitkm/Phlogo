@@ -1,11 +1,11 @@
-# Phlogo Wish Gnosis（Rust 重构版）
+# Phlogo Gnosis（Rust 重构版）
 
 > 本仓库是 [`openpaily/paily-core`](https://github.com/openpaily/paily-core) 的 **Rust 重构 fork**。
 > 原始 Go 实现已从本仓库移除，其行为以 fork 根提交 **`dda4e6f2`** 为对照基准
 > （`git show dda4e6f2:<path>` 可查看任何原始文件）。逐路径等价性审计见
 > [`docs/rebuild/11-equivalence-audit.md`](docs/rebuild/11-equivalence-audit.md)。
 
-Phlogo Wish 是一个免费订阅项目：从互联网上的订阅源和节点源收集节点，经过解析、去重和测活后，
+Phlogo Gnosis 是一个免费订阅项目：从互联网上的订阅源和节点源收集节点，经过解析、去重和测活后，
 根据节点的各种表现综合评分，最后按地区和评分筛选，生成 Clash、Sing-box 或 Base64 订阅。
 
 ## 与上游的架构差异

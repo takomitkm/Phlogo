@@ -1,6 +1,6 @@
 openapi: "3.0.3"
 info:
-  title: Phlogo Wish Gnosis
+  title: Phlogo Gnosis
   version: "1.0.0"
   description: >
     Proxy node aggregation, filtering and distribution service.

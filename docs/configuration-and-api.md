@@ -1,10 +1,10 @@
 # 配置与 API
 
-本文档介绍 Phlogo 主服务的配置层次、可调参数、筛选引擎、节点命名与 sponsor text，以及接口权限划分。
+本文档介绍 Phlogo Gnosis的配置层次、可调参数、筛选引擎、节点命名与 sponsor text，以及接口权限划分。
 
 ## 配置层次
 
-Phlogo 主服务的配置分为两层：
+Phlogo Gnosis的配置分为两层：
 
 1. **启动配置**：通过 YAML 文件或环境变量提供，涵盖监听端口、数据库、认证和测活后端列表等，需重启生效。
 2. **动态配置**：保存在数据库中，涵盖评分、分发、历史保留和命名等参数，可在管理界面修改，无需重启。
@@ -61,9 +61,9 @@ Phlogo 主服务的配置分为两层：
 | 历史 | `check_run_history_days` | `14` | 测活明细保留天数（A5）；`0` = 永不删。 | ✅ 清理周期删除超期记录 |
 | 历史 | `cleanup_interval_minutes` | `30` | 清理间隔，单位分钟。 | ✅ worker 调度消费 |
 | 命名 | `node_name_template` | （expr 模板） | 节点命名模板。 | ⏸ 由订阅档案的 `naming_rule` 覆盖；键保留待清理 |
-| 文件名 | `filename_clash` | `Phlogo Wish.yaml` | Clash 下载文件名。 | ⏸ 现由 URL 格式后缀决定；键保留待清理 |
-| 文件名 | `filename_singbox` | `Phlogo Wish.json` | Sing-box 下载文件名。 | ⏸ 同上 |
-| 文件名 | `filename_base64` | `Phlogo Wish.txt` | Base64 下载文件名。 | ⏸ 同上 |
+| 文件名 | `filename_clash` | `phlogowish.yaml` | Clash 下载文件名。 | ⏸ 现由 URL 格式后缀决定；键保留待清理 |
+| 文件名 | `filename_singbox` | `phlogowish.json` | Sing-box 下载文件名。 | ⏸ 同上 |
+| 文件名 | `filename_base64` | `phlogowish.txt` | Base64 下载文件名。 | ⏸ 同上 |
 | sponsor | `default_sponsor_text` | 空 | 无 sponsor 命中时的默认文案。 | ✅ sponsor 匹配落空时使用 |
 | 判死 | `dead_latency_ms` | `3000` | 判死延迟门限。 | ⏸ 当前不参与存活判定；不可达以初筛延迟 `-1` 表示 |
 

@@ -1,4 +1,4 @@
-//! Phlogo Wish Gnosis worker library: Apalis job definitions + idempotent side effects
+//! Phlogo Gnosis worker library: Apalis job definitions + idempotent side effects
 //! + the fetch closed loop (P2) and periodic scheduling entry points.
 pub mod check_job;
 pub mod fetch_job;

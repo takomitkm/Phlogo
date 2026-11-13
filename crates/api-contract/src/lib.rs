@@ -153,9 +153,9 @@ pub mod health_path {
 #[derive(OpenApi)]
 #[openapi(
     info(
-        title = "Phlogo Wish Gnosis API",
+        title = "Phlogo Gnosis API",
         version = "0.1.0",
-        description = "Rust rebuild of Phlogo Wish Gnosis. spec.yaml is the canonical contract."
+        description = "Rust rebuild of Phlogo Gnosis. spec.yaml is the canonical contract."
     ),
     paths(
         paths_mod::create,

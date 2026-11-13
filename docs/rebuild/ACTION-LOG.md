@@ -856,14 +856,14 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 
 ---
 
-## [UTC 2026-11-13T08:40:00Z] S48 · 全仓改名：paily→phlogo、core→gnosis、Connect→Wish、api→curse
+## [UTC 2026-11-13T08:40:00Z] S48 · 全仓改名：paily→phlogo、core→gnosis、项目名→Phlogo Gnosis、api→curse
 
 **用户裁定**（三轮问答确认边界）：
 1. **scope**：全量替换 `core→gnosis`（含目录/进程名）；
 2. **runtime**：运行期标识符全改，含数据库迁移；
 3. **upstream**：保护上游外部引用（`openpaily/paily-*`）不改；
-4. 追加裁定：**Connect→Wish**（品牌词组）、**api→curse 只改服务名**（HTTP 路由前缀 `/api/v1` 与 OpenAPI/openapi-ts/api-contract 等标准与工具名保持不动）；
-5. 命名组合：**Phlogo Wish Gnosis / gnosis-curse**。
+4. 追加裁定：**品牌词组 `Paily Connect` → `Phlogo`**（`Connect` 是品牌名的一部分，不是符号——`ConnectInfo`/`PgConnection` 等技术标识符一律不动）；**api→curse 只改服务名**（HTTP 路由前缀 `/api/v1` 与 OpenAPI/openapi-ts/api-contract 等标准与工具名保持不动）；
+5. 命名组合：**Phlogo Gnosis / gnosis-curse**。
 
 **改名映射**：
 
@@ -872,7 +872,7 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 | `paily` / `Paily` / `PAILY_*` | `phlogo` / `Phlogo` / `PHLOGO_*`（含环境变量前缀） |
 | `core` / `Core`（产品语境） | `gnosis` / `Gnosis` |
 | `core-api` / `core-worker` | `gnosis-curse` / `gnosis-worker` |
-| `Paily Connect` / `Paily Connect Core` | `Phlogo Wish` / `Phlogo Wish Gnosis` |
+| `Paily Connect` / `Paily Connect Core` | `Phlogo` / `Phlogo Gnosis` |
 | crate `api`（`apps/api`） | crate `curse`（`apps/curse`），二进制 `curse` |
 | 镜像 `phlogo-api` / `phlogo-worker` | `phlogo-gnosis-curse` / `phlogo-gnosis-worker` |
 | 前端 `src/api/paily.ts`、`src/views/paily/`、路由模块 `paily.ts` | `src/api/phlogo.ts`、`src/views/phlogo/`、`modules/phlogo.ts` |
@@ -892,3 +892,31 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 > 首次 workspace 并发跑时 `check_persist` 2 个用例 30s 超时——**并发下 PG 连接池争用**，单线程重跑通过，非改名引入。
 
 **顺带发现并修正**：校机前端 checkout 此前**从未 ship 过 paily 视图**（`src/views/` 只有 vben 自带页面），此前的 "build 绿" 是构建缓存产物的假绿；本次显式 `mkdir` + 逐文件 ship 后才是真绿。
+
+---
+
+## [UTC 2026-11-13T09:05:00Z] S49 · 品牌修正（去掉误加的 Wish）+ 对外兼容面审计
+
+**用户更正**：项目名应为 **Phlogo Gnosis**（不是 "Phlogo Wish Gnosis"）；「Connect」是**品牌词**的一部分（原名 `Paily Connect` → 现 `Phlogo`），**不是符号**——`ConnectInfo`/`PgConnection`/`CheckerError::Connect` 等技术标识符一律不动（动了会破坏 axum/sqlx 兼容）。
+
+**修正内容**：
+- `Phlogo Wish Gnosis` → **`Phlogo Gnosis`**（12 文件：README、utoipa 契约标题、crate doc 注释、领域文档）；
+- `Phlogo Wish` → **`Phlogo`**；
+- 订阅下载文件名默认值 → **`phlogowish.yaml` / `phlogowish.json` / `phlogowish.txt`**（用户裁定；注意这三个 `filename_*` 键当前**空心**——实现无 `Content-Disposition`，实际文件名由 URL 后缀决定，故此项仅文档层）；
+- ACTION-LOG 中记录的「Connect→Wish」裁定同步改写为真实裁定；
+- 领域文档的「Phlogo 主服务」→「Phlogo Gnosis」（`docs/rebuild/` 里的 "Phlogo" 指**上游 Go 项目**，保留原样）。
+
+**对外兼容面审计**（脚本对比改名前 `cb0c8ca` 与改名后 `HEAD`）：
+
+| 面 | 结果 |
+| --- | --- |
+| HTTP 路由（`/api/v1/**`、`/api-docs`、`/sub/**`、`/health`） | **SAME** |
+| JSON 响应字段名 | **SAME** |
+| DB 表名（migrations 全量） | **SAME** |
+| MiaoSpeed WS 帧字段名（`Basics.ID/Slave/SlaveName/Invoker/Version` 等） | **SAME** |
+| 环境变量前缀 | DIFF：`PAILY_*` → `PHLOGO_*`（**用户裁定彻底改名、不管兼容**） |
+
+- **MiaoSpeed 侧无破坏**：`Basics.Invoker` 对应 MiaoSpeed 的 `-whitelist` bot id；P0-02 实测捕获时上游用的就是 `phlogo`（原提交 `51e6f50` 的 golden fixture 已是 `phlogo-spike`/`phlogo`，非本次改名所致），**保持不变即兼容**。`SlaveName`/`Invoker` **不参与签名**（签名只覆盖 vendor 与固定字段序），改名不影响 golden。
+- **签名契约未动**：`golden_signature_matches_p0_02` 的期望值仍是 P0-02 用 Go 交叉验证过的字节级签名。
+- **无 `Content-Disposition`**：订阅下载文件名不由本服务控制，故品牌改名不改变客户端可见行为。
+- **DB schema 无品牌词**：迁移未引入/污染列名，仅库名/角色名改为 `phlogo`（内部标识符，与其他项目无互操作关系）。
