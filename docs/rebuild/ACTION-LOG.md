@@ -1136,3 +1136,49 @@ Rust `crates/format-sidecar` 客户端、`format_configs` 扩展格式行与**�
 `cmd /c start "" /B` 引号导致进程没起来（srv.log 空）；前台验证 OK 后改用 Python `Popen` 保活 +
 netstat 解析 PID 精确停止。另：PS5.1 `Set-Content -Encoding UTF8` 写 BOM 会让 sing-box 拒收配置，
 本轮全部改用 Python / `.mjs` 显式编码。
+
+---
+
+## [UTC 2026-11-13T07:10:00Z] S58 · 生产就绪只读审计 → 并入缺口总账（M1–M17 **全部要做**）
+
+**用户指令**：问「上游为什么说不适合生产？我们这版适合了没有？」+ 5 个必确认项 +
+README 与 Rust Workspace 一致性提醒；随后裁定「把这些核查记录进去，说这些还没做都要做的」。
+
+**执行方式**：**只读取证**——未改任何代码、未跑构建、未联网发帖。仅用 `web_fetch`（CDN README）、
+`grep`、`read`。
+
+### 执行的每一步 / 每条命令
+
+| # | 动作 | 结果 |
+| --- | --- | --- |
+| 1 | `read README.md`、`grep 「不适合\|生产环境\|P1」` | 本仓 README 已是纯 Rust；命中 `10-review-crosscheck.md` 的缺口表 |
+| 2 | `web_fetch https://cdn.jsdelivr.net/gh/openpaily/paily-core@main/README.md` | 取到上游 `[!WARNING]`「该代码库非直接生产可用」原文三条理由（早期开发 / 可能数据丢失 / **近期无推进计划**） |
+| 3 | `read 10-review-crosscheck.md:52-85` | §2.3 现成缺口：流媒体分别评分 ❌、场景化配置 ❌、增量测活 ❌、多 Checker 置信度 ❌ |
+| 4 | `grep "Matrix\|preset\|download\|unlock\|streaming" *.rs` | 定位 `checker-miaospeed/types.rs`、`result.rs`、`filter/sql.rs` |
+| 5 | `read p0-02-miaospeed.md:137-262` | D.3 `Configs`（`PingAddress`/`DownloadURL`）、D.7 矩阵白名单、D.8 vendor |
+| 6 | `read apps/worker/src/check_job.rs` | `handle_check` **只记账**（`record`+`finish`），注释自陈「real MiaoSpeed call is p3-02+」 |
+| 7 | `grep "CheckJob {\|MiaoSpeedAdapter\|scoring::"` | `CheckJob {` 仅定义+测试；`MiaoSpeedAdapter` 仅在自身单测；**`apps/` 对 scoring 零引用** |
+| 8 | `read apps/worker/src/main.rs`、`grep router.rs routes` | 调度只有 fetch 300s + cleanup；**无 check tick / 无 `/check/trigger`** |
+| 9 | `read adapter.rs:1-95,95-164` | `PingAddress` 硬编码 gstatic、`DownloadURL=""`、时长/线程全 0；`map_results` **`deep: None`** |
+| 10 | `read scoring/engine.rs:86-125`、`grep alpha` | EWMA `alpha=0.7`；**速度只取 `records[0]` 不平滑**；`w_speed=0.55` |
+| 11 | `read handlers/subscription.rs` | `/sub` 输出 `{}://node/{}` **占位**；`let _ = _filter_ast; let _ = preset;`，preset 硬编码 `"common"` |
+| 12 | `grep deploy/compose.yaml`、`Dockerfile.curse/worker` | compose 有 `miaospeed`/`web`，README quickstart 未起；miaospeed 为 `:latest` 浮标；产物是 `--bin curse`/`--bin worker` |
+| 13 | `grep naming.rs` | 分级阈值 A/B/C/D = 0.75/0.50/0.25 → 无测速时 `score ≤ 0.45`，**A/B 永不出现** |
+| 14 | `edit 09-self-completed-gaps.md`（新增 §D）、`edit 00-index.md` | 把核查结论并入既有缺口台账，并加「阶段完成 ≠ 可部署」告警 |
+
+### 结论（已写入 `09-self-completed-gaps.md` §D）
+
+- **上游警告不自动继承**：①②是 Go 那版代码状态，③意味着不能等上游修；我们版合格与否看自己。
+- **我们版目前不适合生产**，硬阻塞：`/sub` 假节点、测活从未发生、无 CheckJob 入队、评分零接线、
+  deep 被丢、`filter_ast`/`preset` 被忽略、`node_streaming` 表不存在。
+- **5 问逐条**：① 不能模拟真实 API 请求 ② 不能区分流媒体/AI ③ 不支持按服务评分
+  ④ 当前零带宽消耗但**分数封顶 0.45**、开启前必须定配额 ⑤ 算法够灵敏但链路是断的、速度无平滑。
+- **README 一致性**：本仓 README 已是 Rust；Go 段属**上游 README**。真实不一致三处：
+  quickstart 少起 miaospeed/web、miaospeed `:latest` 浮标、rebuild 文档残留 `gnosis-api`/`-p api`。
+
+### 口径变更（用户裁定）
+
+- **B1 → M2、B2 → M1**：状态由 `⏸ 明确推迟` 升级为 **`MUST-DO / P0`**，重启条件视为已满足。
+- 新增 **M1–M17**（含 M15–M17 文档一致性、M11/M12 按服务评分为**新设计**非接线）。
+- **上线总门禁**：抓取 → 真测活 → deep 落库 → 评分更新 → `/sub` 出真实节点 → `mihomo -t` 通过 → 真代理出网 204。
+- 本节**只做记录与排期，未改代码**；代码实现按 M1→M2→M3→M4→M5 逐步落地，每步照惯例「做一步、写一页、push 一步」。

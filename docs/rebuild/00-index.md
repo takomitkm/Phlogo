@@ -37,7 +37,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 | **P5** | 筛选与订阅发布 | `06-p5-filter-subscription/` | filter-ast · quota-limit · subscription-output |
 | **P6** | 管理前端 | `07-p6-admin-ui/` | vben-scaffold · pages |
 | **P7** | 生产化 | `08-p7-productionization/` | compose-backup · observability · security-hardening |
-| **收口** | 自补记录 | `09-self-completed-gaps.md` | 收口后自查补齐的缺口（fetch 闭环接线/调度/登录/触发）+ 推迟项 + 换构架评估输入 |
+| **收口** | 自补记录 + **缺口总账 / MUST-DO** | `09-self-completed-gaps.md` | 收口后自查补齐的缺口（fetch 闭环接线/调度/登录/触发）+ 推迟项 + 换构架评估输入；**§D 生产就绪只读审计**：上游「非直接生产可用」警告原文与含义、5 个必确认项逐条结论、**M1–M17 未完成清单（用户裁定全部要做）**、部署入口一致性（README/compose/旧入口名）|
 | **评审** | 旧 Go 评审 × Rust 实现交叉审查 | `10-review-crosscheck.md` | 逐节对照（权限/DB/评分/契约/表达式/分发/工程化/架构）+ 真实缺口 + 已废弃建议 + P0 验收 |
 | **等价性** | 上游等价性审计（B3 答复） | `11-equivalence-audit.md` | 26 条上游路径逐条判定（等价/架构取代/缺失）+ **配置键悬挂审计**（13 键无消费者、6 键值被静默忽略） |
 | **协议覆盖** | 最新 mihomo / sing-box 协议支持度审计 | `12-protocol-coverage-audit.md` | 校机真实订阅样本（mihomo v1.19.32，156 节点）实测 keep_rate **69.2% → 100%**；解析层补齐上游 `nodeAuth` 全 11 类协议；sing-box 发射层从硬编码简版改为全保真转换 |
@@ -47,7 +47,11 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 ### 实施状态总览（2026-11-13 更新）
 
 **P0–P7 全部子步骤已实现、验证并推送**（实现 + 各页「验证结果」实测记录 + ACTION-LOG S05–S47）。
-关键决策与偏差均写入对应页面：
+
+> ⚠️ **但「阶段完成」≠「可部署生产」**：2026-11-13 只读审计发现测活/评分链路仍是桩、
+> `/sub` 仍输出占位载荷（见 `09-self-completed-gaps.md` §D）。**M1–M17 全部要做**，
+> 上线总门禁是「抓取 → 真测活 → deep 落库 → 评分更新 → /sub 出真实节点 → mihomo -t 通过 → 真代理出网 204」。
+> 关键决策与偏差均写入对应页面：
 
 - **P0**：VProxy 最小化移植（不作依赖）；MiaoSpeed 自建 `4.7.9`（sha256 记录）；Apalis `0.7.4` PG backend；Vben `v5.7.0`。
 - **P1**：workspace + Axum/SQLx/utoipa 骨架；迁移按 sqlx 文件约定（`.up/.down`）；`configs` seed 23 键；Source/Node CRUD + 真实 PG 集成测试。

@@ -76,6 +76,78 @@
 
 ---
 
+## D. 生产就绪核查（2026-11-13，只读审计）→ **未完成清单（全部必须做）**
+
+> 触发：用户问「上游为什么说不适合生产？我们这版适合了没有？」并给出 5 个必确认项 +
+> README 一致性提醒。本节把核查结论**并入本缺口台账**，作为后续排期依据。
+> **口径：下列每一项都是「要做」，不是「可选/推迟」。** 本节只记录，不改代码。
+
+### D.0 上游警告的原文与含义
+
+上游 `openpaily/paily-core` README 顶部 `[!WARNING]`（"该代码库非直接生产可用"）给的三条理由：
+① 早期开发、部分功能问题较多；② 未知问题可能造成**数据丢失**；③ **近期无继续推进计划**（建议等待可用分支）。
+
+**判定**：①②描述的是 **Go 那一版的代码状态**，不是协议/架构的固有缺陷，不能自动套到 Rust 重写版；
+但③意味着**不能等上游修**。我们这版合不合格必须看自己的实际状态——结论见 D.2：**不合格**。
+
+### D.1 五个必确认项：逐条结论（带代码证据）
+
+| # | 问题 | 结论 | 证据 |
+|---|---|---|---|
+| 1 | 测速后端能否模拟**真实 API 请求**（而非普通网页） | ❌ **不能** | MiaoSpeed 4.7.9 矩阵是固定类型白名单（`01-p0-upstream-verification/p0-02-miaospeed.md` D.7）；唯一可配 HTTP 目标是 `Configs.PingAddress`（**单一全局 URL**）与 `DownloadURL`。我们把它**硬编码**成 `http://gstatic.com/generate_204`、`DownloadURL=""`（`crates/checker-miaospeed/src/adapter.rs:84-88`）。`TEST_SCRIPT`/`Scripts[]` 我们传空数组，且 P0-02 自陈「完整验证放 P3」、JS 沙箱从未实现 |
+| 2 | 能否识别**流媒体解锁 vs AI 服务可用性差异** | ❌ **不能**（双层缺失） | ① `map_results` 把 `deep` 直接写 `None`（`adapter.rs:112`）——即使回了 streaming 也丢掉；② `node_streaming` 表不存在，`unlock` 条件在 SQL 里编译成 `FALSE`（`crates/filter/src/sql.rs:170-172`、`apps/curse/src/handlers/search.rs:8-9`）；③ 4.7.9 矩阵白名单里**没有** unlock/AI 测试类型 |
+| 3 | 是否支持**按目标服务分别评分**（OpenAI / Google / Anthropic） | ❌ **不支持，且是新设计不是接线** | 评分因子只有 latency/jitter/stability/quality/speed（`crates/scoring/src/engine.rs:89-148`）；`10-review-crosscheck.md` §2.3 已标「流媒体分别评分 ❌」「场景化配置 ❌」。需新增 per-service 探针 → `node_service_scores` → 聚合 → 筛选 → 分发，且受 #1 结构限制（`PingAddress` 一轮一个值） |
+| 4 | 下载测速是否**大量消耗节点带宽** | ⚠️ **当前零消耗，但代价是分数封顶** | `DownloadDuration=0`/`DownloadThreading=0`/`DownloadURL=""` → 根本不跑（`adapter.rs:84-88`）。但评分按 Go 基线「速度始终混合」：`speed_kbps=0` → `speed_score=0` → `score = quality×(1−0.55) = 0.45×quality`（`engine.rs:143-148`）；分级阈值 A/B/C/D = 0.75/0.50/0.25（`crates/distribution/src/naming.rs:15`）→ **任何节点都拿不到 A/B，最高 C**。一旦开启：总流量 ≈ `DownloadDuration × DownloadThreading × 节点数`（30s×4×20MB/s×1000 节点 ≈ 2.4 TB/轮），**必须先有配额** |
+| 5 | 评分能否**及时反映突然恶化** | ❌ **不能**（算法够灵敏，链路是断的） | 算法：EWMA `alpha=0.7`、权重 `alpha^i`，半衰期约 2 样本（`engine.rs:104`、`params.rs:44`）——够灵敏。但 ① 评分引擎在 `apps/` **零引用**；② 测活从未发生（D.2 M2/M3）；③ **速度只取最新一条、不走 EWMA**（`engine.rs:143` 注 "latest record only"）→ 单次抖动即打到底；④ 增量测活 ❌ 全量轮（`10-review-crosscheck.md` §3.3）、存活窗口 240 分钟（`crates/lifecycle/src/ops.rs:171`）→ 发现延迟 = 跑完一整轮 |
+
+### D.2 未完成清单（MUST-DO，按依赖排序）
+
+> 每条含：现状证据 → 影响 → 验收标准。**全部要做**；P0 = 上线前必须，P1 = 紧随，P2 = 功能补齐。
+
+| ID | 项 | 现状证据 | 影响 | 验收标准 | 优先级 / 依赖 |
+|---|---|---|---|---|---|
+| **M1** | `/sub` 输出**真实 proxy 载荷**（`node_payloads` + 凭据加密） | `apps/curse/src/handlers/subscription.rs:120` 仍是 `format!("{}://node/{}")`；即 B2 | **客户端拿到 200 OK 但全是连不上的假节点**——比上游警告更直接 | `curl /sub/{token}.yaml` 产出真实节点 → 经 `mihomo -t` 通过 → 真代理出网 204；凭据不明文入库（AGE/XChaCha20 + `PHLOGO_PAYLOAD_KEY`） | **P0**，即 B2 |
+| **M2** | CheckJob **接 MiaoSpeed 真测**（B1 升级） | `apps/worker/src/check_job.rs:48-58` 只 `record`+`finish`，注释自陈未接；`MiaoSpeedAdapter` 仅在自身单测出现 | 一次真实测活都不会发生 → 无延迟/速度/地区/streaming 数据 | 一条真实节点经 WS 提交→收结果→`node_check_results` 落库；golden 签名不回归 | **P0**，即 B1 |
+| **M3** | **CheckJob 入队/调度/手动触发** | 全仓 `CheckJob {` 只出现在定义与测试；`main.rs` 调度只有 fetch 300s + cleanup；`router.rs` 无 `/check/trigger` | M2 接了也没人调用 | 周期 tick 入队 + `POST /api/v1/check/trigger` 手动触发 + 幂等（`ON CONFLICT`） | **P0**，依赖 M2 |
+| **M4** | adapter **保留 deep** | `adapter.rs:112` `deep: None`；`result.rs` 的 deep 解析未被调用 | #2/#4/#5 全无数据 | `map_results` 填 `avg_latency/jitter/speed/region/streaming`；单测断言 deep 非空 | **P0**，依赖 M2 |
+| **M5** | **评分引擎接线** | `apps/` 对 `scoring` 零引用（grep 无命中） | `node_scores` 永不更新，`/sub` 全按 score=0 选 | 一条 check 结果入库后 `node_scores` 更新且 `components` JSONB 可读；EWMA 随历史变化 | **P0**，依赖 M2+M4 |
+| **M6** | `/sub` 真正使用 `filter_ast` / `preset` | `subscription.rs:46-49` `let _ = _filter_ast; let _ = preset;`；`:84` 硬编码 `"common"` | 档案的地区/健康/最低分/AST 筛选**全部失效** | 建两份不同 profile → 同一 token 只出符合该档案的节点；preset 取 profile 值 | **P1**，依赖 M1 |
+| **M7** | 建 **`node_streaming`** 表并落库 | 无迁移；`filter/sql.rs:82` 的 EXISTS 永远查空表 | `unlock` 筛选永远不匹配（D.1 #2） | 迁移建表；一条 streaming 结果入库后 `unlock contains Netflix` 能筛出该节点 | **P1**，依赖 M4 |
+| **M8** | **测速开关 + 带宽配额**（开之前先定） | `Configs` 全 0；开启后 `score` 才可能 >0.45 | 不开→A/B 永不出现；乱开→TB 级流量 | 配置化 `DownloadURL/Duration/Threading`；单节点字节上限 + 候选抽样 + 只测过初筛节点；`score` 可达 A | **P1**，依赖 M4+M5 |
+| **M9** | **速度维度平滑** | `engine.rs:143` "latest record only (Go baseline)" | 单次抖动把速度分打到底，或一次侥幸掩盖持续恶化 | 速度参与 EWMA（或单独滑窗）；单测：一次坏样本不至于从 A 掉到 D | **P2**，依赖 M5 |
+| **M10** | **增量测活 + 恶化快速降级** | `10-review-crosscheck.md` §3.3「增量测活 ❌ 现为每轮全量」；§2.3「多 Checker 置信度/连续 vs 偶发失败 ❌」；窗口 240min | 突然恶化到被发现 = 跑完整轮；偶发抖动与真死不分 | 只测有变化/高风险节点；连续 N 次失败立即降级；`node_alive_check_window_minutes` 可配且接线 | **P2**，依赖 M2 |
+| **M11** | **按目标服务分别评分**（OpenAI/Google/Anthropic） | D.1 #3 | 目前只能给"一个总分"，无法表达"这节点能开 OpenAI 但不能开 Netflix" | `node_service_scores` + per-service 评分聚合 + 筛选维度 + 分发档案 | **P2**，依赖 M12 |
+| **M12** | **多目标探针能力**（M11 的前置） | `PingAddress` 单一全局值硬编码；`TEST_SCRIPT`/`Scripts[]` 未启用、无 JS 沙箱 | 结构上无法「同一轮对每个服务各打一个探针」 | 扩展测活后端或自写脚本测试 + 安全沙箱；一轮可对 N 个目标分别出结果 | **P2**（M11 前置） |
+| **M13** | Sub-Store sidecar **接 Rust 侧** | `14-substore-sidecar.md` §9 明确「未做」 | 扩展格式目前没有出口 | `crates/format-sidecar` + `format_configs` 行 + 模板包装 + compose healthcheck + CI 门禁 | **P2**，依赖 M1 |
+| **M14** | **CI**（用户先前裁定「先不写」） | `10-review-crosscheck.md` §工程化「CI ❌ 用户裁定先不写」 | 上述改动无自动回归 | 校机同款门禁脚本化；D.3 的入口一致性校验进 CI | **P1**（恢复排期） |
+
+**上线总门禁（一条龙验收）**：
+`抓取 → 真测活 → deep 落库 → 评分更新 → /sub 出真实节点 → mihomo -t 通过 → 真代理出网 204`。
+这条链目前**断点在第一步之后**，M1–M5 之前任何一项未完成都不算可部署。
+
+### D.3 部署入口与文档一致性（用户提醒的核查结果，**必须修**）
+
+> 结论分两半：**本仓 README 已经是纯 Rust**（`cargo run -p curse` / `-p worker`、`podman compose`），
+> 用户看到的 `go build -o paily-core ./cmd/server` 是**上游 README**的启动段，不是本仓遗留。
+> 但确实存在三处会影响部署的真实不一致：
+
+| ID | 不一致 | 证据 | 必须修成 |
+|---|---|---|---|
+| **M15** | quickstart **少起服务** | `README.md:74` 只起 `postgres curse worker caddy`；`deploy/compose.yaml:56-66` 另有 `miaospeed`、`web` | quickstart 补齐 `miaospeed web`（否则即使 M2 接线，测活后端也不存在）；或明确标注"不含测活/前端"并给出完整命令 |
+| **M16** | miaospeed 镜像 **floating tag** | `compose.yaml:57` 为 `ghcr.io/miaokobot/miaospeed:latest`，注释"PIN at deploy time" | 换成 P0-02 自建 `4.7.9` + SHA-256（`docs/THIRD_PARTY.md` 已有哈希），落实本仓「禁止 floating」供应链规则 |
+| **M17** | rebuild 文档**残留旧入口名** | `08-p7-productionization/p7-01-compose-backup.md:52` 写 `--bin gnosis-api`；`02-p1-core-skeleton-data/p1-02-api-skeleton.md:230` 写 `cargo run -p api`；`00-index.md:12` 写「Phlogo 当前是一个 Go 单体」 | 历史步骤页加「当时命名」标注或更正；**以实际产物为准**：`deploy/Dockerfile.curse:11` = `--bin curse`、`Dockerfile.worker:9` = `--bin worker`；入口 `apps/curse/src/main.rs` / `apps/worker/src/main.rs`，caddy 21380 唯一入口 |
+
+### D.4 与既有 B1/B2 的关系（口径变更）
+
+- 上表 **M2 = B1**、**M1 = B2**：B 节原本标注「明确推迟（附重启条件）」。**本轮用户裁定：这些都要做**，
+  故状态由 `⏸ 推迟` 升级为 **`MUST-DO / P0`**，重启条件视为已满足（不再等"可出站环境"才评估，
+  而是列入排期并补 CI 门禁）。
+- B6（高级搜索）保持原状；B4 的容器演练仍受"无容器运行时"约束，但 **M15 的 compose 一致性核对不需要容器**。
+- **本节只做记录与排期，未改动任何代码**；代码实现按 M1→M2→M3→M4→M5 顺序逐步落地，每步照本仓惯例
+  「做一步、写一页、push 一步」。
+
+---
+
 ## 提交记录
 
 | 项 | 提交 |
