@@ -11,3 +11,11 @@
 # env / local
 .env
 .tmp/
+
+# Sub-Store sidecar (deploy/substore-sidecar/)
+# index.mjs is a 503 KB third-party build artifact fetched by fetch-bundle.mjs
+# and pinned by commit + SHA-256; never commit it or node_modules.
+**/node_modules/
+/deploy/substore-sidecar/index.mjs
+# pnpm-lock.yaml IS committed on purpose (frozen install in CI).
+*.log

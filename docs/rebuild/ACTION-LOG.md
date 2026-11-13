@@ -1081,3 +1081,58 @@ wireguard 多字段 / mihomo 1.19 的 ech-opts 与 x25519mlkem768）。
 **判据：测试名过滤后若 `0 passed` 且 `N filtered out`，就是没编译进去，不是通过。**
 
 **校机验证**：`cargo test --workspace` 全绿、fmt 0、clippy 0。
+
+> ⚠️ **时间戳口径更正**：S48–S56 各条开头写的 `…Z` 实际记的是**本机墙钟（Asia/Taipei, +08:00）**，
+> 少减了 8 小时，并非真 UTC。自本条起按真 UTC 记（本机 12:30 +08 = **04:30Z**）。
+> 换算：条目 `HH:MM Z` → 真 UTC `HH-8:MM Z`。顺序与相对间隔不受影响。
+
+---
+
+## [UTC 2026-11-13T04:30:00Z] S57 · 决策 A 落地：Sub-Store 转换旁挂服务（spike → 薄壳 → 真机 E2E → 固化 pin）
+
+**用户指令**：「A. 旁挂 sub-store-convert」。
+
+### 执行的每一步 / 每条命令
+
+| # | 命令 / 脚本 | 目的与结果 |
+| --- | --- | --- |
+| 1 | `python -X utf8 .tmp\substore-convert-probe.py` | 读 `tbxark/sub-store-convert` README：API 是 `GET /sub?target=&url=`，只收 URL；Node 22+；仓库自称 MIT 但 vendor 了 Sub-Store |
+| 2 | `python -X utf8 .tmp\npm-check.py` | `@sub-store-convert/{core,cli,app}` 全 **404 未发布到 npm** |
+| 3 | `ssh school-guest "node --version && (docker --version …) && (bun --version …)"` | node 不在非交互 PATH → 换全路径 |
+| 4 | `ssh school-guest "C:\Users\YiZhidi\shortcuts-verify\node.exe --version && …"` | **Node v22.22.2**；**无 Docker、无 Bun** |
+| 5 | `python -X utf8 .tmp\substore-core-probe.py` | 读 `packages/core/src/index.js` / `app/src/index.js` / `build/package.json`；确认 `convert(url,target)` 内部 `await fetch(url)`；**build/index.js 503,495 B 已签入** |
+| 6 | `python -X utf8 .tmp\run-substore-spike.py` | scp `probe.mjs` + curl 下载 bundle 到校机 `C:\Users\YiZhidi\substore\index.mjs`；`node probe.mjs` → `IMPORT FAILED: Cannot find package 'peggy'` |
+| 7 | `ssh … dir /b shortcuts-verify & dir /b pnpm…\bin` | 无 npm，有 `pnpm.CMD` (10.33.4) |
+| 8 | `python -X utf8 .tmp\run-substore-spike2.py` | 探 npm 候选路径全 MISSING → 改 pnpm |
+| 9 | `python -X utf8 .tmp\run-substore-spike3.py` | `pnpm add peggy js-base64 json5 lodash yaml`（PATH 注入 node 目录）→ 成功；`probe.mjs` **IMPORT OK，20 targets** |
+| 10 | `probe.mjs` 三种输入对照 | **base64 URI / 纯 URI → 0 节点、0 字符**；**Clash YAML → 3/3 节点**，surge/qx/loon/stash/shadowrocket/egern/mihomo/sing-box/uri/json 全出内容 |
+| 11 | `python -X utf8 .tmp\run-substore-accept.py` | 真实 52 节点订阅验收：surge **52 行满额**；qx 36 / loon 34 / surfboard 16（**客户端能力过滤，非丢数据**）；`data:` URL 长 **62,751** |
+| 12 | 写 `deploy/substore-sidecar/server.mjs` | 自写 POST 薄壳（GET 塞不下 62 KB）；`/health`、`/convert`、`/convert/shape`；空产出 → 502 |
+| 13 | `python -X utf8 .tmp\run-sidecar-e2e.py` | `start /B` 启动失败（srv.log 空） |
+| 14 | `python -X utf8 .tmp\diag-sidecar.py` | `node --check server.mjs` = 0；前台跑 .cmd → **core loaded; 20 targets; listening on 3000**（服务本身没问题，是 `start /B` 引号坑） |
+| 15 | `python -X utf8 .tmp\run-sidecar-e2e3.py` | Python `Popen` 保活 + netstat 解析 PID → **E2E 全绿**：11/11 格式 200、49–119 ms、3/3 错误路径正确；精确 kill |
+| 16 | `python -X utf8 .tmp\pin-substore.py` | `git ls-remote` → **commit `cddcab9c536da53c0f867cd6b5738791bc4e8121`**；bundle **SHA-256 `ee99f9a7…ef`**、503,527 B |
+| 17 | `python -X utf8 .tmp\verify-pin.py` | 固定 commit 的 CDN URL 返回 200 且 `HASH MATCH = True` |
+| 18 | 写 `package.json` / `fetch-bundle.mjs` / `README.md` / `docs/rebuild/14-substore-sidecar.md` | 定版依赖、pin 校验脚本、部署说明、详细大步骤页（含 CI 门禁命令） |
+| 19 | 更新 `docs/THIRD_PARTY.md` / `00-index.md` | 登记新组件（AGPL 判定、commit、哈希、定版依赖）；索引加第 14 页 |
+
+### 关键结论
+
+- **输入契约固定为 Clash YAML**（我们已有的 `mihomo_yaml` 产物）→ **不需要等 `node_payloads`（P1）**；
+  S56 里写的「格式扩充被 P1 挡住」**不成立**，已更正。
+- `data:` URL 免掉了「给 sidecar 一个可抓地址」的问题，但 62 KB 塞不进 GET → 自写 POST 壳；
+  常驻服务让 503 KB bundle + peggy 只解析一次。
+- **QX/Loon/Surfboard 节点数少于 52 是客户端能力过滤**，不是 bug。
+- **许可证**：上游仓库 MIT，但 vendor 打包了 Sub-Store（AGPL-3.0）→ 本 sidecar 按 AGPL-3.0 分发；
+  Gnosis 本身即 AGPL-3.0，兼容。
+
+### 明确未做（下一步）
+
+Rust `crates/format-sidecar` 客户端、`format_configs` 扩展格式行与**模板包装**（sidecar 只给节点行）、
+`apps/curse` 分派、compose 服务与 healthcheck、CI job。施工图见 `14-substore-sidecar.md` §9。
+
+### 本步踩的坑
+
+`cmd /c start "" /B` 引号导致进程没起来（srv.log 空）；前台验证 OK 后改用 Python `Popen` 保活 +
+netstat 解析 PID 精确停止。另：PS5.1 `Set-Content -Encoding UTF8` 写 BOM 会让 sing-box 拒收配置，
+本轮全部改用 Python / `.mjs` 显式编码。
