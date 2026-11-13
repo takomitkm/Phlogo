@@ -41,6 +41,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 | **评审** | 旧 Go 评审 × Rust 实现交叉审查 | `10-review-crosscheck.md` | 逐节对照（权限/DB/评分/契约/表达式/分发/工程化/架构）+ 真实缺口 + 已废弃建议 + P0 验收 |
 | **等价性** | 上游等价性审计（B3 答复） | `11-equivalence-audit.md` | 26 条上游路径逐条判定（等价/架构取代/缺失）+ **配置键悬挂审计**（13 键无消费者、6 键值被静默忽略） |
 | **协议覆盖** | 最新 mihomo / sing-box 协议支持度审计 | `12-protocol-coverage-audit.md` | 校机真实订阅样本（mihomo v1.19.32，156 节点）实测 keep_rate **69.2% → 100%**；解析层补齐上游 `nodeAuth` 全 11 类协议；sing-box 发射层从硬编码简版改为全保真转换 |
+| **转换对比** | Sub-Store 对比 + sing-box v1.14.4 实测 | `13-substore-compare-and-singbox-test.md` | 我们用什么做转换（自研三段式，无外部依赖）；与 Sub-Store 的定位差异；**校机装 sing-box v1.14.4 实跑**：hysteria2 与 REALITY vless 经我们转换的配置**真实出网 204**；实测抓出并修复 REALITY 缺 uTLS 映射（sing-box 直接拒绝启动） |
 
 ### 实施状态总览（2026-11-13 更新）
 

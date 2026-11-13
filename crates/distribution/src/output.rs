@@ -250,6 +250,19 @@ pub fn singbox_outbound_from_clash(payload: &Value, name: &str) -> Value {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let reality = ob.remove("reality-opts");
+    // Clash `client-fingerprint` (chrome/safari/ios/edge/firefox/…) -> sing-box uTLS.
+    // REALITY **requires** uTLS on the client side: sing-box refuses to start with
+    // "uTLS is required by reality client" when the fingerprint is missing
+    // (verified against sing-box v1.14.4 on the school machine, 2026-11-13).
+    let client_fp = ob
+        .remove("client-fingerprint")
+        .and_then(|v| v.as_str().map(str::to_string))
+        .filter(|s| !s.is_empty());
+    // Clash `flow` (xtls-rprx-vision) -> sing-box `flow`.
+    let flow = ob
+        .remove("flow")
+        .and_then(|v| v.as_str().map(str::to_string))
+        .filter(|s| !s.is_empty());
 
     // Transport: Clash `network` + `ws-opts`/`grpc-opts` -> sing-box `transport`.
     // MUST run before the Clash-only keys are dropped below (it reads `network`).
@@ -314,7 +327,7 @@ pub fn singbox_outbound_from_clash(payload: &Value, name: &str) -> Value {
     }
 
     for k in [
-        "udp", "client-fingerprint", "flow", "alterId", "cipher",
+        "udp", "alterId", "cipher",
         "network", "ws-opts", "grpc-opts", "http-opts", "reality-opts", "servername", "alpn",
         "tls", "fingerprint", "ports", "mport", "up", "down", "congestion-controller",
         "smux", "plugin", "plugin-opts", "underlying-proxy", "ip-version",
@@ -327,18 +340,35 @@ pub fn singbox_outbound_from_clash(payload: &Value, name: &str) -> Value {
         .remove("sni")
         .and_then(|v| v.as_str().map(str::to_string));
     let alpn = ob.remove("alpn");
-    let tls_obj = json!({
-        "enabled": true,
-        "server_name": sni,
-        "alpn": alpn,
-        "insecure": insecure,
-        "reality": reality.map(|r| json!({
-            "enabled": true,
-            "public_key": r.get("public-key").cloned().unwrap_or(Value::Null),
-            "short_id": r.get("short-id").cloned().unwrap_or(Value::Null),
-        })),
-    });
-    ob.insert("tls".into(), tls_obj);
+    let mut tls_map = serde_json::Map::new();
+    tls_map.insert("enabled".into(), json!(true));
+    if let Some(s) = sni {
+        tls_map.insert("server_name".into(), json!(s));
+    }
+    if let Some(a) = alpn {
+        tls_map.insert("alpn".into(), a);
+    }
+    if insecure {
+        tls_map.insert("insecure".into(), json!(true));
+    }
+    if let Some(r) = reality {
+        tls_map.insert(
+            "reality".into(),
+            json!({
+                "enabled": true,
+                "public_key": r.get("public-key").cloned().unwrap_or(Value::Null),
+                "short_id": r.get("short-id").cloned().unwrap_or(Value::Null),
+            }),
+        );
+    }
+    // uTLS: sing-box needs it for REALITY (and honours it elsewhere).
+    if let Some(fp) = client_fp {
+        tls_map.insert("utls".into(), json!({"enabled": true, "fingerprint": fp}));
+    }
+    ob.insert("tls".into(), Value::Object(tls_map));
+    if let Some(f) = flow {
+        ob.insert("flow".into(), json!(f));
+    }
     if let Some(t) = transport {
         ob.insert("transport".into(), t);
     }
@@ -504,5 +534,23 @@ mod output_tests {
         assert_eq!(sb["transport"]["headers"]["Host"], "h.example.com");
         assert_eq!(sb["tls"]["reality"]["public_key"], "pk");
         assert_eq!(sb["tls"]["reality"]["short_id"], "sid");
+    }
+
+    /// REALITY **requires** uTLS on the sing-box side: without it sing-box refuses
+    /// to start ("uTLS is required by reality client"). Clash carries the same
+    /// setting as `client-fingerprint`. Verified against sing-box v1.14.4 on the
+    /// school machine (2026-11-13).
+    #[test]
+    fn singbox_from_clash_maps_client_fingerprint_to_utls() {
+        let payload = serde_json::json!({
+            "name": "r", "type": "vless", "server": "r.example.com", "port": 443,
+            "uuid": "uu", "flow": "xtls-rprx-vision", "client-fingerprint": "ios",
+            "reality-opts": {"public-key": "pk", "short-id": "sid"}
+        });
+        let sb = singbox_outbound_from_clash(&payload, "r");
+        assert_eq!(sb["tls"]["utls"]["enabled"], true);
+        assert_eq!(sb["tls"]["utls"]["fingerprint"], "ios");
+        assert_eq!(sb["flow"], "xtls-rprx-vision", "vision flow must survive");
+        assert!(sb.get("client-fingerprint").is_none(), "clash key must be consumed");
     }
 }

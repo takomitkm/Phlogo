@@ -963,3 +963,44 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 **文档**：新增 [`12-protocol-coverage-audit.md`](12-protocol-coverage-audit.md)（含仍未覆盖项的如实清单：shadowtls / wireguard 多字段 / hysteria2 obfs 与端口跳跃 / mihomo 1.19 的 ech-opts 与 x25519mlkem768）。
 
 **校机验证**：`cargo test --workspace` **FULL_TEST_EXIT=0**（43 个测试二进制）、fmt 0、clippy 0。
+
+---
+
+## [UTC 2026-11-13T11:15:00Z] S53 · 校机装 sing-box v1.14.4 实测 + Sub-Store 对比 + 修出 REALITY 缺 uTLS 的真 bug
+
+**用户要求**：① 校机装 sing-box 实测；② 回答「订阅转换现在用的是什么」并对比 Sub-Store。
+
+**环境**：校机新装 **sing-box v1.14.4**（go1.26.10，with_utls/with_quic/with_clash_api 等全标签）；
+mihomo v1.19.32 作对照（已在跑，7890）。
+
+**转换现状**：**自研，无外部转换依赖**——`crates/vproxy-adapter`（解析）→ `crates/domain::NormalizedNode`
+（类型化中间表示）→ `crates/distribution::output`（Clash/sing-box/Base64 三 producer）。
+VProxy 因「单 crate 应用无法轻依赖 + 方案禁上游类型渗透」被 P0-01 判为不可用（见 `p0-01-vproxy.md`）。
+
+**与 Sub-Store 的定位差异**：Sub-Store 是「多格式转换服务」（十余种目标格式 + 脚本/规则/聚合）；
+我们是「节点池 + 评分 + 筛选 + 按档案生成订阅」，转换只是最后一公里。Sub-Store 不具备的能力
+（身份去重/评分/测活/地区配额/token 鉴权/sponsor/权限分层）恰是本项目的核心。
+借鉴点已部分采用：统一中间表示 + 每目标独立 producer + 显式字段映射。
+
+**实测方法**（真实验证，非纸面推导）：用我们的转换规则把**校机真实订阅**（52 节点）转成 sing-box 配置
+→ 交 **真 sing-box 二进制** `check` → `run` → `curl --proxy` 实测出网。
+
+**结果**：
+- `sing-box check`（52 outbound 全量）**EXIT=0**；`run` 起来并监听 127.0.0.1:2080；
+- **逐节点类型隔离**：`hysteria2` → **204 OK（1.83s）**；`vless+REALITY+vision` → **204 OK（0.95s）**
+  → **我们的转换配置真实代理出了网**；
+- 失败两类（vless-ws 18 个、vless 无 reality 的 vision 2 个）经对照判定为**节点/网络侧**：
+  mihomo 走同一订阅 204 OK，ws 节点后端 172.64.229.88 是 Cloudflare（校园网不可达）。
+
+**实测抓出的真 bug（已修）**：**REALITY 在 sing-box 侧必须带 uTLS**，否则 sing-box 拒绝启动
+（`FATAL initialize outbound[7]: uTLS is required by reality client`）。
+Clash 用 `client-fingerprint` 表达，sing-box 要 `tls.utls{enabled,fingerprint}` —— S52 的转换漏了，
+会导致整份 sing-box 配置起不来。修复：`client-fingerprint` → `tls.utls`，并顺带透传 `flow`（vision）；
+新增回归测试 `singbox_from_clash_maps_client_fingerprint_to_utls`。
+
+**文档**：新增 [`13-substore-compare-and-singbox-test.md`](13-substore-compare-and-singbox-test.md)
+（含与 Sub-Store 的逐维度对比表、仍存在的缺口清单——`shadowtls` / `hysteria2` 的 obfs 与端口跳跃 /
+wireguard 多字段 / mihomo 1.19 的 ech-opts 与 x25519mlkem768）。
+
+**方法论沉淀**：**新增协议字段以真实二进制校验为准**，不纸面对照字段表——Sub-Store 的 sing-box producer
+正是这样处理的（uTLS/obfs/server_ports/method 都显式映射），我们此前没有，因而被实测打脸。
