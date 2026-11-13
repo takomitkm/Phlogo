@@ -1004,3 +1004,40 @@ wireguard 多字段 / mihomo 1.19 的 ech-opts 与 x25519mlkem768）。
 
 **方法论沉淀**：**新增协议字段以真实二进制校验为准**，不纸面对照字段表——Sub-Store 的 sing-box producer
 正是这样处理的（uTLS/obfs/server_ports/method 都显式映射），我们此前没有，因而被实测打脸。
+
+---
+
+## [UTC 2026-11-13T11:45:00Z] S54 · 协议缺口全部补齐（逐协议 × 双真实二进制校验）
+
+**用户指令**：「把缺口全补上」——S52/S53 文档里列出的缺口逐条补齐。
+
+**方法**：为 13 种协议各生成**单节点配置** + **全协议配置**（用我们自己的转换规则的 Python 等价实现），
+交校机**真 sing-box v1.14.4**（`check`）与**真 mihomo v1.19.32**（`-t`）校验，**任何 FAIL 都算未完成**。
+
+**最终结果**：**sing-box 12/12 PASS、mihomo 13/13 PASS**（wireguard 按设计只在 mihomo 侧）。
+
+**被二进制打脸、必须改实现的 10 个问题**（全部已修）：
+1. sing-box 不认 `type: ss` → 改写为 `shadowsocks`；
+2. `shadowsocks`/`snell`/`socks`/`http` 无 `tls` 字段 → 按协议条件化（`SINGBOX_NO_TLS`）；
+3. `hysteria2.up_mbps` 要 int（mihomo 给 `"100 Mbps"`）→ `mbps_of()` 带单位解析；
+4. `tuic.heartbeat` 要 duration 字符串（mihomo 给 int）→ `duration_ms()`；
+5. **单位分两套**：`hop-interval` 是**秒**（`duration_secs`），`heartbeat` 是**毫秒**（`duration_ms`）——混用会被拒；
+6. `server_ports` 是**数组**且元素用**冒号**（`bad port range: 60000-65530`）→ `server_ports_of()` dash→colon；
+7. `plugin_opts` 是**字符串**（mihomo 给 map）→ map → `k=v;k2=v2`；
+8. **sing-box 1.13 已移除 wireguard outbound**（迁 endpoint 形态）→ 加入 `SINGBOX_UNSUPPORTED`；
+9. mihomo `hysteria2.obfs` 是**类型**、`obfs-password` 才是密码 → 正确拆分 `obfs{type,password}`；
+10. **hysteria v1 的凭据是 `auth-str`**（mihomo）不是 `password` → 解析层加回退（否则丢节点）。
+
+> 第 6 条值得单记：sing-box 官方文档写冒号、上游 issue #2416 声称应改 dash——**实测二进制只接受冒号**，
+> 即 issue 的结论是反的。又一次证明「以二进制为准」。
+
+**行为变更（重要）**：sing-box 对未知类型/字段是**整份配置拒绝启动**，故不可表示的协议
+（`mieru`/`sudoku`/`ssr`/`shadowtls`/`wireguard`）在 **sing-box 输出中完全剔除**（含 selector/urltest 的
+引用列表，否则引用不存在的 tag 会让客户端起不来）；**Clash/mihomo 输出不受影响**。
+新增 `singbox_supports(protocol)` 对外暴露该判定。
+
+**解析层**：补 hysteria v1 的 `auth-str`/`auth` 回退（mihomo 用它，sing-box 用 `password`）。
+
+**回归测试**：新增 7 个（hysteria2 端口跳跃+obfs、tuic、ss plugin、tls 条件化、跳过不可表示协议、snell obfs、socks5→socks）。
+
+**校机验证**：`cargo test --workspace` **FULL_TEST_EXIT=0**（43 个测试二进制；distribution 35 个用例）、fmt 0、clippy 0。

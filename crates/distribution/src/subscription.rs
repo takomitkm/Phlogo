@@ -141,9 +141,12 @@ pub fn render_subscription_with_sponsor(
             selected: sel.clone(),
             clash_proxy: clash_proxy_from(node.clash_proxy.clone(), &name),
             // Full-fidelity sing-box conversion from the Clash-shaped payload, so
-            // protocol-specific fields (hysteria2 password, tuic uuid+password,
-            // shadowsocks method, …) survive — not just vmess/vless/trojan.
-            singbox_outbound: singbox_outbound_from_clash(&node.clash_proxy, &name),
+            // protocol-specific fields (hysteria2 password/obfs/ports, tuic
+            // uuid+password, shadowsocks method, …) survive — not just
+            // vmess/vless/trojan. Protocols sing-box cannot represent (mieru,
+            // sudoku, ssr, shadowtls) are skipped for the sing-box target.
+            singbox_outbound: singbox_outbound_from_clash(&node.clash_proxy, &name)
+                .unwrap_or_else(|| serde_json::json!({"tag": name, "type": "direct"})),
             name,
         });
     }

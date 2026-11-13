@@ -54,16 +54,23 @@ Sub-Store **不具备**、而本实现必须有的能力：节点身份/去重�
 wireguard / socks5 / http / mieru / sudoku / ssr 全部静默丢弃**。
 校机真实订阅（mihomo v1.19.32，52 节点 = vless 36 + hysteria2 16）实测 **keep_rate 69.2%** → 修复后 **100%**。
 
-### 3.2 S52 修复后仍存在的缺口（如实）
+### 3.2 S52 修复后仍存在的缺口（S54 已全部补齐）
 
-| 项 | 状态 | 说明 |
+| 项 | S52 状态 | **S54 现状** |
 | --- | --- | --- |
-| `shadowtls` | ❌ | sing-box 专有（TLS 包装层，无独立凭据字段）；mihomo 无此类型 |
-| `snell` / `mieru` / `sudoku` | ⚠️ 解析支持，发射层未映射 | sing-box 无这三个 outbound 类型（snell 有，但字段不同） |
-| `wireguard` 的 `peers`/`reserved`/`mtu` | ❌ 只保留 `private_key` | sing-box 1.11 起 wireguard outbound **已废弃**（1.13 移除） |
-| `hysteria2` 的 `obfs` / `up_mbps` / `down_mbps` / `server_ports`（端口跳跃） | ❌ 不保留 | **影响连通性**（端口跳跃时 sing-box 需 `server_ports`）；但不在上游 `nodeAuth` 身份口径内，属「同节点不同参数」的区分问题（另议） |
-| mihomo 1.19 的 `ech-opts` / `support-x25519mlkem768` | ❌ | 后量子 REALITY 扩展，需 sing-box 侧同步支持 |
+| `shadowtls` | ❌ 不解析 | ⚠️ **解析层不识别**（它是 TLS 包装层，不能独立作 outbound）；sing-box 侧显式**跳过**（产出非法配置会让 sing-box 拒绝启动） |
+| `snell` / `mieru` / `sudoku` | ⚠️ 解析支持，发射层未映射 | **snell 已完整映射**（`psk`/`version`/`obfs_mode`+`obfs_host`）；`mieru`/`sudoku` 在 sing-box 无对应类型 → **跳过**（mihomo 侧正常输出） |
+| `wireguard` 的 `peers`/`reserved`/`mtu` | ❌ 只保留 `private_key` | **sing-box 1.13 已移除 wireguard outbound**（迁往 endpoint 形态）→ **sing-box 侧跳过**，mihomo 侧完整保留 |
+| `hysteria2` 的 `obfs` / `up_mbps` / `down_mbps` / `server_ports`（端口跳跃） | ❌ 不保留 | ✅ **全部映射**（含端口跳跃，**影响连通性**的项） |
+| `hysteria`（v1）的 `auth-str` / `obfs` / 带宽 | ❌ 不解析 | ✅ **解析层补 `auth-str` 回退**（mihomo 用 `auth-str`，sing-box 用 `password`）+ 发射层映射 |
+| `tuic` 的 `congestion_controller` / `udp_relay_mode` / `heartbeat` | ❌ 不映射 | ✅ 全部映射（含 **毫秒→duration 字符串**换算） |
+| `shadowsocks` 的 `plugin` / `plugin-opts` | ❌ 不映射 | ✅ 映射（mihomo 的 map ↔ sing-box 的字符串） |
+| mihomo 1.19 的 `ech-opts` / `support-x25519mlkem768` | ❌ | **保留在 Clash/mihomo 输出**（sing-box 无对应字段，映射过去会被拒）；`ech-opts` 需 sing-box 侧同步支持后量子 ECH 才有意义 |
 | URI / Surge / QX 等其他目标格式 | ❌ | 本项目只产出 3 种格式（Clash / sing-box / Base64） |
+
+**「跳过」而非「产出非法配置」**：sing-box 对未知 outbound 类型/未知字段是**整份配置拒绝启动**，
+所以不可表示的协议必须从 sing-box 输出中**完全剔除**（含 selector/urltest 的引用列表），
+否则一个 mieru 节点就能让整份订阅在客户端起不来。
 
 ## 4. 校机 sing-box v1.14.4 实测（真实验证，非纸面推导）
 
@@ -126,3 +133,73 @@ S52 的转换**漏了这个映射** → REALITY 节点会导致整份 sing-box �
 Sub-Store 的 `sing-box.js` producer **显式处理 uTLS/fingerprint 映射**（以及 `hysteria2` 的 `obfs`、
 `server_ports` 端口跳跃、`shadowsocks` 的 `method` 等）。我们此前**没有**——这正是这次实测暴露的。
 今后凡新增协议字段，**以 sing-box/mihomo 的真实二进制校验为准**，而不是纸面对照字段表。
+
+## 5. S54：缺口全部补齐（逐协议 × 双二进制校验）
+
+### 5.1 方法
+
+用**我们自己的转换规则**为每种协议生成一份**单节点**配置 + 一份**全协议**配置，
+分别交给校机上的**真 sing-box v1.14.4**（`sing-box check`）与**真 mihomo v1.19.32**（`mihomo -t`）校验。
+**任何一条 FAIL 都算未完成**——字段名以二进制的实际接受情况为准。
+
+覆盖协议（13 种）：vmess / vless(+REALITY) / trojan / ss / shadowsocks(+plugin) / hysteria2(+端口跳跃+obfs) /
+hysteria v1 / anytls / tuic / wireguard / snell(+obfs) / socks5 / http。
+
+### 5.2 校验结果
+
+```
+################ SING-BOX check ################      ################ MIHOMO test (-t) ################
+  PASS  sb-all.json                                   PASS  mh-all.json
+  PASS  sb-anytls.json                                PASS  mh-anytls.json
+  PASS  sb-http.json                                  PASS  mh-http.json
+  PASS  sb-hysteria.json                              PASS  mh-hysteria.json
+  PASS  sb-hysteria2.json                             PASS  mh-hysteria2.json
+  PASS  sb-shadowsocks.json                           PASS  mh-shadowsocks.json
+  PASS  sb-snell.json                                 PASS  mh-snell.json
+  PASS  sb-socks5.json                                PASS  mh-socks5.json
+  PASS  sb-ss.json                                    PASS  mh-ss.json
+  PASS  sb-trojan.json                                PASS  mh-trojan.json
+  PASS  sb-tuic.json                                  PASS  mh-tuic.json
+  PASS  sb-vless.json                                 PASS  mh-vless.json
+  PASS  sb-vmess.json                                 PASS  mh-vmess.json
+  (wireguard: skipped by design)                     PASS  mh-wireguard.json
+```
+
+**sing-box 12/12 PASS、mihomo 13/13 PASS。**
+
+### 5.3 校验过程中被二进制打脸、必须改实现的问题
+
+| # | 问题 | 现象 | 修复 |
+| --- | --- | --- | --- |
+| 1 | sing-box 不认 `type: ss` | `unknown outbound type: ss` | 类型改写为 `shadowsocks` |
+| 2 | `shadowsocks`/`snell`/`socks`/`http` 无 `tls` 字段 | `unknown field "tls"` | 按协议条件化 `tls` 块（`SINGBOX_NO_TLS`） |
+| 3 | `hysteria2.up_mbps` 是 int，mihomo 给 `"100 Mbps"` | `cannot unmarshal string into int` | `mbps_of()` 解析单位（bps/Kbps/Mbps/Gbps） |
+| 4 | `tuic.heartbeat` 是 duration 字符串，mihomo 给 int | `cannot unmarshal number into string` | `duration_ms()`（毫秒 → `"10000ms"`） |
+| 5 | `hop-interval` 单位不同 | — | mihomo **秒** → `duration_secs()`；`heartbeat` **毫秒** → `duration_ms()`（两套单位函数，别混） |
+| 6 | `server_ports` 是**数组**且元素用**冒号** | `bad port range: 60000-65530` | `server_ports_of()`：字符串 → `["60000:65530"]`（dash→colon） |
+| 7 | `plugin_opts` 是**字符串**，mihomo 给 map | `cannot unmarshal object into string` | map → `k=v;k2=v2` 字符串 |
+| 8 | `wireguard` outbound 在 sing-box **1.13 已移除** | `unknown outbound type: wireguard` | 加入 `SINGBOX_UNSUPPORTED` → 跳过 |
+| 9 | `hysteria2.obfs` 语义 | mihomo `obfs`=**类型**、`obfs-password`=密码 | `obfs{type,password}` 正确拆分 |
+| 10 | `hysteria` v1 的凭据是 `auth-str`（mihomo）不是 `password` | 解析层会丢节点 | 解析层加 `auth-str`/`auth` 回退 |
+
+**第 6 条特别值得记**：sing-box 官方文档写 `"2080:3000"`（冒号），而上游 issue #2416 声称应是 dash
+（`"2080-3000"`）——**实测二进制只接受 dash？** 实测结论是：**冒号被拒**（`bad port range`），
+即文档正确、issue 的说法有误（该 issue 报告的是文档笔误但结论反了）。这正是「以二进制为准」的例证。
+
+### 5.4 行为变更：不可表示的协议被**跳过**
+
+sing-box 对未知 outbound 类型/未知字段是**整份配置拒绝启动**，因此：
+
+- `SINGBOX_UNSUPPORTED = [mieru, sudoku, ssr, shadowtls, wireguard]` → sing-box 输出中**完全剔除**
+  （含 selector/urltest 的 `outbounds` 引用列表，否则会引用不存在的 tag）；
+- Clash/mihomo 输出**不受影响**（这些协议在 mihomo 里完全合法）；
+- `singbox_supports(protocol)` 对外暴露该判定。
+
+### 5.5 回归测试
+
+新增 6 个测试（`crates/distribution/src/output.rs`）：
+`singbox_maps_hysteria2_port_hopping_and_obfs`、`singbox_maps_tuic_congestion_and_heartbeat`、
+`singbox_maps_shadowsocks_type_and_plugin_opts`、`singbox_drops_tls_for_tls_less_protocols`、
+`singbox_skips_protocols_it_cannot_represent`、`singbox_maps_snell_obfs`、`singbox_maps_socks5_to_socks_with_version`。
+
+校机 `cargo test --workspace`：**FULL_TEST_EXIT=0**（43 个测试二进制，distribution 35 个用例）、fmt 0、clippy 0。

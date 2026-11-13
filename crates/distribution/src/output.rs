@@ -74,6 +74,14 @@ pub fn singbox_json(template_json: &str, nodes: &[OutputNode]) -> String {
     let mut root: Value = serde_json::from_str(template_json).expect("template is valid json");
     let obj = root.as_object_mut().expect("template root is an object");
 
+    // Nodes whose protocol sing-box cannot represent are **excluded** from the
+    // sing-box output entirely (including from the selector/urltest lists) —
+    // a selector referencing a missing tag makes sing-box refuse to start.
+    let usable: Vec<&OutputNode> = nodes
+        .iter()
+        .filter(|n| n.singbox_outbound.get("type").and_then(Value::as_str) != Some("direct"))
+        .collect();
+
     // Split template outbounds: proxy-type groups (select/urltest) get node names;
     // everything else (direct/block/dns) is preserved verbatim.
     let template_outbounds = obj
@@ -87,14 +95,14 @@ pub fn singbox_json(template_json: &str, nodes: &[OutputNode]) -> String {
         if typ == "selector" || typ == "urltest" {
             let mut ob = ob.clone();
             if let Some(m) = ob.as_object_mut() {
-                m.insert("outbounds".into(), json!(nodes.iter().map(|n| n.name.clone()).collect::<Vec<_>>()));
+                m.insert("outbounds".into(), json!(usable.iter().map(|n| n.name.clone()).collect::<Vec<_>>()));
             }
             kept.push(ob);
         } else {
             kept.push(ob.clone());
         }
     }
-    for n in nodes {
+    for n in &usable {
         kept.push(n.singbox_outbound.clone());
     }
     obj.insert("outbounds".into(), Value::Array(kept));
@@ -188,17 +196,121 @@ pub fn singbox_outbound_from(
     ob
 }
 
+/// Protocols that have **no sing-box outbound counterpart**.
+///
+/// - `mieru` / `sudoku` / `ssr` exist in mihomo but not in sing-box;
+/// - `shadowtls` is a TLS *wrapper* (it cannot be a standalone outbound target —
+///   it must wrap another outbound);
+/// - `wireguard`: sing-box **removed the wireguard outbound in 1.13** (it moved to
+///   the endpoint form, `option.WireGuardEndpointOptions`, which is not an
+///   outbound). Verified against the sing-box v1.14.4 binary: `type: wireguard`
+///   fails with "outbounds[0]: unknown outbound type".
+///
+/// Emitting them as sing-box outbounds would produce a config that sing-box
+/// refuses to load, so they are **skipped** for the sing-box target (they remain
+/// valid in the Clash/mihomo output).
+const SINGBOX_UNSUPPORTED: &[&str] = &["mieru", "sudoku", "ssr", "shadowtls", "wireguard"];
+
+/// True when this protocol can be represented as a sing-box outbound.
+pub fn singbox_supports(protocol: &str) -> bool {
+    !SINGBOX_UNSUPPORTED.contains(&protocol)
+}
+
+/// Parse a bandwidth value into an integer Mbps.
+///
+/// mihomo accepts `"100"`, `"100 Mbps"`, `"1g"`; sing-box wants a plain integer
+/// (`up_mbps`/`down_mbps`).
+fn mbps_of(v: &Value) -> Value {
+    if let Some(n) = v.as_u64() {
+        return json!(n);
+    }
+    let s = v.as_str().unwrap_or("").trim().to_lowercase();
+    let num: String = s
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let n: f64 = num.parse().unwrap_or(0.0);
+    let mult = if s.contains('g') {
+        1000.0
+    } else if s.contains('k') {
+        0.001
+    } else {
+        1.0
+    };
+    json!((n * mult) as u64)
+}
+
+/// Render a duration-ish value as a sing-box duration string.
+///
+/// Units differ per field in mihomo, so the caller says which one it is:
+/// - `hop-interval` is **seconds** (mihomo: `hop-interval: 30`);
+/// - `heartbeat-interval` and the `idle-session-*` knobs are **milliseconds**
+///   (mihomo: `heartbeat-interval: 10000`).
+///
+/// sing-box always wants a Go duration string (`"30s"`, `"10000ms"`).
+fn duration_secs(v: &Value) -> Value {
+    if let Some(s) = v.as_str() {
+        return json!(s);
+    }
+    if let Some(n) = v.as_u64() {
+        return json!(format!("{n}s"));
+    }
+    Value::Null
+}
+
+/// Like [`duration_secs`] but the source value is milliseconds.
+fn duration_ms(v: &Value) -> Value {
+    if let Some(s) = v.as_str() {
+        return json!(s);
+    }
+    if let Some(n) = v.as_u64() {
+        return json!(format!("{n}ms"));
+    }
+    Value::Null
+}
+
+/// Convert a mihomo port-range list into sing-box's `server_ports` array.
+///
+/// mihomo: `ports: "60000-65530"` (string, dash-separated).
+/// sing-box: `server_ports: ["60000:65530"]` (array, **colon**-separated — the
+/// binary rejects the dash form with "bad port range"; note the sing-box docs
+/// use the colon form while upstream issue #2416 argues for dashes — the
+/// **binary** is the authority here).
+fn server_ports_of(v: &Value) -> Value {
+    match v {
+        Value::Array(_) => v.clone(),
+        Value::String(s) => {
+            let parts: Vec<String> = s
+                .split(',')
+                .map(|p| p.trim().replace('-', ":"))
+                .filter(|p| !p.is_empty())
+                .collect();
+            json!(parts)
+        }
+        other => json!([other.to_string()]),
+    }
+}
+
+/// Protocols whose sing-box outbound has **no** `tls` block.
+const SINGBOX_NO_TLS: &[&str] = &["shadowsocks", "ss", "snell", "socks", "socks5", "http", "https"];
+
+/// Protocols whose sing-box outbound is a **deprecated** shape without
+/// `server`/`server_port` (sing-box 1.11 deprecated the wireguard outbound; it
+/// moved to the endpoint form and is removed in 1.13).
+const SINGBOX_NO_ENDPOINT: &[&str] = &["wireguard"];
+
 /// Build a sing-box outbound from a **Clash-shaped payload** (full fidelity).
 ///
 /// The Clash payload is the source of truth for protocol-specific fields
-/// (hysteria2 `password`, tuic `uuid`+`password`, wireguard `private-key`,
-/// shadowsocks `method`, anytls `password`, …). The sing-box schema differs from
-/// Clash in field names, so this maps them per protocol instead of hard-coding a
-/// vmess/vless/trojan-only shape.
+/// (hysteria2 `password`/`obfs`/`ports`, tuic `uuid`+`password`, wireguard
+/// `private-key`, shadowsocks `cipher`+`plugin`, snell `psk`+`version`, …). The
+/// sing-box schema differs from Clash in field names, so this maps them per
+/// protocol instead of hard-coding a vmess/vless/trojan-only shape.
 ///
-/// sing-box protocol names (`shadowsocks`, `socks`, `anytls`, `hysteria2`, …) match
-/// the Clash names for every protocol we support, so the type is carried over.
-pub fn singbox_outbound_from_clash(payload: &Value, name: &str) -> Value {
+/// Field names were taken from the **real** sources (mihomo `adapter/outbound/*.go`
+/// struct tags, sing-box v1.14.0 outbound docs) and the output is validated by the
+/// real sing-box binary — not by eyeballing a field table.
+pub fn singbox_outbound_from_clash(payload: &Value, name: &str) -> Option<Value> {
     let mut ob = match payload {
         Value::Object(m) => m.clone(),
         _ => serde_json::Map::new(),
@@ -208,42 +320,144 @@ pub fn singbox_outbound_from_clash(payload: &Value, name: &str) -> Value {
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
+    if !singbox_supports(&protocol) {
+        return None;
+    }
     ob.remove("name");
     ob.insert("tag".into(), json!(name));
 
     // Clash `server`/`port` -> sing-box `server`/`server_port`.
-    if let Some(s) = ob.remove("server") {
-        ob.insert("server".into(), s);
+    // (wireguard is excluded: its sing-box outbound has no endpoint fields.)
+    if !SINGBOX_NO_ENDPOINT.contains(&protocol.as_str()) {
+        if let Some(s) = ob.remove("server") {
+            ob.insert("server".into(), s);
+        }
+        if let Some(p) = ob.remove("port") {
+            ob.insert("server_port".into(), p);
+        }
+    } else {
+        ob.remove("server");
+        ob.remove("port");
     }
-    if let Some(p) = ob.remove("port") {
-        ob.insert("server_port".into(), p);
+
+    // ---- protocol-specific parameter mapping ----
+    match protocol.as_str() {
+        "hysteria2" => {
+            // mihomo: ports / mport / hop-interval / up / down / obfs + obfs-password
+            // sing-box: server_ports / hop_interval / up_mbps / down_mbps / obfs{type,password}
+            if let Some(v) = ob.remove("ports").or_else(|| ob.remove("mport")) {
+                ob.insert("server_ports".into(), server_ports_of(&v));
+            }
+            if let Some(v) = ob.remove("hop-interval") {
+                ob.insert("hop_interval".into(), duration_secs(&v));
+            }
+            // sing-box wants an integer Mbps; mihomo allows "100 Mbps" / "100".
+            if let Some(v) = ob.remove("up") {
+                ob.insert("up_mbps".into(), mbps_of(&v));
+            }
+            if let Some(v) = ob.remove("down") {
+                ob.insert("down_mbps".into(), mbps_of(&v));
+            }
+            if let Some(v) = ob.remove("obfs") {
+                // mihomo's `obfs` is the obfuscation TYPE (e.g. "salamander") and
+                // `obfs-password` carries the password; sing-box splits them into
+                // obfs.type + obfs.password.
+                let pw = ob.remove("obfs-password").unwrap_or(Value::Null);
+                ob.insert(
+                    "obfs".into(),
+                    json!({"type": v, "password": pw}),
+                );
+            } else {
+                ob.remove("obfs-password");
+            }
+        }
+        "hysteria" => {
+            // mihomo hysteria v1: auth-str / obfs / up / down
+            if let Some(v) = ob.remove("auth-str") {
+                ob.insert("auth_str".into(), v);
+            }
+            if let Some(v) = ob.remove("up") {
+                ob.insert("up_mbps".into(), mbps_of(&v));
+            }
+            if let Some(v) = ob.remove("down") {
+                ob.insert("down_mbps".into(), mbps_of(&v));
+            }
+            if let Some(v) = ob.remove("ports") {
+                ob.insert("server_ports".into(), server_ports_of(&v));
+            }
+            if let Some(v) = ob.remove("hop-interval") {
+                ob.insert("hop_interval".into(), duration_secs(&v));
+            }
+        }
+        "tuic" => {            if let Some(v) = ob.remove("congestion-controller") {
+                ob.insert("congestion_control".into(), v);
+            }
+            if let Some(v) = ob.remove("udp-relay-mode") {
+                ob.insert("udp_relay_mode".into(), v);
+            }
+            // mihomo heartbeat-interval is an integer (ms); sing-box wants a duration string.
+            if let Some(v) = ob.remove("heartbeat-interval") {
+                ob.insert("heartbeat".into(), duration_ms(&v));
+            }
+        }
+        "shadowsocks" | "ss" => {
+            // sing-box names the type `shadowsocks` and the cipher `method`.
+            ob.insert("type".into(), json!("shadowsocks"));
+            if let Some(c) = ob.remove("cipher") {
+                ob.entry("method").or_insert(c);
+            }
+            // mihomo's plugin-opts is a map; sing-box wants a single string.
+            if let Some(po) = ob.remove("plugin-opts") {
+                let s = match &po {
+                    Value::String(s) => s.clone(),
+                    Value::Object(m) => m
+                        .iter()
+                        .map(|(k, v)| {
+                            let val = v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
+                            format!("{k}={val}")
+                        })
+                        .collect::<Vec<_>>()
+                        .join(";"),
+                    other => other.to_string(),
+                };
+                ob.insert("plugin_opts".into(), json!(s));
+            }
+        }
+        "snell" => {
+            // mihomo: psk / version / obfs-opts{mode,host}
+            // sing-box: psk / version / obfs_mode + obfs_host (v4) or mode (v6)
+            if let Some(oo) = ob.remove("obfs-opts") {
+                if let Some(m) = oo.get("mode").cloned() {
+                    ob.insert("obfs_mode".into(), m);
+                }
+                if let Some(h) = oo.get("host").cloned() {
+                    ob.insert("obfs_host".into(), h);
+                }
+            }
+        }
+        "socks5" | "socks" => {
+            // sing-box calls it `socks` and needs an explicit version.
+            ob.insert("type".into(), json!("socks"));
+            ob.entry("version").or_insert(json!("5"));
+        }
+        "wireguard" => {
+            // sing-box spells wireguard's key `private_key`; Clash uses `private-key`.
+            if let Some(k) = ob.remove("private-key") {
+                ob.entry("private_key").or_insert(k);
+            }
+            if let Some(v) = ob.remove("pre-shared-key") {
+                ob.entry("pre_shared_key").or_insert(v);
+            }
+            if let Some(v) = ob.remove("public-key") {
+                ob.entry("peer_public_key").or_insert(v);
+            }
+        }
+        _ => {}
     }
 
     // Credentials: keep the native field names (they match between dialects for
-    // every protocol we support), but make sure the required one is present.
-    let cred_keys: &[&str] = match protocol.as_str() {
-        "vmess" | "vless" => &["uuid"],
-        "tuic" => &["uuid", "password"],
-        "wireguard" => &["private_key"],
-        "snell" => &["psk"],
-        "socks" | "socks5" | "http" | "https" | "mieru" => &["username", "password"],
-        "shadowsocks" | "ss" | "ssr" => &["method", "password"],
-        "sudoku" => &["key"],
-        _ => &["password"],
-    };
-    // sing-box names the shadowsocks cipher `method`; Clash names it `cipher`.
-    if protocol == "shadowsocks" || protocol == "ss" {
-        if let Some(c) = ob.remove("cipher") {
-            ob.entry("method").or_insert(c);
-        }
-    }
-    // sing-box spells wireguard's key `private_key`; Clash uses `private-key`.
-    if protocol == "wireguard" {
-        if let Some(k) = ob.remove("private-key") {
-            ob.entry("private_key").or_insert(k);
-        }
-    }
-    let _ = cred_keys; // the parser guarantees the primary credential field exists
+    // every protocol we support) — the parser guarantees the primary one exists.
+
     // Drop Clash-only keys that sing-box would reject.
     let insecure = ob
         .remove("skip-cert-verify")
@@ -329,8 +543,22 @@ pub fn singbox_outbound_from_clash(payload: &Value, name: &str) -> Value {
     for k in [
         "udp", "alterId", "cipher",
         "network", "ws-opts", "grpc-opts", "http-opts", "reality-opts", "servername", "alpn",
-        "tls", "fingerprint", "ports", "mport", "up", "down", "congestion-controller",
-        "smux", "plugin", "plugin-opts", "underlying-proxy", "ip-version",
+        "tls", "fingerprint", "mport", "smux", "plugin", "underlying-proxy", "ip-version",
+        // mihomo-only knobs with no sing-box counterpart
+        "protocol", "ech-opts", "ca", "ca-str", "cwnd", "udp-mtu", "reduce-rtt",
+        "request-timeout", "disable-sni", "max-udp-relay-packet-size", "fast-open",
+        "max-open-streams", "recv-window-conn", "recv-window", "disable-mtu-discovery",
+        "max-datagram-frame-size", "udp-over-stream", "udp-over-stream-version",
+        "initial-stream-receive-window", "max-stream-receive-window",
+        "initial-connection-receive-window", "max-connection-receive-window",
+        "idle-session-check-interval", "idle-session-timeout", "min-idle-session",
+        "client-metadata", "persistent-keepalive", "remote-dns-resolve",
+        "refresh-server-ip-interval", "amnezia-wg-option", "jc", "jmin", "jmax",
+        "s1", "s2", "h1", "h2", "h3", "h4", "ip", "ipv6",
+        // wireguard: sing-box's deprecated outbound has no `reserved`/`peers` shape
+        "reserved", "peers", "public-key", "pre-shared-key", "allowed-ips",
+        "mtu", "workers", "system-interface", "interface-name", "local-address",
+        "gso", "peer-public-key", "pre-shared-key",
     ] {
         ob.remove(k);
     }
@@ -373,7 +601,13 @@ pub fn singbox_outbound_from_clash(payload: &Value, name: &str) -> Value {
         ob.insert("transport".into(), t);
     }
 
-    Value::Object(ob)
+    // Protocols without a TLS concept in sing-box must not carry a `tls` object
+    // (sing-box rejects the unknown field).
+    if SINGBOX_NO_TLS.contains(&protocol.as_str()) {
+        ob.remove("tls");
+    }
+
+    Some(Value::Object(ob))
 }
 
 /// Convenience: name all selected nodes with the default template.
@@ -488,7 +722,7 @@ mod output_tests {
             "port": 443, "password": "hy2-pw", "sni": "hy2.example.com",
             "skip-cert-verify": true, "udp": true
         });
-        let sb = singbox_outbound_from_clash(&payload, "hy2-01");
+        let sb = singbox_outbound_from_clash(&payload, "hy2-01").expect("supported protocol");
         assert_eq!(sb["type"], "hysteria2");
         assert_eq!(sb["tag"], "hy2-01");
         assert_eq!(sb["server"], "hy2.example.com");
@@ -506,7 +740,7 @@ mod output_tests {
             "name": "t", "type": "tuic", "server": "t.example.com", "port": 443,
             "uuid": "uu", "password": "pw"
         });
-        let sb = singbox_outbound_from_clash(&tuic, "t");
+        let sb = singbox_outbound_from_clash(&tuic, "t").expect("supported protocol");
         assert_eq!(sb["uuid"], "uu");
         assert_eq!(sb["password"], "pw");
 
@@ -514,7 +748,7 @@ mod output_tests {
             "name": "s", "type": "ss", "server": "s.example.com", "port": 443,
             "cipher": "aes-256-gcm", "password": "sp"
         });
-        let sb = singbox_outbound_from_clash(&ss, "s");
+        let sb = singbox_outbound_from_clash(&ss, "s").expect("supported protocol");
         assert_eq!(sb["method"], "aes-256-gcm", "clash cipher -> sing-box method");
         assert_eq!(sb["password"], "sp");
         assert!(sb.get("cipher").is_none());
@@ -528,7 +762,7 @@ mod output_tests {
             "ws-opts": {"path": "/p", "headers": {"Host": "h.example.com"}},
             "reality-opts": {"public-key": "pk", "short-id": "sid"}
         });
-        let sb = singbox_outbound_from_clash(&payload, "v");
+        let sb = singbox_outbound_from_clash(&payload, "v").expect("supported protocol");
         assert_eq!(sb["transport"]["type"], "ws");
         assert_eq!(sb["transport"]["path"], "/p");
         assert_eq!(sb["transport"]["headers"]["Host"], "h.example.com");
@@ -547,10 +781,127 @@ mod output_tests {
             "uuid": "uu", "flow": "xtls-rprx-vision", "client-fingerprint": "ios",
             "reality-opts": {"public-key": "pk", "short-id": "sid"}
         });
-        let sb = singbox_outbound_from_clash(&payload, "r");
+        let sb = singbox_outbound_from_clash(&payload, "r").expect("supported protocol");
         assert_eq!(sb["tls"]["utls"]["enabled"], true);
         assert_eq!(sb["tls"]["utls"]["fingerprint"], "ios");
         assert_eq!(sb["flow"], "xtls-rprx-vision", "vision flow must survive");
         assert!(sb.get("client-fingerprint").is_none(), "clash key must be consumed");
+    }
+
+    /// Protocol gaps closed in S54 — every field below was found by validating
+    /// generated configs with the REAL sing-box v1.14.4 and mihomo v1.19.32
+    /// binaries on the school machine (not by reading field tables).
+    #[test]
+    fn singbox_maps_hysteria2_port_hopping_and_obfs() {
+        let payload = serde_json::json!({
+            "name": "hy", "type": "hysteria2", "server": "h.example.com", "port": 443,
+            "password": "pw", "sni": "h.example.com",
+            "ports": "60000-65530", "hop-interval": 30,
+            "up": "100 Mbps", "down": "200 Mbps",
+            "obfs": "salamander", "obfs-password": "obfs-pw"
+        });
+        let sb = singbox_outbound_from_clash(&payload, "hy").expect("hysteria2");
+        assert_eq!(
+            sb["server_ports"],
+            serde_json::json!(["60000:65530"]),
+            "mihomo '60000-65530' -> sing-box array with colon ranges"
+        );
+        assert_eq!(sb["hop_interval"], "30s", "mihomo seconds -> sing-box duration string");
+        assert_eq!(sb["up_mbps"], 100, "'100 Mbps' -> integer Mbps");
+        assert_eq!(sb["down_mbps"], 200);
+        assert_eq!(sb["obfs"]["type"], "salamander");
+        assert_eq!(sb["obfs"]["password"], "obfs-pw");
+    }
+
+    #[test]
+    fn singbox_maps_tuic_congestion_and_heartbeat() {
+        let payload = serde_json::json!({
+            "name": "t", "type": "tuic", "server": "t.example.com", "port": 443,
+            "uuid": "bf000d23-0752-40b4-affe-68f7707a9661", "password": "pw",
+            "congestion-controller": "cubic", "udp-relay-mode": "native",
+            "heartbeat-interval": 10000
+        });
+        let sb = singbox_outbound_from_clash(&payload, "t").expect("tuic");
+        assert_eq!(sb["congestion_control"], "cubic");
+        assert_eq!(sb["udp_relay_mode"], "native");
+        assert_eq!(sb["heartbeat"], "10000ms", "mihomo int ms -> sing-box duration");
+    }
+
+    #[test]
+    fn singbox_maps_shadowsocks_type_and_plugin_opts() {
+        let payload = serde_json::json!({
+            "name": "s", "type": "ss", "server": "s.example.com", "port": 8388,
+            "cipher": "aes-256-gcm", "password": "pw",
+            "plugin": "obfs", "plugin-opts": {"mode": "http", "host": "x.com"}
+        });
+        let sb = singbox_outbound_from_clash(&payload, "s").expect("ss");
+        assert_eq!(sb["type"], "shadowsocks", "sing-box has no 'ss' outbound type");
+        assert_eq!(sb["method"], "aes-256-gcm");
+        assert!(
+            sb["plugin_opts"].is_string(),
+            "sing-box plugin_opts is a string, mihomo's is a map"
+        );
+        assert!(sb["plugin_opts"].as_str().unwrap().contains("mode=http"));
+    }
+
+    #[test]
+    fn singbox_drops_tls_for_tls_less_protocols() {
+        for proto in ["shadowsocks", "snell", "socks5"] {
+            let payload = serde_json::json!({
+                "name": "x", "type": proto, "server": "x.example.com", "port": 1080,
+                "password": "pw", "sni": "x.example.com", "tls": true
+            });
+            let sb = singbox_outbound_from_clash(&payload, "x")
+                .unwrap_or_else(|| panic!("{proto} should be supported"));
+            assert!(
+                sb.get("tls").is_none(),
+                "{proto} has no tls block in sing-box — it would be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn singbox_skips_protocols_it_cannot_represent() {
+        // mieru / sudoku / ssr: not in sing-box at all.
+        // shadowtls: a TLS wrapper, not a standalone outbound.
+        // wireguard: the outbound was REMOVED in sing-box 1.13 (endpoint form only).
+        for proto in ["mieru", "sudoku", "ssr", "shadowtls", "wireguard"] {
+            let payload = serde_json::json!({
+                "name": "x", "type": proto, "server": "x.example.com", "port": 1080,
+                "password": "pw", "private-key": "k"
+            });
+            assert!(
+                singbox_outbound_from_clash(&payload, "x").is_none(),
+                "{proto} must be skipped for the sing-box target"
+            );
+            assert!(!singbox_supports(proto));
+        }
+        assert!(singbox_supports("vmess"));
+        assert!(singbox_supports("hysteria2"));
+    }
+
+    #[test]
+    fn singbox_maps_snell_obfs() {
+        let payload = serde_json::json!({
+            "name": "n", "type": "snell", "server": "n.example.com", "port": 443,
+            "psk": "psk", "version": 4, "obfs-opts": {"mode": "http", "host": "bing.com"}
+        });
+        let sb = singbox_outbound_from_clash(&payload, "n").expect("snell");
+        assert_eq!(sb["psk"], "psk");
+        assert_eq!(sb["version"], 4);
+        assert_eq!(sb["obfs_mode"], "http");
+        assert_eq!(sb["obfs_host"], "bing.com");
+    }
+
+    #[test]
+    fn singbox_maps_socks5_to_socks_with_version() {
+        let payload = serde_json::json!({
+            "name": "s", "type": "socks5", "server": "s.example.com", "port": 1080,
+            "username": "u", "password": "pw"
+        });
+        let sb = singbox_outbound_from_clash(&payload, "s").expect("socks5");
+        assert_eq!(sb["type"], "socks");
+        assert_eq!(sb["version"], "5");
+        assert_eq!(sb["username"], "u");
     }
 }

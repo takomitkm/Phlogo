@@ -42,10 +42,18 @@ fn cred_for(protocol: &str, obj: &Value) -> Option<Credential> {
     match protocol {
         // uuid
         "vmess" | "vless" => get_str(obj, "uuid").map(|s| Credential::Uuid(s.to_string())),
-        // password (trojan/anytls/hysteria/hysteria2/ss/ssr all use `password`)
-        "trojan" | "anytls" | "hysteria" | "hysteria2" => {
+        // trojan/anytls/hysteria2 use `password`; hysteria v1 in mihomo uses
+        // `auth-str` (or the legacy `auth`) — accepting both keeps v1 nodes alive
+        // instead of silently dropping them (upstream nodeAuth reads `password`,
+        // which is what sing-box calls it, so we normalise into Password).
+        "trojan" | "anytls" | "hysteria2" => {
             get_str(obj, "password").map(|s| Credential::Password(s.to_string()))
         }
+        "hysteria" => get_str(obj, "password")
+            .or_else(|| get_str(obj, "auth-str"))
+            .or_else(|| get_str(obj, "auth_str"))
+            .or_else(|| get_str(obj, "auth"))
+            .map(|s| Credential::Password(s.to_string())),
         // ss/ssr: upstream `nodeAuth` uses `password` ONLY — `cipher`/`method` is the
         // encryption algorithm (not a credential), so it must never feed the identity.
         "ss" | "shadowsocks" | "ssr" => {
