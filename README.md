@@ -90,17 +90,6 @@ cargo run -p worker     # 抓取/测活/清理闭环
 登录：`POST /api/v1/auth/login`（`ADMIN_PASSWORD`）→ JWT（24h）。完整接口见运行时的
 `/api-docs/openapi.json`，权限矩阵见 `apps/curse/src/auth.rs::auth_kind`。
 
-> [!NOTE]
-> **从旧版（`paily` 命名）升级**：本项目已整体改名——环境变量前缀 `PAILY_*`→`PHLOGO_*`、
-> 数据库/角色 `paily`→`phlogo`、队列库 `paily_jobs`→`phlogo_jobs`、compose 服务 `api`→`curse`。
-> 已部署环境按此对照修改 `.env` 与数据库：
-> ```sql
-> ALTER ROLE paily RENAME TO phlogo;
-> ALTER DATABASE paily RENAME TO phlogo;
-> ALTER DATABASE paily_jobs RENAME TO phlogo_jobs;
-> ```
-> **HTTP 路由前缀未变**（仍是 `/api/v1/...`、`/api-docs`），外部客户端无需改动。
-
 ## 仓库结构
 
 ```text

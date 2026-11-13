@@ -920,3 +920,19 @@ profile 创建 201 → token 签发 201（明文一次性）→ **用该 token �
 - **签名契约未动**：`golden_signature_matches_p0_02` 的期望值仍是 P0-02 用 Go 交叉验证过的字节级签名。
 - **无 `Content-Disposition`**：订阅下载文件名不由本服务控制，故品牌改名不改变客户端可见行为。
 - **DB schema 无品牌词**：迁移未引入/污染列名，仅库名/角色名改为 `phlogo`（内部标识符，与其他项目无互操作关系）。
+
+### S49b · `paily` 残留审计（改名完成度）
+
+全仓逐处扫描（脚本 `.tmp/paily-audit.py`）：**125 处，23 个文件，全部在 markdown 文档内；非 markdown 文件（代码/配置/契约/前端/迁移/脚本）零残留**。
+
+剩余的 125 处按性质分三类，**全部保留**：
+
+| 类别 | 数量 | 例子 | 保留理由 |
+| --- | --- | --- | --- |
+| **上游真实项目名** | ~90 | `openpaily/paily-core`、`paily-fetch`、`paily-check`、`openpaily/paily-fetch/format` | 真实存在的上游仓库/服务名（`openpaily/paily-core` 已 archived）；改成 phlogo 会变成**错误描述**，且链接失效 |
+| **改名历史记录** | ~30 | ACTION-LOG 的映射表「`paily`/`Paily`/`PAILY_*` → `phlogo`…」、S48 标题「paily→phlogo」 | 记录**改名前的原名**才能读懂；改了就失真 |
+| **磁盘上的真实文件名** | ~5 | `paily-core-rust-rebuild-plan.md` | 用户本地方案文件名（`S:\Downloads\`，2026-11-09 修改），文档按名引用它 |
+
+**唯一清理**：README 的「从旧版（`paily` 命名）升级」说明段——用户裁定「彻底改名、不管兼容」，故删除（保留它反而暗示需要迁移路径）。
+
+> 判定口径（供后续复查复用）：**引用上游真实名字 ≠ 改名遗漏**。凡 `paily` 指向一个真实存在的外部仓库/服务/文件名，就不是残留。
