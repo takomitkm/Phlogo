@@ -13,10 +13,20 @@
 | 指纹（去重身份） | `crates/domain::fingerprint` | `node_auth` 逐协议对齐上游 Go `nodeAuth`；`identity_hash` = SHA-256 前 16 字节 |
 | 发射（中间表示 → 目标格式） | `crates/distribution::output` | `mihomo_yaml`（Clash）/ `singbox_json`（sing-box）/ `base64_subs`；模板化（`format_configs`） |
 
-**为什么不用现成的**（P0-01 实测结论，见 `01-p0-upstream-verification/p0-01-vproxy.md`）：
-- **VProxy**：单 crate 应用（无 workspace 子 crate），无法轻依赖；且方案明令「不让上游类型渗透进 DB 层」→ 决定自研 adapter；
-- **上游 `paily-fetch/format`**：AGPL，仅作架构参考、不移植代码；
-- 因此走的是「**自研 parser + 自研 normalized model + 自研 producer**」路线。
+**为什么不用现成的**（分清「技术不可行」与「方案不允许」，别把两者混成一条）：
+
+| 上游 | 真正的障碍 | **不是**障碍 |
+| --- | --- | --- |
+| **VProxy** | **技术**：单 crate **二进制应用**，没有可 `cargo add` 的 lib target（P0-01 实测）。要复用只能 fork/vendor 整棵树 | 许可证：MIT，本身很宽松 |
+| **VProxy** | **架构**：方案 §3.1 / §7.2 明令**不让上游 `Node` 类型渗透进 DB 层**，否则上游破坏性变更会直接冲进我们的 schema/migration | — |
+| **上游 `paily-fetch/format`** | **方案纪律**：方案 §16 第 4 条、CONVENTIONS §4 明令「**仅架构参考、不复制代码**」——这是**干净重写**（clean-room）的决定，不是法律限制 | ⚠️ **不是许可证**：本项目自己就是 **AGPL-3.0**（`Cargo.toml: license = "AGPL-3.0"`、根 `LICENSE`），AGPL→AGPL **本就兼容**，法律上允许移植 |
+| **Sub-Store** | **运行时**：Node.js 项目，与「Rust 单体 + PostgreSQL only」的技术栈不重合（须旁挂进程/容器） | ⚠️ **不是许可证**：Sub-Store 也是 **AGPL-3.0**（README `## LICENSE`：*This project is under the AGPL-3.0 LICENSE*），与我们的许可一致 |
+
+> 早先本节写成「paily-fetch 是 AGPL 只作参考不移植」，把**许可证**当成了理由，**归因错了**：
+> 真正理由是方案里的 clean-room 纪律（且上游是 Go，数据模型本就不同），许可证反而是允许的。
+> 同理，本节曾用「Sub-Store 是外部服务」暗示许可问题——那也是错的，障碍纯粹是**多一个 Node 运行时**。
+
+- 因此走的是「**自研 parser + 自研 normalized model + 自研 producer**」路线（**技术栈单一**是第一诉求）。
 
 ## 2. 与 Sub-Store 的对比
 
@@ -253,4 +263,21 @@ sing-box 对未知 outbound 类型/未知字段是**整份配置拒绝启动**�
 `singbox_maps_shadowsocks_type_and_plugin_opts`、`singbox_drops_tls_for_tls_less_protocols`、
 `singbox_skips_protocols_it_cannot_represent`、`singbox_maps_snell_obfs`、`singbox_maps_socks5_to_socks_with_version`。
 
-校机 `cargo test --workspace`：**FULL_TEST_EXIT=0**（43 个测试二进制，distribution 35 个用例）、fmt 0、clippy 0。
+校机 `cargo test --workspace`：**FULL_TEST_EXIT=0**（43 个测试二进制，distribution 36 个用例）、fmt 0、clippy 0。
+
+## 6. 扩充目标格式的三条路（决策记录，未实施）
+
+用户提出「引入 Sub-Store 就能支持更多格式」。结论：**能，但要先决定用哪种形态**，
+且它不是唯一路线。当前我们只产出 3 种（mihomo / sing-box / Base64）。
+
+| 路线 | 拿到什么 | 代价 | 适用 |
+| --- | --- | --- | --- |
+| **A. 旁挂 Sub-Store / `sub-store-convert`** | 一次性拿到 Surge / QX / Loon / Stash / Shadowrocket / Surfboard / Egern / URI / V2Ray / JSON（~10 种） | 引入 **Node.js 运行时**（与我们「Rust 单体 + PG only」冲突），多一个进程/容器 + 一条失败链路；AGPL 分离进程不传染我们的代码，但**分发时仍须提供该组件的源码/许可**（本仓规则：进程隔离 ≠ 许可豁免） | 真需要 8+ 种格式时，**最省钱** |
+| **B. 自研更多 producer（Rust）** | 按需：Surge / QX / Loon 等本质是**行式文本**（`名称 = 协议, 服务器, 端口, 参数=值`），每种约数百行 | 逐个手写字段映射；**Surge/QX/Loon 在 Windows 上无法真机验收**，只能语法校验（拿不到 sing-box/mihomo 那种二进制级证据） | 只需再补 2–3 种时 |
+| **C. 移植 Sub-Store 的 producer 到 Rust** | 同等格式覆盖 | 是 JS→Rust 的**衍生作品**：我们同为 AGPL-3.0，**法律允许**（须保留署名）；但要连它的数据模型一起理解，工作量不小于 B | 不推荐，介于 A/B 之间无优势 |
+
+**推荐顺序**：先确认**需要哪些客户端**（这是唯一真正的决策输入）→ 只需 mihomo/sing-box/base64/URI 时**什么都不用引入**
+（base64 + URI 已覆盖 v2rayN/v2rayNG/Shadowrocket 的基础读取）→ 需 iOS 专有（Surge/QX/Loon/Stash）时在 A/B 之间选。
+
+> **门禁提醒**：格式扩充在链路末端。`apps/curse/src/handlers/subscription.rs` 目前仍输出占位
+> `xxx://node/{id}`，真实 payload 转换待 `node_payloads`（P1）落地。**在此之前加 producer 没有出口**。
