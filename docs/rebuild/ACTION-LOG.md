@@ -1057,11 +1057,15 @@ wireguard 多字段 / mihomo 1.19 的 ech-opts 与 x25519mlkem768）。
 **事实链（更正 S54 的表述）**：
 - issue #2416 于 2024-12-29T05:12Z 提在 **1.11.0-beta.17**，日志 `bad port range: 2080:3000`；
   作者断言「文档的冒号错了，应该改 dash」。
-- **真实原因是 beta 期代码落后于文档**（不是文档笔误）：解析在 sing-quic 里，当时还不认冒号。
-- 维护者同日 07:40Z 在 sing-quic 新增 `parsePorts`：`if !strings.Contains(portRange, ":") { return bad port range }`
-  ——**改的是代码（向冒号靠）**，提案的 dash 方向没被采纳；提案人随后自行关闭 issue。
-- 因此 S54 写的「该 issue 报告的是文档笔误但结论反了」**措辞不准确**，已在
-  `13-substore-compare-and-singbox-test.md` §5.3 更正为准确事实链。
+- **真实原因是 beta 期代码与文档不一致**（不是文档笔误）：解析在 sing-quic 里，当时要求 **dash**。
+  **直接证据**：beta.17 的 `go.mod` pin 的是 `sing-quic v0.4.0-beta.1`，该 tag 的 `parsePorts` 判定
+  `strings.Contains(portRange, "-")`（dash）——所以 beta.17 拿到 `"2080:3000"` 必然报 `bad port range`，
+  **提案人的现象观察是对的**。
+- 维护者同日 07:40Z 在 sing-quic 把该函数改成**冒号版**（`strings.Contains(portRange, ":")`）
+  ——**改的是代码（向冒号靠）**，提案里 dash 的修法方向没被采纳；提案人随后自行关闭 issue。
+- 因此 S54 写的「该 issue 报告的是文档笔误但结论反了」**措辞不准确**；准确说法是
+  **现象真实、修法相反**。已在 `13-substore-compare-and-singbox-test.md` §5.3 更正为完整事实链 +
+  两版 `parsePorts` 源码对照。
 - 真二进制 A/B（v1.14.4）：`["60000:65530"]` ✅、`["2080:3000"]` ✅、`["60000:"]` ✅（开口）；
   `["60000-65530"]` ❌、`["60000"]` ❌、`["...","443"]` ❌（`bad port range: 443`）。
 

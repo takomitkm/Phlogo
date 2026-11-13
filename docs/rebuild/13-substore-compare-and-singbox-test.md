@@ -188,17 +188,30 @@ hysteria v1 / anytls / tuic / wireguard / snell(+obfs) / socks5 / http。
   **sing-box 1.11.0-beta.17**）报的日志是 `FATAL initialize outbound[1]: bad port range: 2080:3000`，
   作者据此断言「文档的冒号写错了，应该改 dash」。
 - **真实原因是 beta 期的代码/文档不一致**：当时端口范围解析在 sing-box 的 `sing-quic` 依赖里，
-  还不接受冒号形式，而文档已经写成冒号。所以这**不是文档笔误**，是代码落后于文档。
+  代码要求 **dash**，而文档已经写成**冒号**。所以这**不是文档笔误**，是代码与文档不一致。
+  **直接证据**：beta.17 的 `go.mod` pin 的是 `github.com/sagernet/sing-quic v0.4.0-beta.1`，
+  该 tag 的 `hysteria2/client.go` 里：
+  ```go
+  func parsePorts(serverPorts []string) ([]uint16, error) {
+      for _, portRange := range serverPorts {
+          if !strings.Contains(portRange, "-") {        // <-- DASH
+              return nil, E.New("bad port range: ", portRange)
+          }
+          subIndex := strings.Index(portRange, "-")
+  ```
+  所以 beta.17 拿到 `"2080:3000"` 必然抛 `bad port range`——**提案人观察到的现象完全正确**。
 - 维护者 nekohasekai 在同日 07:40Z 提交
   [sing-quic 8e6a84e](https://github.com/SagerNet/sing-quic/commit/8e6a84e8211b040a976509381436c53f2eba508e)
-  *Add port hopping for hysteria2*，新增的 `parsePorts` **强制要求冒号**：
+  *Add port hopping for hysteria2*，把该函数**改成冒号版**：
   ```go
   if !strings.Contains(portRange, ":") {
       return nil, E.New("bad port range: ", portRange)
   }
   ```
   提案人随后自行关闭 issue，评论是「文档现在与代码一致，用的是冒号」。
-  ——即**改的是代码（向冒号靠），不是文档（向 dash 靠）**，提案里 dash 的建议没被采纳。
+  ——即**改的是代码（向冒号靠），不是文档（向 dash 靠）**，提案里 dash 的**修法建议**没被采纳。
+- **判定**：提案人的**现象观察正确**、**修法方向被反着做**。所以准确说法不是「issue 结论反了」，
+  而是「现象真实、修法相反」。
 - **当前（v1.14.4）仍是冒号**。我们用真二进制做了 A/B 复核：
 
   | `server_ports` | 二进制判定 |
