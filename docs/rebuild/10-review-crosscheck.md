@@ -161,6 +161,10 @@ expr-lang 表达式引擎 + SQLite/PostgreSQL 双支持 + OpenAPI spec-first（o
 ## 4. Accepted Changes 本轮接受的改动（P0）
 
 ### AC-1 权限矩阵 + 管理写收紧（P0-01）
+
+> **已收紧（2026-11-18）**：下表是 P0-01 当时的矩阵，含 `GET` 前缀通配（ServiceBearer 可读）。
+> 用户裁定「最小权限」后已改为**精确 Method + 完整路径白名单**，见 **§11**。下表仅作历史记录。
+
 - **矩阵**（代码化于 `auth.rs::auth_kind(method, path)`，segment 匹配 + **未匹配一律 AdminOnly（fail-closed）**）：
 
 | 路由（/api/v1 下） | 方法 | 权限 | 理由 |
@@ -353,7 +357,7 @@ ErrorResponse/分页/ConfigMap 类型化/请求校验/兼容策略/索引/历史
 （10/min 是全局额度）。已在部署文档给出三条不改代码的处置（调大阈值 / 边缘限流 / 换支持
 `proxy_protocol` 的代理），并写明 PROXY 头只在"API 端口不可直连"时可信任。
 
-### 10.3 错误冻结审计：发现并修正 6 处
+### 10.3 错误冻结审计：发现并修正 9 处
 
 | # | 位置 | 原冻结内容 | 实际 | 处置 |
 | --- | --- | --- | --- | --- |
@@ -385,3 +389,54 @@ ErrorResponse/分页/ConfigMap 类型化/请求校验/兼容策略/索引/历史
   - #9 测活历史保留 —— **有 A5 用户裁定**，属执行决定，合规；
   - #8 复合索引 —— **没有单独裁定**，随 `0010_config_wiring` 一起做了。属**范围外实施**（scope creep），
     虽无害且已在迁移注释里说明，但按「P1 不混入本轮」的口径应当先问。已在此登记，不再扩大。
+
+---
+
+## 11. 最小权限收紧（2026-11-18 用户裁定落地）
+
+### 11.1 裁定原文要点
+
+1. 默认所有管理 API 都是 **AdminOnly**。
+2. ServiceBearer 只允许**明确批准**的 HTTP Method + **完整路径**组合。
+3. 当前只保留 `POST /sources`、`POST /fetch/trigger`。
+4. 其余 GET、搜索、预览接口，**除非有经证实的服务消费者**，否则一律 AdminOnly。
+5. 路径匹配必须检查**完整段数**，不得使用宽泛 `_` 通配。
+6. 新增路由默认 AdminOnly，必须显式申请。
+
+### 11.2 矩阵差异（`apps/curse/src/auth.rs::auth_kind`）
+
+| 路由 | 收紧前 | 收紧后 |
+| --- | --- | --- |
+| `GET /sources`、`/sources/{id}`、`/sources/{id}/nodes` | AdminOrService | **AdminOnly** |
+| `GET /nodes`、`/nodes/{id}`、`/nodes/{id}/checks/*` | AdminOrService | **AdminOnly** |
+| `GET /stats`、`/checkers`、`/logs/{check,fetch}` | AdminOrService | **AdminOnly** |
+| `GET /config`、`/format-configs`、`/format-configs/{fmt}` | AdminOrService | **AdminOnly** |
+| `POST /sources/search`、`/nodes/search`、`/filter/preview` | AdminOrService | **AdminOnly** |
+| `POST /sources`（源 intake） | AdminOrService | **AdminOrService（保留）** |
+| `POST /fetch/trigger`（编排） | AdminOrService | **AdminOrService（保留）** |
+| 其余一切 | AdminOnly | AdminOnly |
+
+实现要点：
+
+- 匹配改为 `method` 精确 + **完整 segment 向量相等**（`segs == ["sources"]`），不再有 `_` 通配与前缀继承；
+  因此 `POST /sources/{id}/anything` 不会继承 `POST /sources` 的权限。
+- 删除 `require_admin_or_service`（整罩式弱检查，**无任何调用者**，留着只会被误用）。
+- 删除 `UuidLike`（旧矩阵靠它给 `GET /nodes/{id}` 做形状分流，现已不需要）。
+- **读不是无害的**：`SourceView.content` 含订阅 URL/原始内容；`GET /config` 返回整张 KV；
+  `GET /logs/*` 返回运行历史。这是本次收紧的直接理由。
+
+### 11.3 验收
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p curse` | **33 passed**（10 单元 + 5 auth_boundaries + 6 auth_matrix + 4 login_limit + 5 proxy_protocol + 3 search_endpoints） |
+| 新增 `tests/auth_boundaries.rs`（真实 TCP） | 401/403/404 边界、额外段不继承、AdminJWT 过中间件、合法服务动作过门禁 |
+| 新增 `tests/auth_matrix.rs`（矩阵形状） | 白名单**恰好两条**；全部 GET 与搜索/预览为 AdminOnly；前缀/方法技巧无法重回白名单 |
+| 真实 HTTP + **可销毁 jobs 库** | **14/14**：ServiceBearer 读 5 个敏感端点全 403；AdminJWT 读 3 个端点 200；`POST /sources` 201；`POST /fetch/trigger` 200 且 **577 条全部写进临时库**；**生产队列 1→1 未变**；临时库已 `dropdb` |
+| `cargo test --workspace -- --test-threads=1` | **0**（全绿） |
+| `cargo clippy -p curse --all-targets -- -D warnings` | **0** |
+| `cargo fmt` | 本轮 3 个文件 `rustfmt` 0；包内 `router.rs`/`main.rs`/`rate_limit.rs`/`login_limit.rs`/`proxy_protocol.rs` 存在**既有**漂移（本轮未改，未顺手格式化） |
+
+### 11.4 本轮不做
+
+通用 `/api/v1/*` 限流（仍只有 login）、M14 的 CI、以及任何 P1 项（ErrorResponse/分页/ETag/评分重算）。

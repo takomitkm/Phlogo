@@ -106,16 +106,19 @@ AST 形状（逻辑节点带 `operator: and|or|not`，叶子是条件对象）�
 
 ## API 与权限
 
-三层身份，按**路由权限矩阵**强制（代码：`apps/curse/src/auth.rs::auth_kind`；**fail-closed**——任何未列入矩阵的 `/api/v1` 路由一律要求 AdminJWT）：
+三层身份，按**路由权限矩阵**强制（代码：`apps/curse/src/auth.rs::auth_kind`；**fail-closed**——任何未列入白名单的 `/api/v1` 路由一律要求 AdminJWT）：
 
 | 身份 | 凭据 | 可访问范围 |
 | --- | --- | --- |
-| 终端用户 | 订阅 token（URL 内） | `GET /sub/{token}.{fmt}`；以及 `/health`、`/api-docs/openapi.json`。 |
-| 管理员（AdminJWT） | 登录签发的 access JWT（24h） | 全部管理 API（含所有写操作）。 |
-| 服务身份（ServiceBearer） | `service_secret` | **最小面**：全部 GET 读、`POST /api/v1/sources`（intake）、`POST /api/v1/fetch/trigger`。**管理写（PATCH/DELETE/PUT）返回 403**。 |
+| 终端用户 | 订阅 token（URL 内） | `GET /sub/{token}.{fmt}`；以及 `/health`、`/metrics`、`/api-docs/openapi.json`。 |
+| 管理员（AdminJWT） | 登录签发的 access JWT（24h） | 全部管理 API（所有读与写）。 |
+| 服务身份（ServiceBearer） | `service_secret` | **仅两个动作**：`POST /api/v1/sources`（源 intake）、`POST /api/v1/fetch/trigger`（编排触发）。**其余一律 403**。 |
 
+- **最小权限（2026-11-18 裁定）**：矩阵是**精确 Method + 完整路径白名单**，不用 `_` 通配、不继承前缀。
+  之前的「全部 GET 读」已撤销——读会暴露订阅内容（`SourceView.content`）、整张 `configs` KV 表与运行历史，
+  并非无害。新增路由默认 AdminOnly，必须显式申请并证明有真实服务调用者。
 - MiaoSpeed WebSocket 是 worker 内部调用，不经 HTTP 权限面。
 - 登录限流：按真实客户端 IP（PROXY protocol）分桶，默认 10 次/分钟，超限 429；`X-Forwarded-For` 永不信任。
-- 错误码语义：401 = 缺失/无效凭据；403 = 凭据有效但身份越权（ServiceBearer 打管理写）。
+- 错误码语义：401 = 缺失/无效凭据；403 = 凭据有效但身份越权（ServiceBearer 访问未授权路由）。
 
 完整接口定义见运行时 `GET /api-docs/openapi.json`（utoipa 源头生成，**26 条唯一路径 / 37 个操作**），源文件 `crates/api-contract/src/`。

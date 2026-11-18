@@ -36,3 +36,7 @@ observability = { path = "../../crates/observability" }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+# Needed by tests/auth_boundaries.rs to mint an admin JWT and build a fake body.
+serde.workspace = true
+serde_json.workspace = true
+jsonwebtoken.workspace = true

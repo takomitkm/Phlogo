@@ -1318,3 +1318,78 @@ P1 #9 历史保留有 A5 裁定，属合规执行。
 
 - 本轮**未改产品代码**，只改了两份文档（部署限制 + 交叉审查更正）。
 - 新增用例脚本在校机跑，产物 `auth_matrix_result.json` / `auth_matrix_run.log` 留在 `.tmp/`。
+
+---
+
+## [UTC 2026-11-18T15:20:00Z] S62 · P0 收尾：队列核查清理 + 最小权限收紧 + 可销毁库验收
+
+**用户裁定**：① S61 真实 HTTP 验收的 7 项**通过**；② 宽匹配前缀**现在就收紧**（默认 AdminOnly、
+ServiceBearer 仅完整 Method+路径白名单、只保 `POST /sources` + `POST /fetch/trigger`、完整段数匹配）；
+③ **先核查 `enqueued:562` 的去向再启动 Worker**，不得清空整个队列；④ §10.3「6 处」改「9 处」；
+⑤ 只做这三件，不开展其他 P1。
+
+### A. 562 个任务的去向（核查前**未启动 Worker**）
+
+在持久 ssh 会话里查 `phlogo_jobs`（PG 18.6，`apalis.jobs`）：
+
+| 发现 | 数量 | run_at |
+| --- | --- | --- |
+| `FetchJob` Pending | **562** | 2026-11-18 18:41:43（= 我们 `POST /fetch/trigger` 的那一批） |
+| `FetchJob` Done | **543** | 18:41:34 / 18:41:35 |
+| `FetchJob` Running | **18** | 18:41:35 |
+| `CheckJob` Done | 1 | 2026-11-11（**测试前就有**，保留） |
+
+**关键发现（比 562 更值得记）**：S61 脚本里为建 apalis 表而起的 **8 秒 worker warm-up**，
+其调度器 `tokio::time::interval` 的**首个 tick 立即触发**，对全部 active source 又入队了一批
+（约 561 条），并在 8 秒内**实际执行了 543 条**。所以「562」只是明面上的那一批，
+真实污染是 **1123 条队列记录 + 543 条抓取记录**。
+
+主库影响核查：
+
+- `source_fetch_runs`：18:41:35–18:41:42 新增 **543 条，全部 `failed`**（校机无出站）；
+- `sources`：`updated_at >= 18:41` 的 **0 条**（失败不判死，符合设计）；
+- `nodes`：`updated_at >= 18:41` 的 **0 条**，总数 473 未变（失败保留旧关联）。
+
+**清理（先落盘快照，再按精确时间窗删，未清空整队列）**：
+
+| 步骤 | 结果 |
+| --- | --- |
+| 快照 `jobs-s61-snapshot.csv` | 1123 行（id/job_type/status/run_at/attempts/lock_by） |
+| 快照 `fetch-runs-s61-snapshot.csv` | 543 行 |
+| `DELETE FROM apalis.jobs WHERE run_at >= '18:41:30+08' AND run_at < '18:45:00+08'` | **DELETE 1123** |
+| `DELETE FROM source_fetch_runs WHERE started_at >= '18:41:00+08' AND started_at < '18:45:00+08'` | **DELETE 543** |
+| 清理后 | `apalis.jobs` 仅剩 1 行（2026-11-11 CheckJob）；`source_fetch_runs` 435 行（历史） |
+
+### B. 最小权限收紧（`apps/curse/src/auth.rs`）
+
+矩阵由「前缀通配」改为**精确 Method + 完整 segment 向量**：
+
+- ServiceBearer 白名单**恰好两条**：`POST sources`、`POST fetch/trigger`；
+- 其余全部 `AdminOnly`（含所有 GET、`POST */search`、`POST /filter/preview`）；
+- `POST /sources/{id}/anything` 等**不会继承** `POST /sources`；
+- 删除 `require_admin_or_service`（整罩式弱检查，无调用者）与 `UuidLike`（旧形状分流）。
+- 矩阵差异表与理由（读会暴露 `SourceView.content` / 整张 config KV / 运行历史）见
+  `10-review-crosscheck.md` **§11**。
+
+### C. 验收
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p curse`（校机） | **33 passed**（含新 `auth_boundaries.rs` 5 项 + 重写 `auth_matrix.rs` 6 项） |
+| `cargo test --workspace -- --test-threads=1` | **EXIT 0** 全绿 |
+| `cargo clippy -p curse --all-targets -- -D warnings` | **0** |
+| `rustfmt --edition 2021`（本轮 3 文件） | **0**；包内另 5 个文件为**既有**漂移，未顺手格式化 |
+| 真实 HTTP + **可销毁 jobs 库**（14 项） | **14/14**：5 个敏感 GET 全 403；AdminJWT 3 个 GET 200；`POST /sources` 201；`POST /fetch/trigger` 200 且 **577 条全部进临时库**；**生产队列 1→1**；临时库 `dropdb` 后存在数 0 |
+
+可销毁库做法：`createdb phlogo_jobs_auth_matrix_tmp` → `pg_dump --schema-only --schema=apalis phlogo_jobs`
+导入 → curse 的 `PHLOGO_DATABASE_JOBS_DSN` 指向它 → 跑完 `dropdb --force`。
+`phlogo` 角色无 CREATEDB，临时库的建/删用集群超管 `postgres`（pg_hba 对 loopback 是 `trust`），
+**应用仍以 `phlogo` 运行**。
+
+### 口径与遗留
+
+- 本轮只改：`apps/curse/src/auth.rs`、`apps/curse/tests/{auth_matrix,auth_boundaries}.rs`、
+  `apps/curse/Cargo.toml`（dev-deps）、4 处文档；**未动任何 P1 项**。
+- `cargo test --workspace` 会在共享 dev 库留测试夹具（sources 561→576、dead 72→74），是**既有行为**；
+  本轮验收脚本自己创建的 `auth-matrix-*` 源已用 AdminJWT 删除（残留 0）。
+- 仍遗留：通用 `/api/v1/*` 限流只挂了 login；M14 CI 未写。

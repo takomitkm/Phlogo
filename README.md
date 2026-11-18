@@ -58,7 +58,7 @@ Phlogo Gnosis 是一个免费订阅项目：从互联网上的订阅源和节点
 - 分发：Clash/Sing-box/Base64 三格式、每格式模板可自定义（`format-configs`，写入时校验）、ETag 语义的档案版本失效。
 - 管理 API + Web 前端（Vben）：Dashboard / Sources / Nodes / Node Detail / Checks / Scoring / Subscriptions / **Sponsors** / 配置。
 - 可观测性：`/metrics`（Prometheus）、JSON 结构化日志 + 敏感字段 redaction。
-- 安全：三层身份（Public / AdminJWT / ServiceBearer）按**路由权限矩阵**强制（fail-closed，管理写仅 AdminJWT）、登录限流（IP 桶、PROXY protocol 真实 IP、不信任 XFF）、服务面最小化（仅 GET 读 + 源 intake + fetch trigger）。
+- 安全：三层身份（Public / AdminJWT / ServiceBearer）按**最小权限白名单**强制（fail-closed；ServiceBearer 仅 `POST /sources` 与 `POST /fetch/trigger`，其余一律 403）、登录限流（IP 桶、PROXY protocol 真实 IP、不信任 XFF）。
 
 ## 部署
 
