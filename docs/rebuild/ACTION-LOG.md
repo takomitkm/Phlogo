@@ -1255,3 +1255,66 @@ README 与 Rust Workspace 一致性提醒；随后裁定「把这些核查记录
   总账 **M1–M27 全部要做**（用户裁定）。
 - 门禁：可部署 = M1–M5 + M15；生产级 = M6–M14 + M18–M27。
 - 本节**只做记录与排期，未改代码**；VProxy「最小移植」与 sing-box 完整转换为已记录的决策分歧/计划外新增，不算未完成。
+
+---
+
+## [UTC 2026-11-18T10:45:00Z] S61 · 人工复核三项（权限隔离真 HTTP / 限流边界 / 错误冻结）
+
+**用户指令**：只查三处——① 权限隔离必须**真 HTTP 集成验收**（不信 `auth_kind` 单测；曾出现无凭据
+`GET /stats` 200 泄露统计）；② 登录限流的**部署边界**（反代后是否共用一个桶）写进部署文档；
+③ 交叉审查文档有没有**错误冻结**（已完成项是否有源码/测试证据、Rejected 是否真被取代、P1 是否偷跑）。
+并明确要求：不要让 Agent 自主扩大范围去实施 P1。
+
+### 执行的每一步
+
+| # | 动作 | 结果 |
+| --- | --- | --- |
+| 1 | `git status/fetch/rev-list` 同步体检 | 干净、与 origin 一致、HEAD `f9da308` |
+| 2 | 读 `auth.rs` / `router.rs` / `rate_limit.rs` / `proxy_protocol.rs` / `main.rs` | 确认矩阵实现、nest 装配、桶键来源（`ConnectInfo`，PROXY 优先） |
+| 3 | 校机体检 | Win11-HV1、cargo 1.99.1、PG 18.6 但**未运行** |
+| 4 | 启动 PG | 首次被 ssh 会话回收；改为「一次 ssh 内启库→跑测→停库」 |
+| 5 | 同步源码（先删远端 `apps/crates/migrations` 再 scp） | 形状正确，无嵌套 |
+| 6 | `cargo build -p curse` | 0（28.7s） |
+| 7 | `cargo build -p worker` | 首次缺 `gcc.exe`（`libsqlite3-sys`），补 `D:\yzd\MSYS2\mingw64\bin` 到 PATH 后 0 |
+| 8 | 校机跑 `.tmp/remote_auth_matrix.py`（raw socket，32 用例） | **30 项符合预期，2 项是脚本预期写错**（见下） |
+| 9 | PROXY 模式 4 用例 | 4/4 通过（无头被断 / 带头 200 / 10×200→429 / 换 IP 重新计数） |
+| 10 | 改 `deploy/README.md` | 新增「限流与反向代理的边界（部署前必读）」 |
+| 11 | 改 `10-review-crosscheck.md` | 修正 6 处错误冻结 + 新增 §10 人工复核记录 |
+
+### ① 权限隔离：真实 HTTP 结果（校机真二进制 + 真 PG）
+
+- 无凭据 `GET /api/v1/stats` → **401**（历史漏洞已修）；ServiceBearer/AdminJWT → 200，body 为真实统计。
+- ServiceBearer 打管理写：`DELETE /sources/{id}` / `PATCH /sources/{id}` / `PUT /config` /
+  `/subscriptions` / `/sponsors` → 全部 **403**（`service identity may not perform admin writes`）。
+- ServiceBearer `POST /fetch/trigger` → **200** `{"enqueued":562}`；无凭据 → 401。
+- AdminJWT `DELETE /sources/{id}` → **204**。
+- 未匹配路由 → **404**（无凭据与带 service 相同）；`auth_kind` 的 fail-closed 只对「已注册但未列入矩阵」生效。
+- 尾斜杠 `/stats/` → 404；`/api/v1/api/v1/stats`、`/../stats`、`/%2e%2e/stats` → 404。
+- `POST /stats` 无凭据 → **401**（鉴权先于方法解析）；带 service → 403；`HEAD /stats` → 401/403。
+- 两处「FAIL」是脚本预期错：`POST /stats` 原写 405、`DELETE` 原写 200——实际行为更严格/更符合 REST。
+
+### ② 限流边界（写入 `deploy/README.md`）
+
+代码事实：桶键 = `ConnectInfo<SocketAddr>`；PROXY 模式=头里的真实 IP，直连模式=TCP peer；**从不读 XFF**。
+残余限制：代理不支持 PROXY v1 时所有客户端共用一个桶（10/min 全局）；`EXPECT_PROXY=1` 则直接拒绝。
+文档给出三条不改代码的处置，并说明 PROXY 头只在「API 端口不可直连」时可信任。
+
+### ③ 错误冻结：修正 6 处 + P1 越界 1 项
+
+1. AC-2「caddy 反代下共用一个桶」→ 已被 S42 PROXY v1 取代；
+2. 「缺 `(node_id, checked_at)` 索引」→ `0010` 已建；
+3. 「测活历史只增不减」→ `check_run_history_days`(14) + `lifecycle/ops.rs` 清理；
+4. A5「该键无消费者」→ 已有消费者；
+5. B3「19/26 通过」→ 现 **25/26**（仅剩 `auth/refresh`）；
+6. 「mihomo check ❌」→ 转换映射层已用真二进制校验（S54），完整模板仍缺（M27）；
+7. 「19 路径」→ 实际 **26 条唯一路径 / 37 操作**（含 `README.md`、`configuration-and-api.md` 的「27 条路径」）；
+8. 「SQLx 0001–0009」→ 现 **0001–0011**。
+
+**P1 是否偷跑**：ErrorResponse/分页/ETag/请求 ID/filter 类型检查/评分重算/增量测活 **均未实施**（grep 零命中）；
+但 **P1 #8 复合索引** 随 `0010` 做了、**无单独裁定** → 记为**范围外实施**（无害，但应先问）；
+P1 #9 历史保留有 A5 裁定，属合规执行。
+
+### 口径
+
+- 本轮**未改产品代码**，只改了两份文档（部署限制 + 交叉审查更正）。
+- 新增用例脚本在校机跑，产物 `auth_matrix_result.json` / `auth_matrix_run.log` 留在 `.tmp/`。

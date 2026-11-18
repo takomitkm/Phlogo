@@ -118,4 +118,4 @@ AST 形状（逻辑节点带 `operator: and|or|not`，叶子是条件对象）�
 - 登录限流：按真实客户端 IP（PROXY protocol）分桶，默认 10 次/分钟，超限 429；`X-Forwarded-For` 永不信任。
 - 错误码语义：401 = 缺失/无效凭据；403 = 凭据有效但身份越权（ServiceBearer 打管理写）。
 
-完整接口定义见运行时 `GET /api-docs/openapi.json`（utoipa 源头生成，27 条路径），源文件 `crates/api-contract/src/`。
+完整接口定义见运行时 `GET /api-docs/openapi.json`（utoipa 源头生成，**26 条唯一路径 / 37 个操作**），源文件 `crates/api-contract/src/`。

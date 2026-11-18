@@ -19,7 +19,7 @@ Phlogo Gnosis 是一个免费订阅项目：从互联网上的订阅源和节点
 | `paily-fetch`（外部抓取服务） | **取消** — `apps/worker` 的 Fetch 闭环直读数据库（Apalis 队列驱动），并新增上游没有的 **SSRF 防护**（`crates/fetch`） |
 | `paily-check`（外部测活服务） | **取消** — worker 经 **MiaoSpeed WebSocket Adapter**（`crates/checker-miaospeed`）主动测活；协议认证签名与上游 Go 实现**逐字节一致**（golden 测试钉死） |
 | expr-lang 字符串表达式 | **类型化 Filter-AST JSON**（`crates/filter`）：字段/运算符双白名单、参数化 SQL、深度/数量限制 |
-| OpenAPI spec-first（oapi-codegen 生成） | **utoipa 为源头**：代码即契约，`GET /api-docs/openapi.json` 导出 27 条路径 |
+| OpenAPI spec-first（oapi-codegen 生成） | **utoipa 为源头**：代码即契约，`GET /api-docs/openapi.json` 导出 **26 条唯一路径 / 37 个操作** |
 
  Worker 与数据库直连；队列使用独立的 `phlogo_jobs` 数据库（Apalis 内嵌迁移与业务迁移隔离，方案 §3.1）。
 
