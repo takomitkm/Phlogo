@@ -1,10 +1,22 @@
-use curse::{proxy_protocol, router, telemetry};
 use app_config::Config;
+use curse::{proxy_protocol, router, telemetry};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cfg = Config::load(None).map_err(|e| anyhow::anyhow!("config load failed: {e}"))?;
     telemetry::init(if cfg.server.verbose { "debug" } else { "info" });
+
+    // M1: subscription rendering decrypts sealed node payloads. An invalid key is a
+    // hard error; an absent key falls back to an ephemeral one (payloads written by a
+    // previous process then become unreadable — subscriptions will say so explicitly).
+    match payload_crypto::init_from_env() {
+        Ok(true) => tracing::info!("payload key loaded from PHLOGO_PAYLOAD_KEY"),
+        Ok(false) => tracing::warn!(
+            "PHLOGO_PAYLOAD_KEY not set: using an ephemeral key; existing payloads will \
+             not decrypt"
+        ),
+        Err(e) => return Err(anyhow::anyhow!("PHLOGO_PAYLOAD_KEY invalid: {e}")),
+    }
 
     let addr = format!("0.0.0.0:{}", cfg.server.port);
     tracing::info!(%addr, "Phlogo Gnosis api starting");

@@ -30,6 +30,7 @@ Phlogo Gnosis的配置分为两层：
 | `auth.admin_password` / `PHLOGO_AUTH_ADMIN_PASSWORD` | 管理员密码（登录用）。 |
 | `auth.service_secret` / `PHLOGO_AUTH_SERVICE_SECRET` | 服务身份密钥（读面 + 源 intake + fetch trigger）。 |
 | `auth.jwt_secret` / `PHLOGO_AUTH_JWT_SECRET` | JWT HMAC 密钥。 |
+| `PHLOGO_PAYLOAD_KEY` | **节点载荷加密密钥**（32 字节，64 位 hex 或 base64）。worker 写、curse 读，**必须同一值**；缺失则用进程内临时密钥（重启后载荷不可解），格式非法则启动失败。见 [deploy/README](../deploy/README.md)。 |
 | `PHLOGO_LOGIN_RATE_LIMIT_PER_MIN` | 登录限流阈值（默认 10/min，按真实客户端 IP 分桶）。 |
 | `PHLOGO_TOKEN_PEPPER` | 订阅 token 哈希 pepper。 |
 

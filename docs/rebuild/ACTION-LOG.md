@@ -1435,3 +1435,57 @@ ServiceBearer 仅完整 Method+路径白名单、只保 `POST /sources` + `POST 
 - **M1c**：`render_subscription` 的 base64 分支是假链接，需先补「Clash → 真实 URI」构造器并用
   vproxy-adapter 反解析做往返校验。
 - 密钥轮换工具（`key_version` 已有，重封流程未做）；`sources.content` 里可能含凭据的订阅 URL 未评估。
+
+---
+
+## [UTC 2026-11-18T16:58:00Z] S64 · 部署文档补密钥 + M1b：`/sub` 真实渲染
+
+**用户指令**：「部署文档更新，接着做 m1b」。
+
+### A. 部署文档（`PHLOGO_PAYLOAD_KEY` 必填）
+
+| 文件 | 改动 |
+| --- | --- |
+| `deploy/.env.example` | 新增 `PAYLOAD_KEY=`，附生成命令（`openssl rand -hex 32`）与"换钥/丢钥会让旧载荷不可读"的警告 |
+| `deploy/compose.yaml` | `curse` 与 `worker` 都注入 `PHLOGO_PAYLOAD_KEY: ${PAYLOAD_KEY:?set PAYLOAD_KEY in .env}`（缺省即 compose 报错，不静默） |
+| `deploy/README.md` | 新增「载荷加密（M1）：`PAYLOAD_KEY` 必填」：四种情形（两端一致 / 任一端缺失 / 非法 / 不一致）、症状（`/sub` 503 `no usable node payloads`）、轮换临时办法 |
+| `docs/configuration-and-api.md` | 启动配置表新增 `PHLOGO_PAYLOAD_KEY` 行，指向部署文档 |
+| `README.md` | quickstart 的 `.env` 填写清单加上 `PAYLOAD_KEY` |
+
+编辑途中一次误删（`worker` 的 `depends_on` 与 `miaospeed:` 服务头）**当场发现并修回**，随后逐行核对 compose 结构。
+
+### B. M1b 实现
+
+`apps/curse/src/handlers/subscription.rs` 整体重写：
+
+1. token → hash（`PHLOGO_TOKEN_PEPPER`）→ profile（active + enabled）；
+2. 单查询取全部 `Linked` 节点 + 分数（每节点最大）+ 地区（最新 check 的 `metrics->>'region'`）
+   + 健康（`node_status` 跨 tag alive>degraded>dead）+ 密封载荷；
+3. 逐节点解密（AAD=节点 id），失败**跳过并计数**；全不可用 → 503 并提示检查密钥；
+4. `PipelineNode` → `render_subscription_with_sponsor`：**档案筛选真正生效**（M6 一并落地）；
+5. sponsor 改为一次查询（新增 `registry::sponsor::match_texts`，不再每节点重读 sponsors 表）；
+6. `yaml`/`json` 返回真实内容；`base64` → **501**（M1c 之前不发假链接）。
+
+`apps/curse/src/main.rs` 增加 `payload_crypto::init_from_env()`（非法键→启动失败）。
+
+### C. 验收（校机真 PG）
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p curse --test subscription_render` | **1 passed**（真实 TCP） |
+| 该用例断言 | `.yaml` 200 且含真实 `jp.example` + 密码；`.json` 200 且 outbound 含 `jp.example`；档案 AST 把 `us.example` 排除；`.base64` **501**；吊销 token **401**；结束清理夹具 |
+| `cargo test -p curse` | **34 passed**（10+5+6+4+5+3+1） |
+| `rustfmt --check`（3 文件） | clean |
+| `cargo clippy -p curse --all-targets -- -D warnings` | **0** |
+
+### 途中修正
+
+1. `identity_hash` 是 `varchar(64)`，`format!("{:x}", Uuid)` 实际按 Display 输出 36 字符 ×2 = 72 → 改
+   `Uuid::simple()`（32 字符）拼接。
+2. clippy `type_complexity`：profile 的 7 元组抽成 `type ProfileTuple`。
+
+### 遗留
+
+- **M1c**：base64 真实 URI（构造器 + vproxy-adapter 往返校验）。
+- `crates/registry/src/sponsor.rs` 有**既有** fmt 漂移（本轮只新增 `match_texts`，未顺手格式化整文件）。
+- `/sub` 响应仍无 Cache-Control（P1 项，凭据在响应体里，长期应禁止缓存）。

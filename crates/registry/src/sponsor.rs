@@ -150,3 +150,36 @@ async fn default_text(pool: &PgPool) -> String {
         .flatten()
         .unwrap_or_default()
 }
+
+/// Sponsor text for many nodes in one pass (loads the sponsors table once).
+///
+/// `match_text` re-reads every sponsor for every node, which is O(nodes) queries in a
+/// subscription render. This variant keeps the same semantics (ascending priority,
+/// later match wins, `default_sponsor_text` fallback) with a single query.
+pub async fn match_texts(
+    pool: &PgPool,
+    nodes: &[filter::NodeView],
+) -> Result<Vec<String>, sqlx::Error> {
+    let rows: Vec<Tuple> = sqlx::query_as(
+        "SELECT id, name, text, filter_ast, priority FROM sponsors ORDER BY priority ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    let fallback = default_text(pool).await;
+    Ok(nodes
+        .iter()
+        .map(|node| {
+            let mut matched = String::new();
+            for t in &rows {
+                if sponsor_matches(node, &t.3) == Some(true) {
+                    matched = t.2.clone();
+                }
+            }
+            if matched.is_empty() {
+                fallback.clone()
+            } else {
+                matched
+            }
+        })
+        .collect())
+}

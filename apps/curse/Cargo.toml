@@ -31,6 +31,7 @@ api-contract = { path = "../../crates/api-contract" }
 app-config = { path = "../../crates/config" }
 domain = { path = "../../crates/domain" }
 database = { path = "../../crates/database" }
+payload-crypto = { path = "../../crates/payload-crypto" }
 registry = { path = "../../crates/registry" }
 observability = { path = "../../crates/observability" }
 

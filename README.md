@@ -69,7 +69,7 @@ Phlogo Gnosis 是一个免费订阅项目：从互联网上的订阅源和节点
 
 ```bash
 cd deploy
-cp .env.example .env        # 填 POSTGRES_PASSWORD / SERVICE_SECRET / ADMIN_PASSWORD / JWT_SECRET
+cp .env.example .env        # 填 POSTGRES_PASSWORD / SERVICE_SECRET / ADMIN_PASSWORD / JWT_SECRET / PAYLOAD_KEY
 podman machine start        # 仅 Windows/macOS 需要
 podman compose -f compose.yaml up -d --no-build postgres curse worker caddy
 curl -s http://127.0.0.1:21380/health

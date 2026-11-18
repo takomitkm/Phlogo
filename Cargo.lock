@@ -487,6 +487,7 @@ dependencies = [
  "hyper-util",
  "jsonwebtoken",
  "observability",
+ "payload-crypto",
  "rand 0.8.8",
  "registry",
  "serde",

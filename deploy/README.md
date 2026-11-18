@@ -70,3 +70,19 @@ If you run the API **without** caddy (e.g. `cargo run` for local development), l
 
 > 当前只有 `POST /api/v1/auth/login` 挂了限流；其余 `/api/v1/*` 的通用限流尚未挂载
 > （登记于 `docs/rebuild/09-self-completed-gaps.md` §D）。
+
+## 载荷加密（M1）：`PAYLOAD_KEY` 必填
+
+节点载荷（含 password / uuid / psk / 私钥）以 **XChaCha20-Poly1305** 密封在 `node_payloads`，
+AAD 是节点 id。`PHLOGO_PAYLOAD_KEY` 是唯一密钥，**32 字节**，`openssl rand -hex 32` 生成即可
+（也接受 base64）；`compose.yaml` 把它同时注入 `curse` 与 `worker`。
+
+| 情形 | 结果 |
+| --- | --- |
+| 两端都配置同一把有效密钥 | ✅ 正常 |
+| 任一端**未配置** | 该进程用**临时密钥**：worker 写入的载荷 API 读不出 → `/sub` 返回 **503** `no usable node payloads`；重启后旧载荷同样不可读 |
+| 配置了但**格式非法** | 进程**启动失败**（明确报错，不会静默降级） |
+| 两端**密钥不同** | 同"未配置"：订阅取不到节点 |
+
+**轮换**：目前没有"旧密钥重封"工具（表里已有 `key_version`，工具待补）。轮换的临时办法是换密钥后
+逐个重抓源（`POST /api/v1/fetch/trigger`），让载荷用新密钥重写；在那之前旧载荷只是读不出来，不会被破坏。

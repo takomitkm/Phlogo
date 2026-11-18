@@ -1,0 +1,192 @@
+//! M1b acceptance: `/sub/{token}.{fmt}` renders REAL nodes from sealed payloads.
+//!
+//! Requires DATABASE_URL (same gate as the other DB integration tests). The payload key
+//! is the process-wide key, so seeding and rendering share it without any env setup.
+use std::net::SocketAddr;
+use std::time::Duration;
+
+use app_config::Config;
+use distribution::token::hash_token;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+async fn setup() -> Option<PgPool> {
+    let dsn = std::env::var("DATABASE_URL").ok()?;
+    let pool = database::connect(&dsn).await.expect("connect");
+    database::migrate(&pool).await.expect("migrate");
+    Some(pool)
+}
+
+async fn insert_node(pool: &PgPool, server: &str, secret: &str) {
+    let node_id = Uuid::new_v4();
+    // identity_hash is varchar(64): two 32-char simple uuids concatenated.
+    let hash_part = Uuid::new_v4().simple().to_string();
+    sqlx::query(
+        "INSERT INTO nodes (id,identity_hash,fingerprint_version,protocol,server,port,\
+         first_seen_at,last_seen_at,created_at,updated_at,membership,raw_config_reference) \
+         VALUES ($1,$2,1,'trojan',$3,443,now(),now(),now(),now(),'Linked','')",
+    )
+    .bind(node_id)
+    .bind(format!("{hash_part}{hash_part}"))
+    .bind(server)
+    .execute(pool)
+    .await
+    .expect("insert node");
+
+    let payload =
+        format!(r#"{{"type":"trojan","server":"{server}","port":443,"password":"{secret}"}}"#);
+    let sealed = payload_crypto::global()
+        .seal(
+            &payload_crypto::aad_for(&node_id.to_string()),
+            payload.as_bytes(),
+        )
+        .expect("seal");
+    sqlx::query(
+        "INSERT INTO node_payloads (node_id,key_version,nonce,ciphertext,updated_at) \
+         VALUES ($1,$2,$3,$4,now())",
+    )
+    .bind(node_id)
+    .bind(sealed.key_version)
+    .bind(sealed.nonce.to_vec())
+    .bind(sealed.ciphertext)
+    .execute(pool)
+    .await
+    .expect("insert payload");
+
+    sqlx::query(
+        "INSERT INTO node_scores (node_id,checker_tag,score,components,version,calculated_at) \
+         VALUES ($1,'default',0.95,'{}','ewma-v1',now())",
+    )
+    .bind(node_id)
+    .execute(pool)
+    .await
+    .expect("insert score");
+}
+
+async fn insert_profile_and_token(pool: &PgPool, filter_ast: &str) -> String {
+    let profile_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO subscription_profiles \
+         (id,name,filter_ast,region,health,min_score,limit_count,order_strategy,preset,\
+          output_format,naming_rule,enabled,version) \
+         VALUES ($1,'m1b-test',$2::jsonb,NULL,'alive',0,200,'score_desc','all','yaml',NULL,true,1)",
+    )
+    .bind(profile_id)
+    .bind(filter_ast)
+    .execute(pool)
+    .await
+    .expect("insert profile");
+
+    let token = format!("tok-{}", Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO subscription_tokens (id,profile_id,token_hash,status) \
+         VALUES ($1,$2,$3,'active')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(profile_id)
+    .bind(hash_token(&token, ""))
+    .execute(pool)
+    .await
+    .expect("insert token");
+    token
+}
+
+async fn spawn() -> SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = curse::router::build(Config::default());
+    tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await;
+    });
+    addr
+}
+
+async fn get(addr: SocketAddr, path: &str) -> (u16, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nconnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).await.unwrap();
+    stream.flush().await.unwrap();
+    let mut buf = vec![0u8; 262144];
+    let n = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut buf))
+        .await
+        .unwrap()
+        .unwrap_or(0);
+    let text = String::from_utf8_lossy(&buf[..n]).to_string();
+    let status = text
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let body = text
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default();
+    (status, body)
+}
+
+/// YAML and sing-box output must carry the real node, and the profile's AST must filter.
+#[tokio::test]
+async fn renders_real_nodes_and_applies_the_profile_filter() {
+    const SECRET: &str = "TOP-SECRET-PW";
+    let Some(pool) = setup().await else {
+        return;
+    };
+    insert_node(&pool, "jp.example", SECRET).await;
+    insert_node(&pool, "us.example", SECRET).await;
+    let ast = r#"{"operator":"and","conditions":[{"field":"server","operator":"eq","value":"jp.example"}]}"#;
+    let token = insert_profile_and_token(&pool, ast).await;
+
+    let addr = spawn().await;
+
+    let (status, yaml) = get(addr, &format!("/sub/{token}.yaml")).await;
+    assert_eq!(status, 200, "yaml: {yaml}");
+    assert!(yaml.contains("jp.example"), "real server missing: {yaml}");
+    assert!(yaml.contains(SECRET), "real credential missing: {yaml}");
+    assert!(
+        !yaml.contains("us.example"),
+        "profile AST not applied: {yaml}"
+    );
+
+    let (status, json) = get(addr, &format!("/sub/{token}.json")).await;
+    assert_eq!(status, 200, "json: {json}");
+    let v: serde_json::Value = serde_json::from_str(&json).expect("sing-box json");
+    let outbounds = v["outbounds"].as_array().expect("outbounds");
+    assert!(
+        outbounds.iter().any(|o| o["server"] == "jp.example"),
+        "sing-box outbound missing: {json}"
+    );
+    assert!(
+        !outbounds.iter().any(|o| o["server"] == "us.example"),
+        "profile AST not applied to json: {json}"
+    );
+
+    // base64 is intentionally refused until M1c provides real URIs.
+    let (status, body) = get(addr, &format!("/sub/{token}.base64")).await;
+    assert_eq!(status, 501, "base64 must be 501 until M1c: {body}");
+
+    // Revoked token -> 401.
+    sqlx::query(
+        "UPDATE subscription_tokens SET status='revoked', revoked_at=now() WHERE token_hash=$1",
+    )
+    .bind(hash_token(&token, ""))
+    .execute(&pool)
+    .await
+    .expect("revoke");
+    let (status, _) = get(addr, &format!("/sub/{token}.yaml")).await;
+    assert_eq!(status, 401, "revoked token must be rejected");
+
+    // Clean up the fixtures so they never leak into other subscriptions on the dev DB.
+    sqlx::query("DELETE FROM nodes WHERE server IN ('jp.example','us.example')")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM subscription_profiles WHERE name='m1b-test'")
+        .execute(&pool)
+        .await
+        .ok();
+}

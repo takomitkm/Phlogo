@@ -1,7 +1,7 @@
 # 15 M1 · 节点载荷加密落库（P1 第一片）
 
-> 状态：**M1a 完成**（存储加密 + 明文清理）；M1b（`/sub` 真实渲染）与 M1c（base64 真实 URI）未做。
-> 基线：`9ff1a7e`；本轮提交见 ACTION-LOG **S63**。
+> 状态：**M1a + M1b 完成**（存储加密、明文清理、`/sub` 真实渲染）；**M1c**（base64 真实 URI）未做。
+> 基线：`9ff1a7e`；本轮提交见 ACTION-LOG **S63**（M1a）与 **S64**（M1b）。
 > 依据：方案 §7 / §16.8（不记录节点原始凭据）+ 用户裁定 A2（`XChaCha20-Poly1305` + `PHLOGO_PAYLOAD_KEY`）。
 
 ## 1. 为什么做：这不是理论问题
@@ -53,20 +53,29 @@ UPDATE nodes SET raw_config_reference = '' WHERE raw_config_reference <> '';
 整个过程在同一事务连接内（reconcile 的原子性不变）。`global()` 是进程级密钥（worker 启动时由
 `init_from_env()` 安装），避免把密钥穿透 fetch → registry → database 四层。
 
-## 5. 读路径（**未做**，M1b）
+## 5. 读路径（M1b，已实现）
 
-`apps/curse/src/handlers/subscription.rs` 仍是占位实现（yaml 发 `placeholder.invalid`、json 发
-`direct`、base64 发 `xxx://node/{id}`）。M1b 要做的是：
+`apps/curse/src/handlers/subscription.rs` 现在走真实链路：
 
-- 读 `nodes`（Linked）+ `node_scores` + `node_payloads` → `open()` 解密 → 得到 Clash 载荷；
-- 组装 `distribution::PipelineNode`，交给**已存在**的纯函数
-  `distribution::subscription::render_subscription_with_sponsor`
-  （它会应用 `filter_ast`、`region`、`min_score`、`preset`、`limit_count`、命名模板与 sponsor）；
-- 三种格式分别返回真实内容。
+1. token → `hash_token(token, PHLOGO_TOKEN_PEPPER)` → `subscription_tokens`（active）+ `subscription_profiles`（enabled）
+   取 `filter_ast / region / health / min_score / limit_count / preset / naming_rule`；
+2. 一次查询取全部 `membership='Linked'` 节点：分数（`node_scores` 按 node 取最大）、地区
+   （最新 `node_check_results.metrics->>'region'`）、健康（`node_status` 跨 tag 合并 alive>degraded>dead）、
+   以及 `node_payloads` 的 `nonce/ciphertext`；
+3. 逐节点 `open()` 解密（AAD=节点 id）→ 解析成 Clash 载荷；缺失/解密失败**只跳过并计数**，
+   不影响其它节点；
+4. 组装 `distribution::PipelineNode` → 调用既有的纯函数
+   `render_subscription_with_sponsor`，因此 `filter_ast`、`region`、`min_score`、`preset`、
+   `limit_count`、`max_distribute`、命名模板与 sponsor 全部**真正生效**（M6 一并落地）；
+5. sponsor 文本改成**一次查询**（`registry::sponsor::match_texts`），不再每节点重读 sponsors 表；
+6. `yaml` → `mihomo_yaml`，`json` → `singbox_json`，`base64` → **501**（见下）。
 
-**注意**：该纯函数目前对 `base64` 分支生成的是假链接（`{proto}://cred@{id}:443`），
-所以 M1c 必须先补「Clash 载荷 → 真实 URI」的构造器，并用**我们自己的 vproxy-adapter 反解析**做往返校验；
-在那之前 base64 不应被当作可用格式。
+节点全不可用（例如密钥不匹配）时返回 **503** 并提示检查 `PHLOGO_PAYLOAD_KEY`；
+token 未知/吊销 → 401；`filter` 之后无节点 → 404；渲染错误 → 422。
+
+**base64 仍拒绝**：纯函数的 base64 分支会生成 `{proto}://cred@{id}:443` 这类假链接，
+在 M1c 补上「Clash → 真实 URI」构造器（并用 vproxy-adapter 反解析做往返校验）之前，
+返回 **501 Not Implemented** —— 发假链接比拒绝更糟。
 
 ## 6. 验证（校机真 PG）
 
@@ -79,17 +88,26 @@ UPDATE nodes SET raw_config_reference = '' WHERE raw_config_reference <> '';
 | 迁移实跑 | `_sqlx_migrations` 版本 **12 = node payloads, success=t** |
 | 明文清理 | `select count(*) from nodes where raw_config_reference <> ''` → **0** |
 | 加密行 | `node_payloads` 11 行（本轮测试节点） |
+| `cargo test -p curse`（M1b） | **34 passed**（含新增 `subscription_render.rs`） |
+| `subscription_render` 用例 | **1 passed**：种子两个节点（jp/us）+ 加密载荷 → `.yaml` **200 且含真实 `jp.example` 与密码**、`.json` 200 且 outbound 带 `jp.example`、档案 AST 过滤掉 `us.example`、`.base64` **501**、吊销 token **401**；结束时清理夹具 |
+| `rustfmt --check`（M1b 3 文件） | clean |
+| `cargo clippy -p curse --all-targets -- -D warnings` | **0** |
 
 依赖新增：`chacha20poly1305 0.10.1`（+ aead/cipher/poly1305 等 8 个 crate，`rsproxy` 拉取）。
 
 ## 7. 风险与遗留
 
-1. **临时密钥重启丢载荷**：生产必须设置 `PHLOGO_PAYLOAD_KEY`（否则订阅无节点）。部署文档需加此项。
-2. **轮换**：表里已有 `key_version`，但还没有「旧版本 key 列表 + 逐行重封」的工具；轮换前需要补。
-3. **M1b/M1c**：`/sub` 仍发占位内容；base64 仍是假链接（见 §5）。
+1. **临时密钥重启丢载荷**：生产必须设置 `PHLOGO_PAYLOAD_KEY`（否则 `/sub` 返回 503）。
+   已写入 `deploy/.env.example` / `deploy/README.md` / `docs/configuration-and-api.md`，compose 注入两端。
+2. **轮换**：表里已有 `key_version`，但还没有「旧版本 key 列表 + 逐行重封」的工具；
+   临时办法是换密钥后逐个源重抓，让载荷以新密钥重写。
+3. **M1c（唯一剩余渲染缺口）**：base64 仍 501；需要「Clash → 真实 URI」构造器 + 往返校验。
 4. **§16.8 的另一半**：日志侧已由 `RedactionLayer` 处理；但**订阅 URL 里的 token** 与
    `sources.content`（订阅源 URL 本身可能含凭据）仍按原样存库——不在本轮范围，登记待评估。
-5. **性能**：每个节点一次 AEAD（μs 级）+ 一次 upsert；抓取批量 500 节点量级无压力。
+5. **载荷渲染会把凭据写入响应**：这是订阅的**功能本质**（客户端要用它连网），因此
+   `/sub/{token}` 必须继续依赖 token 保密 + 可吊销；响应不得进缓存（Cache-Control 头仍是 P1 项）。
+6. **性能**：每请求解密全部 Linked 节点（473 量级，μs/节点）+ 一次 sponsor 查询；
+   `filter_ast`/`preset` 在内存里跑。数据量再大时再考虑按 profile 预筛 SQL。
 
 ## 8. CI 提示（不落地 YAML）
 
