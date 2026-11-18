@@ -9,6 +9,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 uuid.workspace = true
 sqlx.workspace = true
 anyhow.workspace = true
@@ -20,9 +21,14 @@ database = { path = "../../crates/database" }
 domain = { path = "../../crates/domain" }
 payload-crypto = { path = "../../crates/payload-crypto" }
 fetch = { path = "../../crates/fetch" }
+checker-miaospeed = { path = "../../crates/checker-miaospeed" }
+chrono = { version = "0.4", features = ["serde"] }
 registry = { path = "../../crates/registry" }
 vproxy-adapter = { path = "../../crates/vproxy-adapter" }
 lifecycle = { path = "../../crates/lifecycle" }
 
 [dev-dependencies]
 axum.workspace = true
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+serde_json.workspace = true

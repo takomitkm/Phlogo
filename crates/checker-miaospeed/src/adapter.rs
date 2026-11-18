@@ -57,6 +57,10 @@ impl MiaoSpeedAdapter {
                 Message::Text(t) => {
                     let v: Value = serde_json::from_str(&t)
                         .map_err(|e| CheckerError::Protocol(e.to_string()))?;
+                    // Diagnostics for live debugging; never logs the auth token.
+                    if std::env::var("PHLOGO_DEBUG_FRAMES").is_ok() {
+                        eprintln!("frame: {}", &t[..t.len().min(4000)]);
+                    }
                     if let Some(err) = v["Error"].as_str() {
                         if !err.is_empty() {
                             return Err(CheckerError::Auth(err.to_string()));
@@ -93,6 +97,32 @@ impl MiaoSpeedAdapter {
         })
     }
 
+    /// Build the wire node list.
+    ///
+    /// With vendor `Clash` MiaoSpeed reports results keyed by the **name inside the
+    /// payload** (mihomo proxy name), not by `Nodes[].Name` — verified against the real
+    /// 4.7.9 server on 2026-11-19, where a payload without `name` came back with an
+    /// empty `ProxyInfo`. So the vendor id is injected into the payload before sending.
+    fn wire_nodes(&self, nodes: &[crate::types::VendorNode]) -> Vec<Value> {
+        nodes
+            .iter()
+            .map(|n| {
+                let payload = match &n.payload {
+                    Value::Object(map) => {
+                        let mut m = map.clone();
+                        m.insert("name".into(), json!(n.vendor_id));
+                        // The wire schema wants the payload as a STRING (the server
+                        // echoes it back); sending an object serializes to "".
+                        Value::Object(m).to_string()
+                    }
+                    Value::Null => String::new(),
+                    other => other.to_string(),
+                };
+                json!({"Name": n.vendor_id, "Payload": payload})
+            })
+            .collect()
+    }
+
     fn map_results(&self, frames: &[Value]) -> Vec<CheckResult> {
         let map = self.id_map.lock().expect("id_map poisoned");
         let mut results = Vec::new();
@@ -105,10 +135,15 @@ impl MiaoSpeedAdapter {
                 let Some(internal) = map.get(name) else {
                     continue; // unknown vendor id (p3-03 handles late/dupes)
                 };
-                let latency = entry["InvokeDuration"].as_i64().unwrap_or(-1) as i32;
+                // Phlogo convention: -1 = dead. The real server reports 0 when it
+                // could not even build/connect the proxy (verified against 4.7.9).
+                let raw = entry["InvokeDuration"].as_i64().unwrap_or(0);
+                let latency = if raw <= 0 { -1 } else { raw as i32 };
                 results.push(CheckResult {
                     internal_node_id: *internal,
-                    initial: InitialResult { latency_ms: latency },
+                    initial: InitialResult {
+                        latency_ms: latency,
+                    },
                     deep: None,
                 });
             }
@@ -120,14 +155,7 @@ impl MiaoSpeedAdapter {
 impl Checker for MiaoSpeedAdapter {
     async fn submit(&self, job: SubmitRequest) -> Result<CheckJobId, CheckerError> {
         let task_id = Uuid::new_v4().to_string();
-        let nodes: Vec<Value> = job
-            .nodes
-            .iter()
-            .map(|n| {
-                json!({"Name": n.vendor_id,
-                        "Payload": if n.payload.is_null() { Value::String(String::new()) } else { Value::String(n.payload.to_string()) }})
-            })
-            .collect();
+        let nodes = self.wire_nodes(&job.nodes);
         {
             let mut map = self.id_map.lock().expect("id_map poisoned");
             map.clear();
@@ -157,6 +185,29 @@ impl Checker for MiaoSpeedAdapter {
             Err(CheckerError::Auth(e)) => Err(CheckerError::Auth(e)),
             Err(_) => Ok(CheckerStatus { online: false }),
         }
+    }
+}
+
+impl MiaoSpeedAdapter {
+    /// Run one task to completion in a single roundtrip and return mapped results (M2).
+    ///
+    /// `submit` + `collect` cannot drive a real server: MiaoSpeed reports progress and
+    /// the terminal `Result` on the SAME request socket, so a second request carrying
+    /// the same task id has no results to replay. This keeps one roundtrip and maps the
+    /// terminal frame directly.
+    pub async fn check(&self, job: &SubmitRequest) -> Result<Vec<CheckResult>, CheckerError> {
+        let task_id = Uuid::new_v4().to_string();
+        let nodes = self.wire_nodes(&job.nodes);
+        {
+            let mut map = self.id_map.lock().expect("id_map poisoned");
+            map.clear();
+            for n in &job.nodes {
+                map.insert(n.vendor_id.clone(), n.internal_node_id);
+            }
+        }
+        let req = self.new_request(&task_id, &job.presets, &nodes);
+        let frames = self.roundtrip(&req, &job.vendor).await?;
+        Ok(self.map_results(&frames))
     }
 }
 

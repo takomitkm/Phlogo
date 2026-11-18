@@ -1536,3 +1536,45 @@ ServiceBearer 仅完整 Method+路径白名单、只保 `POST /sources` + `POST 
   （yaml/json 仍包含）。
 - `vproxy-adapter` 缺 URI 解析（采集缺口，登记）。
 - 下一步：**M2**（CheckJob 接 MiaoSpeed 真测 + 结果落库）。
+
+---
+
+## [UTC 2026-11-18T18:08:00Z] S66 · M2：CheckJob 接 MiaoSpeed 真测（mock + 真机）
+
+**用户裁定**：配置键用 `PHLOGO_CHECKER_WS_URL / PHLOGO_CHECKER_SECRET`；范围含**真 MiaoSpeed 跑通**。
+
+### 实现
+
+- `MiaoSpeedAdapter::check()`：一次 roundtrip 到终态并映射（`submit`+`collect` 在真机上不成立）。
+- `run_check_once()`（worker）：记录 run → 端点配置 → 节点 + **解密载荷** → `check()` →
+  `persist_check_run` → `upsert_node_status` → 终态；失败路径统一 `failed`。
+- `check_runs` 词表统一为 **`success`**（原 `finish_check_run` 写的 `finished` 与 p3-04 冲突）。
+
+### 真机暴露的三条事实（mock 测不出，全部已修）
+
+1. `Payload` 必须是**字符串**：传 JSON 对象时服务端回显 `"Payload":""`。
+2. 结果按 **payload 的 `name`** 映射，`Nodes[].Name` 被忽略；缺 `name` → `ProxyInfo` 全空。
+3. `InvokeDuration = 0` = 连接没建立 → 统一记 `-1`。
+
+### 验收
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p worker --test check_wiring` | **2 passed**（落库 + unknown 节点 + 不存在的 id 过滤 + 重复投递幂等；无端点 → failed） |
+| `cargo test -p worker` | **4 passed** |
+| 真 MiaoSpeed 4.7.9（`C:\Users\YiZhidi\p0-02\miaospeed.exe`） | `live_check` 退出 **0**：`ProxyInfo.Name=phlogo-live-0 / Address=127.0.0.1:1 / Type=Trojan / InvokeDuration=1` **映射回内部节点 id** |
+| fmt / clippy | clean / **0** |
+
+### 途中修正
+
+- `node_check_results.node_id` 外键 → unreported 先与 `nodes` 取交集。
+- `identity_hash` varchar(64) 与 `"{:x}"` 的 Display 坑（同 S64）。
+- 两个测试共用进程环境变量 → `tokio::sync::Mutex`（`std::Mutex` 会被 clippy 判 `await_holding_lock`）。
+- `rustfmt --check apps/worker/src/lib.rs` 会**递归检查整个 crate**，牵出 `fetch_job.rs` 的既有漂移 → 只对具体文件跑。
+
+### 遗留
+
+- `InvokeDuration` 单位未归一化、deep 矩阵未映射（M4 接 p3-03 `normalize`）。
+- vmess 载荷被 mihomo 拒（缺 `alterId` 等）→ 载荷保真度问题，随 M4。
+- 谁生成 CheckJob（定时/手动/阈值）= **M3**。
+- `PHLOGO_DEBUG_FRAMES` 是调试开关，production 不要开。

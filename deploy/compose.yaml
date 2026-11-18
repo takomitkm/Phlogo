@@ -54,6 +54,8 @@ services:
       PHLOGO_DATABASE_JOBS_DSN: postgres://phlogo:${POSTGRES_PASSWORD}@postgres:5432/phlogo_jobs
       PHLOGO_AUTH_SERVICE_SECRET: ${SERVICE_SECRET:?set in .env}
       PHLOGO_PAYLOAD_KEY: ${PAYLOAD_KEY:?set PAYLOAD_KEY in .env}
+      PHLOGO_CHECKER_WS_URL: ${CHECKER_WS_URL:?set CHECKER_WS_URL in .env}
+      PHLOGO_CHECKER_SECRET: ${CHECKER_SECRET:-}
     depends_on: [postgres]
 
   miaospeed:

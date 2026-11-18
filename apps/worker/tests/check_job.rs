@@ -50,6 +50,6 @@ async fn no_duplicate_work() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(status, "finished");
+    assert_eq!(status, "success");
     assert_eq!(finishes, 1, "finish transition must be one-shot");
 }

@@ -47,6 +47,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 | **P1 · M1a** | 节点载荷加密落库 | `15-m1-payload-encryption.md` | 明文凭据（473 节点）→ **XChaCha20-Poly1305 + 节点 id 作 AAD**；`node_payloads` 表 + `0012` 迁移清空明文；**crypto 6/6、reconcile 7/7**；`/sub` 真实渲染（M1b）与 base64 真实 URI（M1c）未做 |
 | **P1 · M1b** | `/sub` 真实渲染 | `15-m1-payload-encryption.md` §5 | 解密载荷 → 既有纯函数渲染：`filter_ast`/region/min_score/preset/配额/命名/sponsor **全部生效**；yaml/json 出真实节点；`cargo test -p curse` **34 passed**（含 `subscription_render` 端到端） |
 | **P1 · M1c** | base64 真实 URI | `15-m1-payload-encryption.md` §5/§6 | 新增 `distribution::uri::uri_from_clash`（ss/vmess/vless/trojan/hysteria2/tuic/socks5/http）；不支持的协议**省略**而非发假链接；**真 mihomo 读 provider：52 节点 → 解析 52，类型 36 Vless + 16 Hysteria2 与源一致**；`distribution` 42 passed |
+| **P1 · M2** | CheckJob 接 MiaoSpeed | `16-m2-check-wiring.md` | `run_check_once`：解密载荷 → `adapter.check()` → 落库 + 节点状态；**真机暴露 3 条协议事实**（Payload 必须是字符串、结果按 payload `name` 映射、`InvokeDuration=0` 即 dead）；mock **2 passed**（含重复投递幂等），**真 MiaoSpeed 4.7.9 跑通** |
 
 ### 实施状态总览（2026-11-13 更新）
 
@@ -56,7 +57,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 > `/sub` 仍输出占位载荷（见 `09-self-completed-gaps.md` §D）。**M1–M27 全部要做**，分两道门禁：
 > 可部署门禁（M1–M5 + M15）/ 生产级门禁（M6–M14 + M18–M27）。
 > 上线总门禁是「抓取 → 真测活 → deep 落库 → 评分更新 → /sub 出真实节点 → mihomo -t 通过 → 真代理出网 204」。
-> **进度**：M1 ✅（M1a S63 加密落库 / M1b S64 真实渲染 / M1c S65 base64 真实 URI）；下一步 M2（测活接线）。
+> **进度**：M1 ✅（S63/S64/S65）；M2 ✅（S66，CheckJob 真测接线 + 真机验证）；下一步 M3（入队/调度）。
 > 关键决策与偏差均写入对应页面：
 
 - **P0**：VProxy 最小化移植（不作依赖）；MiaoSpeed 自建 `4.7.9`（sha256 记录）；Apalis `0.7.4` PG backend；Vben `v5.7.0`。
