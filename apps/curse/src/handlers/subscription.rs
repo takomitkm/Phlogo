@@ -5,9 +5,10 @@
 //! min-score / preset / quota / naming / sponsor via
 //! `distribution::subscription::render_subscription_with_sponsor`.
 //!
-//! `base64` is **not** served yet: the pure pipeline's base64 branch still fabricates
-//! links (`{proto}://cred@{id}:443`), and a real Clash->URI builder lands with M1c.
-//! Returning 501 is deliberate — serving fake links would be worse than refusing.
+//! `base64` renders real share links through `distribution::uri` (M1c). Protocols
+//! without a supported URI form are omitted from that format instead of being emitted
+//! as links that would not connect; if nothing is representable the request fails with
+//! 422 rather than returning an empty subscription.
 use std::collections::HashMap;
 
 use axum::{
@@ -191,12 +192,6 @@ pub async fn sub(State(st): State<AppState>, Path(spec): Path<String>) -> Respon
     if !matches!(fmt, "yaml" | "json" | "base64") {
         return err(StatusCode::NOT_FOUND, "unknown format");
     }
-    if fmt == "base64" {
-        return err(
-            StatusCode::NOT_IMPLEMENTED,
-            "base64 requires real URI rendering (M1c); use .yaml or .json",
-        );
-    }
 
     let pepper = std::env::var("PHLOGO_TOKEN_PEPPER").unwrap_or_default();
     let hash = distribution::token::hash_token(token, &pepper);
@@ -309,10 +304,12 @@ pub async fn sub(State(st): State<AppState>, Path(spec): Path<String>) -> Respon
             body,
         )
             .into_response(),
-        Ok(RenderedSubscription::Base64(_)) => err(
-            StatusCode::NOT_IMPLEMENTED,
-            "base64 requires real URI rendering (M1c)",
-        ),
+        Ok(RenderedSubscription::Base64(body)) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            body,
+        )
+            .into_response(),
         Err(msg) if msg.contains("no nodes matched") => err(StatusCode::NOT_FOUND, msg),
         Err(msg) => err(StatusCode::UNPROCESSABLE_ENTITY, msg),
     }

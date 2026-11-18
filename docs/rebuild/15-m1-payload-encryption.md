@@ -1,7 +1,7 @@
 # 15 M1 · 节点载荷加密落库（P1 第一片）
 
-> 状态：**M1a + M1b 完成**（存储加密、明文清理、`/sub` 真实渲染）；**M1c**（base64 真实 URI）未做。
-> 基线：`9ff1a7e`；本轮提交见 ACTION-LOG **S63**（M1a）与 **S64**（M1b）。
+> 状态：**M1a + M1b + M1c 完成**（存储加密、明文清理、`/sub` 真实渲染、base64 真实 URI）。
+> 基线：`9ff1a7e`；提交见 ACTION-LOG **S63**（M1a）、**S64**（M1b）、**S65**（M1c）。
 > 依据：方案 §7 / §16.8（不记录节点原始凭据）+ 用户裁定 A2（`XChaCha20-Poly1305` + `PHLOGO_PAYLOAD_KEY`）。
 
 ## 1. 为什么做：这不是理论问题
@@ -73,9 +73,13 @@ UPDATE nodes SET raw_config_reference = '' WHERE raw_config_reference <> '';
 节点全不可用（例如密钥不匹配）时返回 **503** 并提示检查 `PHLOGO_PAYLOAD_KEY`；
 token 未知/吊销 → 401；`filter` 之后无节点 → 404；渲染错误 → 422。
 
-**base64 仍拒绝**：纯函数的 base64 分支会生成 `{proto}://cred@{id}:443` 这类假链接，
-在 M1c 补上「Clash → 真实 URI」构造器（并用 vproxy-adapter 反解析做往返校验）之前，
-返回 **501 Not Implemented** —— 发假链接比拒绝更糟。
+**base64（M1c）**：`distribution::uri::uri_from_clash` 把 Clash 载荷转成真实分享链接
+（ss / vmess / vless / trojan / hysteria2 / tuic / socks5 / http），由纯函数拼成 base64 订阅。
+**不支持的协议（mieru / sudoku / ssr / shadowtls / wireguard、带 plugin 的 ss）会被省略**，
+而不是发一条连不上的链接；一条都转不出时返回 **422**（而不是空订阅）。
+
+> 一个必要的诚实说明：我们自己的 `vproxy-adapter` **不解析 URI**（只吃 Clash YAML / sing-box JSON），
+> 所以"用自家解析器做往返校验"这条路不通。改用**真 mihomo** 验证（见 §6）。
 
 ## 6. 验证（校机真 PG）
 
@@ -89,7 +93,9 @@ token 未知/吊销 → 401；`filter` 之后无节点 → 404；渲染错误 �
 | 明文清理 | `select count(*) from nodes where raw_config_reference <> ''` → **0** |
 | 加密行 | `node_payloads` 11 行（本轮测试节点） |
 | `cargo test -p curse`（M1b） | **34 passed**（含新增 `subscription_render.rs`） |
-| `subscription_render` 用例 | **1 passed**：种子两个节点（jp/us）+ 加密载荷 → `.yaml` **200 且含真实 `jp.example` 与密码**、`.json` 200 且 outbound 带 `jp.example`、档案 AST 过滤掉 `us.example`、`.base64` **501**、吊销 token **401**；结束时清理夹具 |
+| `subscription_render` 用例 | **1 passed**：种子两个节点（jp/us）+ 加密载荷 → `.yaml` **200 且含真实 `jp.example` 与密码**、`.json` 200 且 outbound 带 `jp.example`、档案 AST 过滤掉 `us.example`、`.base64` 200 且解码后是真实 `trojan://…`、吊销 token **401**；结束时清理夹具 |
+| `cargo test -p distribution`（M1c） | **42 passed**（含 6 个 URI 用例：ss SIP002 / vmess base64 JSON / vless 含 reality 字段 / trojan+hysteria2+tuic / 不支持协议返回 None / IPv6 方括号） |
+| **真 mihomo 验证**（校机） | 用 `examples/uri_export` 把**真实 52 节点订阅**转成 base64（links=52, skipped=0），本地 HTTP 供给 mihomo 的 `proxy-provider`：mihomo **解析出 52 个**代理，`{Vless:36, Hysteria2:16}` **与源类型分布完全一致** |
 | `rustfmt --check`（M1b 3 文件） | clean |
 | `cargo clippy -p curse --all-targets -- -D warnings` | **0** |
 
@@ -101,7 +107,11 @@ token 未知/吊销 → 401；`filter` 之后无节点 → 404；渲染错误 �
    已写入 `deploy/.env.example` / `deploy/README.md` / `docs/configuration-and-api.md`，compose 注入两端。
 2. **轮换**：表里已有 `key_version`，但还没有「旧版本 key 列表 + 逐行重封」的工具；
    临时办法是换密钥后逐个源重抓，让载荷以新密钥重写。
-3. **M1c（唯一剩余渲染缺口）**：base64 仍 501；需要「Clash → 真实 URI」构造器 + 往返校验。
+3. **M1c 的边界**：base64 只覆盖 8 种有明确 URI 形式的协议；mieru/sudoku/ssr/shadowtls/wireguard
+   与带 plugin 的 ss 会被省略（yaml/json 仍含它们）。若要覆盖，需要逐协议核对 URI 规范。
+4. **`vproxy-adapter` 不解析 URI**：这既是本次改用真 mihomo 验证的原因，也是一个独立的采集缺口——
+   以 base64 URI 列表形式分发订阅的源，目前 `parse_subscription` 会返回 `UnrecognizedFormat`。
+   已登记为待办（不在 M1 范围）。
 4. **§16.8 的另一半**：日志侧已由 `RedactionLayer` 处理；但**订阅 URL 里的 token** 与
    `sources.content`（订阅源 URL 本身可能含凭据）仍按原样存库——不在本轮范围，登记待评估。
 5. **载荷渲染会把凭据写入响应**：这是订阅的**功能本质**（客户端要用它连网），因此

@@ -17,3 +17,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 rand_chacha = "0.3"
+anyhow.workspace = true
+# Example `uri_export` parses a real subscription file through our own adapter.
+domain = { path = "../domain" }
+vproxy-adapter = { path = "../vproxy-adapter" }

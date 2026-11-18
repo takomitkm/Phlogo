@@ -1489,3 +1489,50 @@ ServiceBearer 仅完整 Method+路径白名单、只保 `POST /sources` + `POST 
 - **M1c**：base64 真实 URI（构造器 + vproxy-adapter 往返校验）。
 - `crates/registry/src/sponsor.rs` 有**既有** fmt 漂移（本轮只新增 `match_texts`，未顺手格式化整文件）。
 - `/sub` 响应仍无 Cache-Control（P1 项，凭据在响应体里，长期应禁止缓存）。
+
+---
+
+## [UTC 2026-11-18T17:10:00Z] S65 · M1c：base64 真实 URI + 真 mihomo 验证
+
+**用户指令**：「继续，然后没问题先推送再 m2」。
+
+### A. 实现
+
+- 新增 `crates/distribution/src/uri.rs::uri_from_clash`：把 Clash 载荷转真实分享链接
+  （ss SIP002 / vmess base64 JSON / vless 含 reality 与 ws / trojan / hysteria2 / tuic / socks5 / http）。
+- 纯函数 `subscription.rs` 的 base64 分支改用真实 URI；**不支持的协议省略**（不造假链接），
+  全不可转 → 422。
+- `apps/curse` 的 base64 分支从 **501** 改为正常返回 `text/plain`。
+- 新增 `crates/distribution/examples/uri_export.rs`：把**真实订阅文件**走同一条链路导出 base64，
+  供外部二进制验证。
+
+### B. 验证策略的修正（重要）
+
+原计划「用我们自己的 vproxy-adapter 反解析做往返校验」**行不通**：grep 证实 `vproxy-adapter`
+**没有 URI 解析**（只支持 Clash YAML / sing-box JSON 及其 base64）。这同时暴露一个独立采集缺口：
+以 base64 URI 列表分发的源目前会 `UnrecognizedFormat`（已登记，不在 M1 范围）。
+
+改为**真 mihomo 验证**：
+
+1. `cargo run -p distribution --example uri_export -- run2-sub-new.yaml` → `nodes=52 links=52 skipped=0`，17,924 B；
+2. 本地 `python -m http.server 18080` 提供为订阅 URL；
+3. mihomo（`D:\yzd\proxy\run2\mihomo-windows-amd64-v3.exe`）配 `proxy-provider type: http` 指向它；
+4. 首跑 **解析 0**——日志显示 `[TCP] mihomo --> 127.0.0.1:18080 match Match using G[COMPATIBLE]`：
+   连 provider 抓取也被规则 `MATCH,G` 送进了**空**代理组。加 `IP-CIDR,127.0.0.1/32,DIRECT,no-resolve` 后复跑；
+5. 结果：**mihomo 解析出 52 个代理，`{Vless: 36, Hysteria2: 16}`，与源完全一致**，`providers.phlogo` 无错误。
+
+### C. 门禁
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p distribution` | **42 passed**（含 6 个 URI 用例） |
+| `cargo test -p curse --test subscription_render` | **1 passed**（base64 断言改为：200 + 解码后含真实 `trojan://…jp.example:443` + 不含 `us.example`） |
+| `rustfmt --check`（3 文件） | clean（`distribution/src/subscription.rs` 测试模块的**既有**漂移未顺手格式化） |
+| `cargo clippy -p distribution -p curse --all-targets -- -D warnings` | **0** |
+
+### 遗留
+
+- URI 只覆盖 8 协议；mieru/sudoku/ssr/shadowtls/wireguard 与带 plugin 的 ss 在 base64 里被省略
+  （yaml/json 仍包含）。
+- `vproxy-adapter` 缺 URI 解析（采集缺口，登记）。
+- 下一步：**M2**（CheckJob 接 MiaoSpeed 真测 + 结果落库）。

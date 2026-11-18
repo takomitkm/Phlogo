@@ -165,9 +165,28 @@ async fn renders_real_nodes_and_applies_the_profile_filter() {
         "profile AST not applied to json: {json}"
     );
 
-    // base64 is intentionally refused until M1c provides real URIs.
+    // base64 now carries a real share link (M1c).
     let (status, body) = get(addr, &format!("/sub/{token}.base64")).await;
-    assert_eq!(status, 501, "base64 must be 501 until M1c: {body}");
+    assert_eq!(status, 200, "base64: {body}");
+    let decoded = {
+        use base64::Engine;
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(body.trim())
+            .expect("base64 body");
+        String::from_utf8(raw).expect("utf8")
+    };
+    assert!(
+        decoded.contains("trojan://") && decoded.contains("jp.example:443"),
+        "real URI missing: {decoded}"
+    );
+    assert!(
+        !decoded.contains("us.example"),
+        "profile AST not applied: {decoded}"
+    );
+    assert!(
+        decoded.contains(SECRET),
+        "credential missing from URI: {decoded}"
+    );
 
     // Revoked token -> 401.
     sqlx::query(

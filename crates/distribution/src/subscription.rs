@@ -160,19 +160,15 @@ pub fn render_subscription_with_sponsor(
             singbox_json(crate::output::DEFAULT_SINGBOX_TEMPLATE, &outputs),
         )),
         "base64" => {
+            // Real share links (M1c). Protocols without a supported URI form are
+            // omitted rather than emitted as links that would not connect.
             let links: Vec<String> = outputs
                 .iter()
-                .map(|o| {
-                    format!(
-                        "{}://{}@{}:{}#{name}",
-                        o.selected.candidate.id.split('-').next().unwrap_or("trojan"),
-                        "cred",
-                        o.selected.candidate.id,
-                        443,
-                        name = o.name
-                    )
-                })
+                .filter_map(|o| crate::uri::uri_from_clash(&o.clash_proxy))
                 .collect();
+            if links.is_empty() {
+                return Err("no URI-representable nodes for base64".into());
+            }
             Ok(RenderedSubscription::Base64(base64_subs(&links)))
         }
         other => Err(format!("unknown format: {other}")),

@@ -356,6 +356,7 @@ pub mod naming;
 pub mod output;
 pub mod subscription;
 pub mod token;
+pub mod uri;
 
 #[cfg(test)]
 mod p5_tests;

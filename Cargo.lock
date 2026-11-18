@@ -568,7 +568,9 @@ dependencies = [
 name = "distribution"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "base64 0.22.1",
+ "domain",
  "filter",
  "hex",
  "rand 0.8.8",
@@ -578,6 +580,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "uuid",
+ "vproxy-adapter",
 ]
 
 [[package]]
