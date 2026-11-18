@@ -18,6 +18,7 @@ observability = { path = "../../crates/observability" }
 app-config = { path = "../../crates/config" }
 database = { path = "../../crates/database" }
 domain = { path = "../../crates/domain" }
+payload-crypto = { path = "../../crates/payload-crypto" }
 fetch = { path = "../../crates/fetch" }
 registry = { path = "../../crates/registry" }
 vproxy-adapter = { path = "../../crates/vproxy-adapter" }

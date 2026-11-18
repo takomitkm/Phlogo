@@ -18,3 +18,4 @@ thiserror.workspace = true
 [dev-dependencies]
 tokio.workspace = true
 chrono = "0.4"
+payload-crypto = { path = "../payload-crypto" }

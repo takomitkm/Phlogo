@@ -51,22 +51,24 @@ pub async fn fetch_policy_of(conn: &mut PgConnection, source_id: Uuid) -> sqlx::
 }
 
 /// Upsert a node by identity_hash; returns the node id.
+///
+/// The raw vendor payload carries credentials, so it is **never** written to `nodes`:
+/// the row stores an empty `raw_config_reference` and the payload is sealed into
+/// `node_payloads` (M1, XChaCha20-Poly1305 with the node id as AAD).
 pub async fn upsert_node_by_hash(
     conn: &mut PgConnection,
     identity_hash: &str,
     nn: &domain::NormalizedNode,
 ) -> sqlx::Result<Uuid> {
-    let raw = nn.raw_config_reference.clone();
-    sqlx::query_scalar(
+    let id: Uuid = sqlx::query_scalar(
         r#"INSERT INTO nodes (id,identity_hash,fingerprint_version,protocol,server,port,first_seen_at,last_seen_at,created_at,updated_at,membership,raw_config_reference)
-           VALUES ($1,$2,$3,$4,$5,$6,now(),now(),now(),now(),'Linked',$7)
+           VALUES ($1,$2,$3,$4,$5,$6,now(),now(),now(),now(),'Linked','')
            ON CONFLICT (identity_hash) DO UPDATE SET
              last_seen_at = now(),
              protocol = EXCLUDED.protocol,
              server = EXCLUDED.server,
              port = EXCLUDED.port,
-             fingerprint_version = EXCLUDED.fingerprint_version,
-             raw_config_reference = EXCLUDED.raw_config_reference
+             fingerprint_version = EXCLUDED.fingerprint_version
            RETURNING id"#,
     )
     .bind(Uuid::new_v4())
@@ -75,9 +77,17 @@ pub async fn upsert_node_by_hash(
     .bind(&nn.protocol)
     .bind(&nn.server)
     .bind(i32::from(nn.port))
-    .bind(raw)
-    .fetch_one(conn)
-    .await
+    .fetch_one(&mut *conn)
+    .await?;
+
+    let sealed = payload_crypto::global()
+        .seal(
+            &payload_crypto::aad_for(&id.to_string()),
+            nn.raw_config_reference.as_bytes(),
+        )
+        .map_err(|e| sqlx::Error::Protocol(format!("payload seal: {e}")))?;
+    crate::payload_store::upsert_node_payload(conn, id, &sealed).await?;
+    Ok(id)
 }
 
 /// Idempotent node<->source link; refreshes last_seen_at.

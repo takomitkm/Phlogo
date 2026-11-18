@@ -4,6 +4,7 @@ members = [
     "apps/curse",
     "apps/worker",
     "crates/domain",
+    "crates/payload-crypto",
     "crates/database",
     "crates/registry",
     "crates/fetch",

@@ -14,6 +14,17 @@ async fn main() -> anyhow::Result<()> {
     observability::init("phlogo-gnosis-worker");
     let cfg = app_config::Config::load(None)?;
 
+    // M1: node payloads are sealed at rest. A configured key must be valid — an
+    // invalid `PHLOGO_PAYLOAD_KEY` is a hard error, never a silent ephemeral fallback.
+    match payload_crypto::init_from_env() {
+        Ok(true) => tracing::info!("payload key loaded from PHLOGO_PAYLOAD_KEY"),
+        Ok(false) => tracing::warn!(
+            "PHLOGO_PAYLOAD_KEY not set: using an ephemeral key; stored payloads will \
+             not be readable after a restart"
+        ),
+        Err(e) => return Err(anyhow::anyhow!("PHLOGO_PAYLOAD_KEY invalid: {e}")),
+    }
+
     let pool: PgPool = database::connect(&cfg.database.dsn).await?;
     database::migrate(&pool).await?;
 

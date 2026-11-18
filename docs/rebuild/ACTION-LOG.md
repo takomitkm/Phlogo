@@ -1393,3 +1393,45 @@ ServiceBearer 仅完整 Method+路径白名单、只保 `POST /sources` + `POST 
 - `cargo test --workspace` 会在共享 dev 库留测试夹具（sources 561→576、dead 72→74），是**既有行为**；
   本轮验收脚本自己创建的 `auth-matrix-*` 源已用 AdminJWT 删除（残留 0）。
 - 仍遗留：通用 `/api/v1/*` 限流只挂了 login；M14 CI 未写。
+
+---
+
+## [UTC 2026-11-18T15:55:00Z] S63 · P1 第一片：M1a 节点载荷加密落库
+
+**用户指令**：「继续」——按已定顺序进入 P1，先做 M1（真实载荷 + 凭据加密，堵 §16.8 明文凭据）。
+本轮只做**存储侧**（M1a），不动 `/sub` 渲染（M1b）与 base64 URI（M1c）。
+
+### 执行的每一步
+
+| # | 动作 | 结果 |
+| --- | --- | --- |
+| 1 | 查 `Cargo.lock` 与校机 registry 缓存 | `chacha20poly1305` 不在缓存；`rsproxy.cn` / `index.crates.io` 均 **200** 可达 |
+| 2 | 新建 `crates/payload-crypto`（XChaCha20-Poly1305；AAD=节点 id；hex/base64 密钥；`key_version`；手写 `Debug` 脱敏） | 6 单测 |
+| 3 | 迁移 `0012_node_payloads` | 建表 + **清空 `nodes.raw_config_reference` 明文**（不可逆，页内说明） |
+| 4 | `database::payload_store`（upsert/load） | 新增模块 |
+| 5 | `upsert_node_by_hash`：节点行只写 `''`，载荷 seal 后写 `node_payloads` | 同一事务连接内 |
+| 6 | worker 启动 `payload_crypto::init_from_env()` | 无键→临时键（warn）；**键非法→启动失败** |
+| 7 | registry 集成测试新增 `payload_is_sealed_and_bound_to_its_node` | 见下 |
+| 8 | 校机跑 gates（crypto 测试 / reconcile 测试 / rustfmt / workspace clippy） | 全绿 |
+| 9 | 校机实跑迁移并核对 | 版本 12 success=t；明文节点 **0**；`node_payloads` 11 行 |
+
+### 验收数字
+
+- `cargo test -p payload-crypto`：**6 passed**
+- `cargo test -p registry --test reconcile`：**7 passed**（新增项断言：`nodes` 侧为空、密文不含
+  `TOP-SECRET-PW`、AAD 换节点解密失败、可回读）
+- `rustfmt --check`（5 个文件）：clean；`cargo clippy --workspace --all-targets -- -D warnings`：**0**
+- 依赖：`chacha20poly1305 0.10.1` + 7 个传递 crate（rsproxy 拉取），`Cargo.lock` 已更新
+
+### 途中修正（记下来，免得重犯）
+
+1. ssh 多行命令**被前导空行吞掉**（脚本 `exit 0` 但什么都没跑）→ 改成**单行 `&&` 链**。
+2. `cargo test` 报 `PayloadKey` 无 `Debug`（`unwrap_err` 需要）→ **手写 `Debug` 输出 `<redacted>`**，不用 derive。
+3. `fetch_one(conn)` 把 `&mut PgConnection` move 掉 → 改 `fetch_one(&mut *conn)`。
+
+### 遗留
+
+- **M1b**：`/sub` 仍发占位内容（yaml `placeholder.invalid` / json `direct` / base64 `xxx://node/{id}`）。
+- **M1c**：`render_subscription` 的 base64 分支是假链接，需先补「Clash → 真实 URI」构造器并用
+  vproxy-adapter 反解析做往返校验。
+- 密钥轮换工具（`key_version` 已有，重封流程未做）；`sources.content` 里可能含凭据的订阅 URL 未评估。

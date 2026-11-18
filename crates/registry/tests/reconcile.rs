@@ -244,3 +244,77 @@ async fn dead_source_is_guarded() {
     let ids = mappings(&pool, a).await;
     assert_eq!(ids.len(), 1, "old mapping untouched, no revival");
 }
+
+/// M1: the vendor payload carries credentials, so it must be sealed at rest, bound to
+/// the node id, and never written to `nodes.raw_config_reference`.
+#[tokio::test]
+async fn payload_is_sealed_and_bound_to_its_node() {
+    const SECRET: &str = "TOP-SECRET-PW";
+    let Some(pool) = setup().await else {
+        return;
+    };
+    let source = new_source(&pool, "replace").await;
+    let mut n = node("payload.example");
+    n.raw_config_reference = format!(r#"{{"password":"{SECRET}","server":"payload.example"}}"#);
+    domain::stamp(&mut n);
+    reconcile_fetch_result(&pool, source, true, &[n], None)
+        .await
+        .unwrap();
+
+    let id: Uuid = sqlx::query_scalar("SELECT id FROM nodes WHERE server=$1")
+        .bind("payload.example")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let raw: String = sqlx::query_scalar("SELECT raw_config_reference FROM nodes WHERE id=$1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        raw.is_empty(),
+        "plaintext payload must never be stored on nodes"
+    );
+
+    let (kv, nonce, ct): (i32, Vec<u8>, Vec<u8>) =
+        sqlx::query_as("SELECT key_version,nonce,ciphertext FROM node_payloads WHERE node_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(kv, payload_crypto::KEY_VERSION);
+    assert_eq!(nonce.len(), payload_crypto::NONCE_LEN);
+    assert!(
+        !ct.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()),
+        "ciphertext must not contain the secret"
+    );
+
+    let opened = payload_crypto::global()
+        .open(&payload_crypto::aad_for(&id.to_string()), &nonce, &ct)
+        .expect("payload must open with the node id as AAD");
+    assert!(
+        String::from_utf8(opened).unwrap().contains(SECRET),
+        "payload must round-trip"
+    );
+
+    // Moving the ciphertext to another node id must fail (AAD binding).
+    let other = new_source(&pool, "replace").await;
+    let mut n2 = node("other.example");
+    n2.raw_config_reference = r#"{"password":"x"}"#.into();
+    domain::stamp(&mut n2);
+    reconcile_fetch_result(&pool, other, true, &[n2], None)
+        .await
+        .unwrap();
+    let id2: Uuid = sqlx::query_scalar("SELECT id FROM nodes WHERE server=$1")
+        .bind("other.example")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        payload_crypto::global()
+            .open(&payload_crypto::aad_for(&id2.to_string()), &nonce, &ct)
+            .is_err(),
+        "a payload sealed for one node must not open for another"
+    );
+}

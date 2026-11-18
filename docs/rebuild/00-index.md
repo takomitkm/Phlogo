@@ -44,6 +44,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 | **协议覆盖** | 最新 mihomo / sing-box 协议支持度审计 | `12-protocol-coverage-audit.md` | 校机真实订阅样本（mihomo v1.19.32，156 节点）实测 keep_rate **69.2% → 100%**；解析层补齐上游 `nodeAuth` 全 11 类协议；sing-box 发射层从硬编码简版改为全保真转换 |
 | **转换对比** | Sub-Store 对比 + sing-box v1.14.4 实测 | `13-substore-compare-and-singbox-test.md` | 我们用什么做转换（自研三段式，无外部依赖）；与 Sub-Store 的定位差异；**校机装 sing-box v1.14.4 实跑**：hysteria2 与 REALITY vless 经我们转换的配置**真实出网 204**；实测抓出并修复 REALITY 缺 uTLS 映射；**S54 缺口全补**：13 协议 × 双二进制校验（sing-box 12/12、mihomo 13/13 PASS） |
 | **格式扩充** | 引入 Sub-Store 转换旁挂服务（决策 A 落地） | `14-substore-sidecar.md` | 校机环境实测（无 Docker/Bun/npm、有 Node 22 + pnpm）；spike 确定**输入必须是 Clash YAML**（URI 列表 0 节点）；62 KB `data:` URL 塞不进 GET → 自写 POST 薄壳；**真实 52 节点 E2E 11/11 格式通过**；commit + SHA-256 固化；含可照抄进 CI 的部署门禁与后续施工图 |
+| **P1 · M1a** | 节点载荷加密落库 | `15-m1-payload-encryption.md` | 明文凭据（473 节点）→ **XChaCha20-Poly1305 + 节点 id 作 AAD**；`node_payloads` 表 + `0012` 迁移清空明文；**crypto 6/6、reconcile 7/7（含密文不含秘密、AAD 换节点失败）、clippy 0**；`/sub` 真实渲染（M1b）与 base64 真实 URI（M1c）未做 |
 
 ### 实施状态总览（2026-11-13 更新）
 
@@ -53,6 +54,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 > `/sub` 仍输出占位载荷（见 `09-self-completed-gaps.md` §D）。**M1–M27 全部要做**，分两道门禁：
 > 可部署门禁（M1–M5 + M15）/ 生产级门禁（M6–M14 + M18–M27）。
 > 上线总门禁是「抓取 → 真测活 → deep 落库 → 评分更新 → /sub 出真实节点 → mihomo -t 通过 → 真代理出网 204」。
+> **进度**：M1a ✅（S63，载荷加密落库）；M1b（`/sub` 真实渲染）、M1c（base64 真实 URI）待做。
 > 关键决策与偏差均写入对应页面：
 
 - **P0**：VProxy 最小化移植（不作依赖）；MiaoSpeed 自建 `4.7.9`（sha256 记录）；Apalis `0.7.4` PG backend；Vben `v5.7.0`。
