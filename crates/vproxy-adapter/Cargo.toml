@@ -12,3 +12,6 @@ serde_yaml = "0.9"
 base64 = "0.22"
 uuid.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+distribution = { path = "../distribution" }

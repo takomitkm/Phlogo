@@ -61,6 +61,17 @@ async fn insert_node(pool: &PgPool, server: &str, secret: &str) {
     .execute(pool)
     .await
     .expect("insert score");
+
+    // The profile's health bar gates on the node's ACTUAL health (node_status); seed
+    // one alive row so the seeded node passes the default 'alive' bar.
+    sqlx::query(
+        "INSERT INTO node_status (node_id,checker_tag,health,last_checked_at) \
+         VALUES ($1,'default','alive',now())",
+    )
+    .bind(node_id)
+    .execute(pool)
+    .await
+    .expect("insert status");
 }
 
 async fn insert_profile_and_token(pool: &PgPool, filter_ast: &str) -> String {
@@ -201,6 +212,81 @@ async fn renders_real_nodes_and_applies_the_profile_filter() {
 
     // Clean up the fixtures so they never leak into other subscriptions on the dev DB.
     sqlx::query("DELETE FROM nodes WHERE server IN ('jp.example','us.example')")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM subscription_profiles WHERE name='m1b-test'")
+        .execute(&pool)
+        .await
+        .ok();
+}
+
+/// A node whose health is below the profile bar must be excluded even though its
+/// payload, score and AST conditions all match.
+#[tokio::test]
+async fn profile_health_bar_excludes_unhealthy_nodes() {
+    let Some(pool) = setup().await else {
+        return;
+    };
+    insert_node(&pool, "healthy.example", "pw").await;
+    let dead_id = Uuid::new_v4();
+    let hash_part = Uuid::new_v4().simple().to_string();
+    sqlx::query(
+        "INSERT INTO nodes (id,identity_hash,fingerprint_version,protocol,server,port,\
+         first_seen_at,last_seen_at,created_at,updated_at,membership,raw_config_reference) \
+         VALUES ($1,$2,1,'trojan','dead.example',443,now(),now(),now(),now(),'Linked','')",
+    )
+    .bind(dead_id)
+    .bind(format!("{hash_part}{hash_part}"))
+    .execute(&pool)
+    .await
+    .expect("insert dead node");
+    let payload = r#"{"type":"trojan","server":"dead.example","port":443,"password":"pw"}"#;
+    let sealed = payload_crypto::global()
+        .seal(
+            &payload_crypto::aad_for(&dead_id.to_string()),
+            payload.as_bytes(),
+        )
+        .expect("seal");
+    sqlx::query(
+        "INSERT INTO node_payloads (node_id,key_version,nonce,ciphertext,updated_at) \
+         VALUES ($1,$2,$3,$4,now())",
+    )
+    .bind(dead_id)
+    .bind(sealed.key_version)
+    .bind(sealed.nonce.to_vec())
+    .bind(sealed.ciphertext)
+    .execute(&pool)
+    .await
+    .expect("insert payload");
+    sqlx::query(
+        "INSERT INTO node_scores (node_id,checker_tag,score,components,version,calculated_at) \
+         VALUES ($1,'default',0.95,'{}','ewma-v1',now())",
+    )
+    .bind(dead_id)
+    .execute(&pool)
+    .await
+    .expect("insert score");
+    sqlx::query(
+        "INSERT INTO node_status (node_id,checker_tag,health,last_checked_at) \
+         VALUES ($1,'default','dead',now())",
+    )
+    .bind(dead_id)
+    .execute(&pool)
+    .await
+    .expect("insert dead status");
+
+    let token = insert_profile_and_token(&pool, r#"{"operator":"and","conditions":[]}"#).await; // empty AST: only the bar filters
+    let addr = spawn().await;
+    let (status, yaml) = get(addr, &format!("/sub/{token}.yaml")).await;
+    assert_eq!(status, 200, "yaml: {yaml}");
+    assert!(yaml.contains("healthy.example"), "healthy node in: {yaml}");
+    assert!(
+        !yaml.contains("dead.example"),
+        "dead node must be excluded: {yaml}"
+    );
+
+    sqlx::query("DELETE FROM nodes WHERE server IN ('healthy.example','dead.example')")
         .execute(&pool)
         .await
         .ok();

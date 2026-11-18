@@ -29,6 +29,22 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, msg.into()).into_response()
 }
 
+/// Subscription responses carry node credentials and are addressed by a bearer-ish
+/// token in the URL, so NOTHING may cache them — success or failure, any format.
+fn no_store(mut resp: Response) -> Response {
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    resp
+}
+
+/// Same as `err` but for the subscription endpoint: every failure response is stamped
+/// `Cache-Control: no-store` too.
+fn err_store(status: StatusCode, msg: impl Into<String>) -> Response {
+    no_store(err(status, msg))
+}
+
 /// The profile columns the renderer needs.
 struct ProfileRow {
     filter_ast: String,
@@ -165,6 +181,7 @@ fn pipeline_node(node: &NodeRow, payload: &Value) -> PipelineNode {
         id: node.id.to_string(),
         region: node.region.clone(),
         score: node.score,
+        health: node.health.clone(),
         clash_proxy: payload.clone(),
         protocol: node.protocol.clone(),
         server: node.server.clone(),
@@ -186,11 +203,13 @@ fn pipeline_node(node: &NodeRow, payload: &Value) -> PipelineNode {
 }
 
 pub async fn sub(State(st): State<AppState>, Path(spec): Path<String>) -> Response {
+    // Every response of this endpoint is credential-bearing (or probes the token
+    // space), so success AND failure paths are stamped `Cache-Control: no-store`.
     let Some((token, fmt)) = spec.rsplit_once('.') else {
-        return err(StatusCode::NOT_FOUND, "expected /sub/{token}.{fmt}");
+        return err_store(StatusCode::NOT_FOUND, "expected /sub/{token}.{fmt}");
     };
     if !matches!(fmt, "yaml" | "json" | "base64") {
-        return err(StatusCode::NOT_FOUND, "unknown format");
+        return err_store(StatusCode::NOT_FOUND, "unknown format");
     }
 
     let pepper = std::env::var("PHLOGO_TOKEN_PEPPER").unwrap_or_default();
@@ -198,12 +217,12 @@ pub async fn sub(State(st): State<AppState>, Path(spec): Path<String>) -> Respon
 
     // Acceptance #3: unknown OR revoked tokens are rejected BEFORE any output.
     let Some(profile) = lookup_profile(st.pool(), &hash).await else {
-        return err(StatusCode::UNAUTHORIZED, "unknown or revoked token");
+        return err_store(StatusCode::UNAUTHORIZED, "unknown or revoked token");
     };
 
     let rows = match load_nodes(st.pool()).await {
         Ok(r) => r,
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("db error: {e}")),
+        Err(e) => return err_store(StatusCode::INTERNAL_SERVER_ERROR, format!("db error: {e}")),
     };
     let mut nodes = Vec::with_capacity(rows.len());
     let mut unreadable = 0usize;
@@ -214,7 +233,7 @@ pub async fn sub(State(st): State<AppState>, Path(spec): Path<String>) -> Respon
         }
     }
     if nodes.is_empty() {
-        return err(
+        return err_store(
             StatusCode::SERVICE_UNAVAILABLE,
             format!("no usable node payloads ({unreadable} unreadable) — check PHLOGO_PAYLOAD_KEY"),
         );
@@ -230,7 +249,7 @@ pub async fn sub(State(st): State<AppState>, Path(spec): Path<String>) -> Respon
 
     let thresholds = match crate::handlers::config::grade_thresholds(st.pool()).await {
         Ok(t) => t,
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("config: {e}")),
+        Err(e) => return err_store(StatusCode::INTERNAL_SERVER_ERROR, format!("config: {e}")),
     };
 
     // Sponsor text in ONE pass over the sponsors table (not one query per node).
@@ -292,25 +311,31 @@ pub async fn sub(State(st): State<AppState>, Path(spec): Path<String>) -> Respon
     );
 
     match rendered {
-        Ok(RenderedSubscription::Mihomo(body)) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/yaml; charset=utf-8")],
-            body,
-        )
-            .into_response(),
-        Ok(RenderedSubscription::Singbox(body)) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-            body,
-        )
-            .into_response(),
-        Ok(RenderedSubscription::Base64(body)) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-            body,
-        )
-            .into_response(),
-        Err(msg) if msg.contains("no nodes matched") => err(StatusCode::NOT_FOUND, msg),
-        Err(msg) => err(StatusCode::UNPROCESSABLE_ENTITY, msg),
+        Ok(RenderedSubscription::Mihomo(body)) => no_store(
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/yaml; charset=utf-8")],
+                body,
+            )
+                .into_response(),
+        ),
+        Ok(RenderedSubscription::Singbox(body)) => no_store(
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+                body,
+            )
+                .into_response(),
+        ),
+        Ok(RenderedSubscription::Base64(body)) => no_store(
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                body,
+            )
+                .into_response(),
+        ),
+        Err(msg) if msg.contains("no nodes matched") => no_store(err(StatusCode::NOT_FOUND, msg)),
+        Err(msg) => no_store(err(StatusCode::UNPROCESSABLE_ENTITY, msg)),
     }
 }

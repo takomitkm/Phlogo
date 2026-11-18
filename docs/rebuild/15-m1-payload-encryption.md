@@ -1,7 +1,8 @@
 # 15 M1 · 节点载荷加密落库（P1 第一片）
 
-> 状态：**M1a + M1b + M1c 完成**（存储加密、明文清理、`/sub` 真实渲染、base64 真实 URI）。
-> 基线：`9ff1a7e`；提交见 ACTION-LOG **S63**（M1a）、**S64**（M1b）、**S65**（M1c）。
+> 状态：**M1a + M1b + M1c 完成**，并已按 S64/S65 复审裁定完成**收尾修正**
+> （Cache-Control、health 过滤语义、URI 解析闭环）。基线：`9ff1a7e`；提交见 ACTION-LOG
+> **S63**（M1a）、**S64**（M1b）、**S65**（M1c）、**S67**（复审修正）。
 > 依据：方案 §7 / §16.8（不记录节点原始凭据）+ 用户裁定 A2（`XChaCha20-Poly1305` + `PHLOGO_PAYLOAD_KEY`）。
 
 ## 1. 为什么做：这不是理论问题
@@ -78,8 +79,25 @@ token 未知/吊销 → 401；`filter` 之后无节点 → 404；渲染错误 �
 **不支持的协议（mieru / sudoku / ssr / shadowtls / wireguard、带 plugin 的 ss）会被省略**，
 而不是发一条连不上的链接；一条都转不出时返回 **422**（而不是空订阅）。
 
-> 一个必要的诚实说明：我们自己的 `vproxy-adapter` **不解析 URI**（只吃 Clash YAML / sing-box JSON），
-> 所以"用自家解析器做往返校验"这条路不通。改用**真 mihomo** 验证（见 §6）。
+### 5.1 复审修正（S67）
+
+1. **`Cache-Control: no-store`**：`/sub` 所有响应（成功与失败）统一打上——订阅 URL 本身
+   携带访问凭据，响应体又含节点密码，不能依赖任何中间层的缓存默认值。
+2. **health 过滤语义修正（S64 复审发现，裁定确认属实）**：原来 `to_node_view(n, &profile.health)`
+   把**档案期望值**当成节点实际状态喂给 AST——`{"field":"health","eq":"alive"}` 会把 dead 节点
+   也放行。现在 `PipelineNode` 增加 `health` 字段（真实 `node_status` 合并值），AST 看实际状态；
+   `ProfileSpec.health` 改为**硬条件**（alive > degraded > dead > unknown，`""`/`"any"` 关闭），
+   与 region/min_score 同级。新增组合测试：distribution 4 种健康 × 3 种门槛 + curse 端到端
+   （dead 节点被 bar 排除）。
+3. **URI 解析闭环（M1c 复审要求）**：`vproxy-adapter` 新增 `uri` 模块——URI 单行列表解析 +
+   base64 包装识别（`parse_subscription` 在 YAML/JSON 之前先试 URI 列表，包装解码后同样识别）；
+   8 协议逐字段解析（凭据/TLS/Reality/transport/协议特定字段），**凭据缺失的行直接跳过**
+   （不造 ghost 节点），不支持协议返回 None。
+4. **往返验收（裁定要求，不许只数节点数）**：`builder_output_roundtrips_through_the_parser`
+   逐字段比对 protocol / server / port / **credential**；trojan/vless 单测再比对 TLS、SNI、
+   Reality pbk、flow、ws path/host；vmess 比对 alterId/cipher/ws-opts；hysteria2 比对
+   obfs/obfs-password/skip-cert-verify；tuic 比对 congestion/udp-relay-mode。
+   解析产物重建完整 Clash JSON 载荷（`raw_config_reference`），身份哈希与再渲染路径不受影响。
 
 ## 6. 验证（校机真 PG）
 
@@ -94,7 +112,9 @@ token 未知/吊销 → 401；`filter` 之后无节点 → 404；渲染错误 �
 | 加密行 | `node_payloads` 11 行（本轮测试节点） |
 | `cargo test -p curse`（M1b） | **34 passed**（含新增 `subscription_render.rs`） |
 | `subscription_render` 用例 | **1 passed**：种子两个节点（jp/us）+ 加密载荷 → `.yaml` **200 且含真实 `jp.example` 与密码**、`.json` 200 且 outbound 带 `jp.example`、档案 AST 过滤掉 `us.example`、`.base64` 200 且解码后是真实 `trojan://…`、吊销 token **401**；结束时清理夹具 |
-| `cargo test -p distribution`（M1c） | **42 passed**（含 6 个 URI 用例：ss SIP002 / vmess base64 JSON / vless 含 reality 字段 / trojan+hysteria2+tuic / 不支持协议返回 None / IPv6 方括号） |
+| `cargo test -p distribution`（M1c） | **43 passed**（6 个 URI 用例 + **health 组合测试**：bar 三档 + AST 看真实状态） |
+| `cargo test -p vproxy-adapter` | **16 passed**（新增 URI 解析 10 用例：逐协议字段、IPv6、malformed、URI 列表检测、**builder→parser 逐字段往返**） |
+| `cargo test -p curse` | **35 passed**（`subscription_render` 2 用例：真实渲染 + **dead 节点被健康门排除**） |
 | **真 mihomo 验证**（校机） | 用 `examples/uri_export` 把**真实 52 节点订阅**转成 base64（links=52, skipped=0），本地 HTTP 供给 mihomo 的 `proxy-provider`：mihomo **解析出 52 个**代理，`{Vless:36, Hysteria2:16}` **与源类型分布完全一致** |
 | `rustfmt --check`（M1b 3 文件） | clean |
 | `cargo clippy -p curse --all-targets -- -D warnings` | **0** |
@@ -105,17 +125,15 @@ token 未知/吊销 → 401；`filter` 之后无节点 → 404；渲染错误 �
 
 1. **临时密钥重启丢载荷**：生产必须设置 `PHLOGO_PAYLOAD_KEY`（否则 `/sub` 返回 503）。
    已写入 `deploy/.env.example` / `deploy/README.md` / `docs/configuration-and-api.md`，compose 注入两端。
-2. **轮换**：表里已有 `key_version`，但还没有「旧版本 key 列表 + 逐行重封」的工具；
-   临时办法是换密钥后逐个源重抓，让载荷以新密钥重写。
+2. **轮换**：表里已有 `key_version`，但解密路径**尚未按版本选钥**（当前只有一个版本，解密只认全局密钥）；
+   「旧版本 key 列表 + 逐行重封」的轮换工具仍是独立任务。临时办法是换密钥后逐个源重抓。
 3. **M1c 的边界**：base64 只覆盖 8 种有明确 URI 形式的协议；mieru/sudoku/ssr/shadowtls/wireguard
-   与带 plugin 的 ss 会被省略（yaml/json 仍含它们）。若要覆盖，需要逐协议核对 URI 规范。
-4. **`vproxy-adapter` 不解析 URI**：这既是本次改用真 mihomo 验证的原因，也是一个独立的采集缺口——
-   以 base64 URI 列表形式分发订阅的源，目前 `parse_subscription` 会返回 `UnrecognizedFormat`。
-   已登记为待办（不在 M1 范围）。
+   与带 plugin 的 ss 在 base64 中被省略（yaml/json 仍含它们）。**S67 闭环后 `vproxy-adapter`
+   已能解析这 8 种 URI**；ssr 等仍双向不支持，要覆盖需逐协议核对 URI 规范。
 4. **§16.8 的另一半**：日志侧已由 `RedactionLayer` 处理；但**订阅 URL 里的 token** 与
-   `sources.content`（订阅源 URL 本身可能含凭据）仍按原样存库——不在本轮范围，登记待评估。
+   `sources.content`（订阅源 URL 本身可能含凭据）仍按原样存库——登记待评估。
 5. **载荷渲染会把凭据写入响应**：这是订阅的**功能本质**（客户端要用它连网），因此
-   `/sub/{token}` 必须继续依赖 token 保密 + 可吊销；响应不得进缓存（Cache-Control 头仍是 P1 项）。
+   `/sub/{token}` 依赖 token 保密 + 可吊销；S67 起所有响应已带 `Cache-Control: no-store`。
 6. **性能**：每请求解密全部 Linked 节点（473 量级，μs/节点）+ 一次 sponsor 查询；
    `filter_ast`/`preset` 在内存里跑。数据量再大时再考虑按 profile 预筛 SQL。
 

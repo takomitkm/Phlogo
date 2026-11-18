@@ -48,6 +48,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 | **P1 · M1b** | `/sub` 真实渲染 | `15-m1-payload-encryption.md` §5 | 解密载荷 → 既有纯函数渲染：`filter_ast`/region/min_score/preset/配额/命名/sponsor **全部生效**；yaml/json 出真实节点；`cargo test -p curse` **34 passed**（含 `subscription_render` 端到端） |
 | **P1 · M1c** | base64 真实 URI | `15-m1-payload-encryption.md` §5/§6 | 新增 `distribution::uri::uri_from_clash`（ss/vmess/vless/trojan/hysteria2/tuic/socks5/http）；不支持的协议**省略**而非发假链接；**真 mihomo 读 provider：52 节点 → 解析 52，类型 36 Vless + 16 Hysteria2 与源一致**；`distribution` 42 passed |
 | **P1 · M2** | CheckJob 接 MiaoSpeed | `16-m2-check-wiring.md` | `run_check_once`：解密载荷 → `adapter.check()` → 落库 + 节点状态；**真机暴露 3 条协议事实**（Payload 必须是字符串、结果按 payload `name` 映射、`InvokeDuration=0` 即 dead）；mock **2 passed**（含重复投递幂等），**真 MiaoSpeed 4.7.9 跑通** |
+| **P1 · 复审修正** | S64/S65 复审裁定落地 | `15-m1-payload-encryption.md` §5.1 | ① `/sub` 全响应 **Cache-Control: no-store**；② **health 过滤修正**：AST 看节点真实状态（原把档案期望值当节点状态，dead 会漏过），`ProfileSpec.health` 明确为硬条件 alive>degraded>dead>unknown；③ **URI 解析闭环**：vproxy-adapter 新增 URI 列表解析（8 协议、凭据缺失跳过），**builder→parser 逐字段往返测试**；distribution 43 / adapter 16 / curse 35 passed |
 
 ### 实施状态总览（2026-11-13 更新）
 

@@ -1578,3 +1578,72 @@ ServiceBearer 仅完整 Method+路径白名单、只保 `POST /sources` + `POST 
 - vmess 载荷被 mihomo 拒（缺 `alterId` 等）→ 载荷保真度问题，随 M4。
 - 谁生成 CheckJob（定时/手动/阈值）= **M3**。
 - `PHLOGO_DEBUG_FRAMES` 是调试开关，production 不要开。
+
+---
+
+## [UTC 2026-11-18T21:30:00Z] S67 · 复审裁定落地：Cache-Control + health 语义修正 + URI 解析闭环
+
+**用户裁定**（对 `b2bd9fd`/`1063986` 源码复审后）：M1b 需收尾（问题 1、2 属实），M1c 要求建立
+URI 转换 + 反解析闭环，不许只数节点数验收。**时间线说明**：裁定到达时 M1c（`5c54424`）与
+M2（`fdd0f67`）已按前一条「继续，然后没问题先推送再 m2」完成推送；本条落实裁定中仍有效的部分，
+M2 不回滚。
+
+### 1. 问题 1 属实 → 修：`Cache-Control: no-store`
+
+`/sub` 所有响应（200 yaml/json/base64、401、403、404、422、503）统一经 `no_store()` 打头。
+理由（裁定原文照录）：订阅 URL 本身携带访问凭据，响应体包含节点密码，不能依赖浏览器、代理或
+CDN 的默认缓存行为。
+
+### 2. 问题 2 属实 → 修：health 过滤语义
+
+复审确认 `to_node_view(n, &profile.health)` 把**档案期望值**当节点实际状态喂给 AST。
+修正：
+
+- `PipelineNode` 新增 `health` 字段（`node_status` 跨 tag 合并的真实值），AST 条件
+  `{"field":"health",...}` 现在看**实际状态**；
+- `ProfileSpec.health` 明确为**硬条件**（与 region/min_score 同级）：alive(3) > degraded(2) >
+  dead(1) > unknown(0)，节点 rank ≥ 门槛才通过；`""`/`"any"` 关闭；
+- 组合测试：distribution 用 alive/degraded/dead/unknown × 门槛 alive/degraded/关闭 +
+  **AST 死节点用例**（证明 AST 看真实状态）；curse 端到端新增
+  `profile_health_bar_excludes_unhealthy_nodes`（dead 节点被 bar 排除，healthy 留下）。
+
+### 3. URI 解析闭环（裁定第三阶段要求）
+
+`vproxy-adapter` 新增 `src/uri.rs`：
+
+- `parse_uri_line`：ss(SIP002) / vmess(base64 JSON) / vless / trojan / hysteria2 / tuic /
+  socks5 / http 逐字段解析（TLS/SNI/Reality pbk/flow/ws path+host/obfs/congestion 等）；
+- `looks_like_uri_list` + `parse_subscription` 接入：URI 列表在 YAML/JSON 之前尝试，
+  base64 包装解码后再试一次——**我们自己发出的订阅现在能被自家采集器吃回去**；
+- **凭据缺失的行直接跳过**（http 无 userinfo → None），不造 ghost 节点；
+- 解析产物重建完整 Clash JSON 载荷（transport/tls/credential 全部落回 `raw_config_reference`），
+  身份哈希与再渲染路径不受影响；
+- **逐字段往返测试**（裁定明确不许只数数量）：
+  `builder_output_roundtrips_through_the_parser` 比对 protocol/server/port/**credential**；
+  trojan 单测再比对 TLS/SNI/ws；vless 比对 reality pbk + flow；vmess 比对 alterId/cipher/ws-opts；
+  hysteria2 比对 obfs/obfs-password/skip-cert-verify；tuic 比对 congestion/udp-relay-mode。
+
+### 4. 验收
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test -p distribution` | **43 passed**（+1 health 组合测试） |
+| `cargo test -p vproxy-adapter` | **16 passed**（+10 URI 解析用例） |
+| `cargo test -p curse` | **35 passed**（subscription_render 2：真实渲染 + 健康门端到端） |
+| `rustfmt --check`（本轮 5 文件） | clean |
+| `cargo clippy -p vproxy-adapter -p distribution -p curse --all-targets -- -D warnings` | **0** |
+
+### 途中修正
+
+- 测试种子节点没有 `node_status` 行 → 实际健康 `unknown`，rank 0 < alive，被新门拦掉（**这正是
+  修正后的正确行为**）→ 种子补 status 行；另加 dead 节点端到端用例证明门生效。
+- profile `filter_ast` NOT NULL 为 jsonb：空串不是合法 JSON → 用 `{"operator":"and","conditions":[]}`。
+- clippy `collapsible_match`（first_scheme_default 占位 match）→ 删占位，直接 `443` 默认。
+- `Credential` 不是 Option（`NormalizedNode.credentials: Credential`）→ 解析器以「跳过该行」
+  表达无凭据，而不是 None 凭据。
+
+### 遗留（裁定中确认的后续事项，均维持登记）
+
+- **`key_version` 未按版本选钥**：轮换 = 多版本密钥 + 逐行重封，独立任务。
+- **`sources.content` 可能含凭据**（订阅原文/URL）：M1a 只解决节点载荷，未解决此暴露面。
+- M2 已完成（`fdd0f67`）；下一步按序 M3（入队/调度）。

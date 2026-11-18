@@ -56,9 +56,9 @@ fn cred_for(protocol: &str, obj: &Value) -> Option<Credential> {
             .map(|s| Credential::Password(s.to_string())),
         // ss/ssr: upstream `nodeAuth` uses `password` ONLY — `cipher`/`method` is the
         // encryption algorithm (not a credential), so it must never feed the identity.
-        "ss" | "shadowsocks" | "ssr" => {
-            Some(Credential::Password(get_str(obj, "password").unwrap_or_default().to_string()))
-        }
+        "ss" | "shadowsocks" | "ssr" => Some(Credential::Password(
+            get_str(obj, "password").unwrap_or_default().to_string(),
+        )),
         // tuic: v5 carries uuid+password, v4 only password
         "tuic" => {
             let password = get_str(obj, "password").unwrap_or_default().to_string();
@@ -240,6 +240,8 @@ fn try_base64(text: &str) -> Option<Vec<u8>> {
     None
 }
 
+pub mod uri;
+
 /// Parse a subscription blob into normalized nodes.
 pub fn parse_subscription(
     raw: &[u8],
@@ -247,6 +249,14 @@ pub fn parse_subscription(
 ) -> Result<Vec<NormalizedNode>, AdapterError> {
     let text = String::from_utf8_lossy(raw).to_string();
 
+    // URI share-link lists (M1c): our own base64 output decodes to one URI per line.
+    // Tried before the base64 wrapper so a plain list never falls through to it.
+    if uri::looks_like_uri_list(&text) {
+        let nodes = uri::parse_uri_list(&text, ctx);
+        if !nodes.is_empty() {
+            return Ok(nodes);
+        }
+    }
     if let Some(nodes) = parse_clash(&text, ctx) {
         if !nodes.is_empty() {
             return Ok(nodes);
@@ -259,6 +269,12 @@ pub fn parse_subscription(
     }
     if let Some(decoded) = try_base64(&text) {
         let decoded_text = String::from_utf8_lossy(&decoded).to_string();
+        if uri::looks_like_uri_list(&decoded_text) {
+            let nodes = uri::parse_uri_list(&decoded_text, ctx);
+            if !nodes.is_empty() {
+                return Ok(nodes);
+            }
+        }
         if let Some(nodes) = parse_clash(&decoded_text, ctx) {
             if !nodes.is_empty() {
                 return Ok(nodes);
@@ -379,7 +395,6 @@ proxies:
         assert_eq!(nodes.len(), 3, "base64(clash) must decode and parse");
     }
 
-
     /// Protocol coverage regression (2026-11-13): the real school-machine
     /// subscription (mihomo v1.19.32) contains 36 vless + 16 hysteria2 — the
     /// hysteria2 nodes were silently dropped because `cred_for` only knew
@@ -430,7 +445,10 @@ proxies:
             by_name["wg-01"].credentials,
             Credential::PrivateKey("wg-key".into())
         );
-        assert_eq!(by_name["snell-01"].credentials, Credential::Psk("snell-psk".into()));
+        assert_eq!(
+            by_name["snell-01"].credentials,
+            Credential::Psk("snell-psk".into())
+        );
         assert_eq!(
             by_name["socks-01"].credentials,
             Credential::UsernamePassword {
@@ -453,8 +471,14 @@ proxies:
             .iter()
             .find(|n| n.protocol == "hysteria2")
             .expect("hysteria2 node");
-        assert_eq!(domain::fingerprint::node_auth(&hy2.protocol, &hy2.credentials), "hy2-pw");
-        let tuic = nodes.iter().find(|n| n.protocol == "tuic").expect("tuic node");
+        assert_eq!(
+            domain::fingerprint::node_auth(&hy2.protocol, &hy2.credentials),
+            "hy2-pw"
+        );
+        let tuic = nodes
+            .iter()
+            .find(|n| n.protocol == "tuic")
+            .expect("tuic node");
         assert_eq!(
             domain::fingerprint::node_auth(&tuic.protocol, &tuic.credentials),
             "uu-11:tuic-pw",
