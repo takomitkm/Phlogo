@@ -1730,3 +1730,64 @@ yaml/json/base64/未知格式/未知 token 五种响应全部断言 `Cache-Contr
 
 - 增量测活、连续失败降级、评分接入（M5）；deep 矩阵与 `InvokeDuration` 归一化（M4）。
 - `enqueue_for_active_sources`（fetch）仍为周期全量入队，无 period 去重（另行裁定是否复用同策略）。
+
+---
+
+## [UTC 2026-11-19T20:40:00Z] S70 · M3.1 调度可靠性收尾（复审裁定五点全落地）
+
+**用户裁定**（复审 `30ea99c`）：M1c/M2.1 通过；M3 主体落地但多实例去重与任务恢复有实际缺口，
+**暂不完全验收**；只做小范围 M3.1，不进 M4（冻结）。五点全部执行：
+
+### 1. 多实例周期身份（裁定问题 1）
+
+period 标签原取 `Utc::now()` 分钟格式，与各 worker 自己的 `interval_at` 起点无绑定 → 不同启动
+时刻的 worker 对同一逻辑周期派生不同 run_id，唯一约束防不了重复调度。修复：
+`aligned_period_label(now, interval)` 把时间**对齐到周期边界**（epoch 分钟 div_euclid），
+标签形如 `period-20261120T1200+30m` —— 同槽任何启动时刻同标签。测试
+`aligned_period_label_is_stable_across_start_times`。
+
+### 2. 筛选改真实可解密（裁定问题 2）
+
+`schedulable_node_ids` 原只判"有载荷行"；现在逐节点 `open()` + JSON 解析，不可解密排除并计数
+（只报数量）。测试 `undecryptable_payloads_are_excluded_from_scheduling`：另一把密钥封印的
+节点 → 调度后 jobs 表 grep 该节点为 **0**。
+
+### 3. handler 失败重试（裁定问题 3）
+
+`handle_check` 改返回 `Result<(), anyhow::Error>`；check worker 加
+`.retry(apalis::layers::retry::RetryPolicy::retries(3))`（workspace apalis feature +`retry`）。
+测试 `handler_returns_err_on_failure`：handler 返回 Err 且 run 行 `failed`。
+
+### 4. 崩溃窗口恢复（裁定问题 4）
+
+`check_runs` 新增 `pushed boolean`（迁移 0013 扩充——**事后学到的纪律：迁移一旦应用不可再改，
+本次 dev 库手动回滚 0013 重放**）；`claim_for_push()` 三态（New / LostBeforePush /
+AlreadyClaimed），push 成功 `mark_pushed`、失败 `mark_unpushed` 下轮重试。手动触发走同一协议。
+测试 `lost_push_is_recovered_by_the_next_pass`：全 push → 重置 batch 0 为 unpushed → 恰好
+`re_pushed==1、pushed==0、skipped==n1-1`。
+
+### 5. 测试覆盖与基建（裁定表格五项）
+
+- 四类故障注入/并发测试全部补齐（上 1–4 + 501 id）。
+- API 501 个 id 由静默截断改 **422 明确拒绝**（新增断言）。
+- jobs 测试库**强制** `PHLOGO_TEST_JOBS_DSN`，缺省跳过（worker + curse），不再回退 DATABASE_URL。
+
+### 门禁
+
+worker **11** / curse **37** / database **4** / distribution **43** / adapter **18** / checker **11**
+全绿；workspace `rustfmt --check`（含递归）+ `clippy --all-targets -- -D warnings` **0**。
+一次性 `phlogo_jobs_test_m3` 创建→测试→销毁，生产队列零接触。
+
+### 途中修正（记要点）
+
+1. 0013 迁移事后修改 → sqlx 拒绝迁移 → dev 库手动回滚重放（见 17 页 §8.6 纪律条目）。
+2. push 成功未置位 `pushed` → 第二轮误判"丢失"重推 → 补 `mark_pushed`（测试当场抓住）。
+3. 恢复测试断言 `s>=1` 写错（场景里没有 already-pushed 批次）→ 重写为两轮 push/重置/恢复。
+4. apalis `retry` 是独立 feature（workspace 只开了 tracing）→ 加 feature 后
+   `apalis::layers::retry::RetryPolicy` 才可见。
+5. fmt 清单误包含 `.sql` 文件 → rustfmt 报 token 错 → 移除。
+
+### 遗留
+
+M4 冻结（deep 矩阵、InvokeDuration 归一化）；评分（M5）未动；push 失败秒级恢复扫描器未做
+（按裁定保持最小范围）。

@@ -48,5 +48,6 @@ thiserror = "1"
 anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # job queue (P3-01: pinned per P0-03 spike; backend lives in apalis-sql 0.7.4)
-apalis = { version = "0.7.4", features = ["tracing"] }
+# M3.1: "retry" enables the RetryPolicy layer for the check worker.
+apalis = { version = "0.7.4", features = ["tracing", "retry"] }
 apalis-sql = { version = "0.7.4", features = ["postgres"] }

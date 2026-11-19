@@ -51,7 +51,8 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 | **P1 · 复审修正** | S64/S65 复审裁定落地 | `15-m1-payload-encryption.md` §5.1 | ① `/sub` 全响应 **Cache-Control: no-store**；② **health 过滤修正**：AST 看节点真实状态（原把档案期望值当节点状态，dead 会漏过），`ProfileSpec.health` 明确为硬条件 alive>degraded>dead>unknown；③ **URI 解析闭环**：vproxy-adapter 新增 URI 列表解析（8 协议、凭据缺失跳过），**builder→parser 逐字段往返测试**；distribution 43 / adapter 16 / curse 35 passed |
 | **P1 · M1c 字段保真** | S69 复审补齐 | `15-m1-payload-encryption.md` §5.2 | **完整无损闭环**：VLESS Reality `sid`/`fp` 不再丢失（rebuild 合并而非固定空串）、VMess `fp`/ALPN 恢复；**身份哈希往返一致**断言（字段保真不得改变节点身份）；`/sub` 增加成功+失败响应的 **no-store 真实头部断言**；adapter 18 passed |
 | **P1 · M2.1 加固** | S69 复审落地 | `16-m2-check-wiring.md` §6 | ① **终态帧强制**：早期断连 → 协议错误 → run failed（不再表面成功）；② **调试帧脱敏**：结构化输出，不含 Payload/token，上限 40 帧；③ **持久化一致性**：results+status+终态同一事务，`existing_ids` 错误上抛；`early_close_fails_the_run` 等新测试钉死 |
-| **P1 · M3 调度** | CheckJob 生产与调度 | `17-m3-checkjob-scheduling.md` | 周期调度（`check_schedule_interval_minutes`/`check_batch_size` 新配置键）+ `POST /api/v1/check/trigger`（AdminJWT only，ServiceBearer 403，202+stats）；**确定性 period/batch UUID v5 去重**（多 worker 不重复）；只调度 Linked+有载荷节点；首批只用 `TEST_PING_RTT`；首次 tick 显式推迟；一次性可销毁 jobs 测试库验证；worker 7 / curse 37 / database 4 / distribution 43 / adapter 18 / checker 11 全绿，workspace fmt+clippy 0 |
+| **P1 · M3 调度** | CheckJob 生产与调度 | `17-m3-checkjob-scheduling.md` | 周期调度（`check_schedule_interval_minutes`/`check_batch_size` 新配置键）+ `POST /api/v1/check/trigger`（AdminJWT only，ServiceBearer 403，202+stats）；**确定性 period/batch UUID v5 去重**（多 worker 不重复）；只调度 Linked+有载荷节点；首批只用 `TEST_PING_RTT`；首次 tick 显式推迟；一次性可销毁 jobs 测试库验证 |
+| **P1 · M3.1 可靠性收尾** | 复审五点落地 | `17-m3-checkjob-scheduling.md` §8 | ① **周期身份对齐时钟边界**（不同启动时刻的 worker 同槽同标签）；② 筛选改**真实可解密验证**（错钥/损坏密文排除并计数）；③ **handler 返回 Err + RetryPolicy(3)**（apalis retry feature）；④ **崩溃窗口恢复**：`check_runs.pushed` 三态 claim，丢失的 push 恰好重推一次；⑤ 501 id 明确 422、jobs 测试库强制专用 DSN；worker **11** / curse 37 / database 4 / distribution 43 / adapter 18 / checker 11，fmt+clippy **0** |
 
 ### 实施状态总览（2026-11-13 更新）
 
@@ -61,7 +62,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 > `/sub` 仍输出占位载荷（见 `09-self-completed-gaps.md` §D）。**M1–M27 全部要做**，分两道门禁：
 > 可部署门禁（M1–M5 + M15）/ 生产级门禁（M6–M14 + M18–M27）。
 > 上线总门禁是「抓取 → 真测活 → deep 落库 → 评分更新 → /sub 出真实节点 → mihomo -t 通过 → 真代理出网 204」。
-> **进度**：M1 ✅（S63/S64/S65 + S69 保真补齐）；M2 ✅（S66 + S69 加固）；**M3 ✅**（S68，调度 + 手动触发 + 去重）；下一步 M4（deep 测活与协议载荷保真）。
+> **进度**：M1 ✅（S63/S64/S65 + S69 保真补齐）；M2 ✅（S66 + S69 加固）；M3 ✅（S68）+ **M3.1 ✅**（S70 复审五点落地：周期身份对齐 / 可解密筛选 / handler 重试 / 崩溃窗口恢复 / 故障注入测试）；**M4 冻结**，等待裁定。
 > 关键决策与偏差均写入对应页面：
 
 - **P0**：VProxy 最小化移植（不作依赖）；MiaoSpeed 自建 `4.7.9`（sha256 记录）；Apalis `0.7.4` PG backend；Vben `v5.7.0`。

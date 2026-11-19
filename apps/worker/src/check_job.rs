@@ -36,8 +36,7 @@ pub struct CheckJob {
 /// M3 dedup: `schedule_id` is deterministic per logical period, and `run_id` for a
 /// scheduled batch is derived from it (`Uuid::new_v5(schedule_id, batch_index)`), so
 /// re-running the scheduler for the same period — from any worker instance — collides
-/// on `check_runs.id` and the duplicate enqueue is dropped (`enqueue_scheduled` counts
-/// only first inserts).
+/// on `check_runs.id` and the duplicate enqueue is dropped.
 pub async fn record_check_run(pool: &PgPool, job: &CheckJob) -> sqlx::Result<bool> {
     let n = sqlx::query(
         "INSERT INTO check_runs (id,checker_tag,node_count,status,started_at) \
@@ -50,6 +49,58 @@ pub async fn record_check_run(pool: &PgPool, job: &CheckJob) -> sqlx::Result<boo
     .await?
     .rows_affected();
     Ok(n > 0)
+}
+
+/// Claim outcome for the schedule→push two-step (M3.1 fix #4, crash window).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimOutcome {
+    /// This pass created the run row; the caller must push the job now.
+    New,
+    /// The run row exists, was never marked pushed, and is still 'started': the prior
+    /// scheduler died between row-insert and push. The caller re-pushes.
+    LostBeforePush,
+    /// Someone already pushed (or the run already finished/failed): do nothing.
+    AlreadyClaimed,
+}
+
+/// Atomically claim a batch for pushing, distinguishing "never pushed" from "pushed".
+///
+/// The `pushed` flag is written by the SAME statement that inserts/claims, so the
+/// crash window between `record_check_run` and `storage.push` is recoverable: a later
+/// pass finds `pushed=false AND status='started'` and re-pushes exactly once (the
+/// UPDATE guards against two racing schedulers both re-pushing).
+pub async fn claim_for_push(pool: &PgPool, job: &CheckJob) -> sqlx::Result<ClaimOutcome> {
+    // 1) Insert when absent, marking pushed=false.
+    let inserted = sqlx::query(
+        "INSERT INTO check_runs (id,checker_tag,node_count,status,started_at,pushed) \
+         VALUES ($1,$2,$3,'started',now(),false) ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(job.run_id)
+    .bind(&job.checker_tag)
+    .bind(job.node_ids.len() as i32)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        > 0;
+    if inserted {
+        return Ok(ClaimOutcome::New);
+    }
+    // 2) Existing row: claim the push if (and only if) nobody pushed yet and the run
+    //    has not reached a terminal state. Only the winner may re-push.
+    let claimed = sqlx::query(
+        "UPDATE check_runs SET pushed=true WHERE id=$1 AND pushed=false \
+         AND status='started'",
+    )
+    .bind(job.run_id)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        > 0;
+    Ok(if claimed {
+        ClaimOutcome::LostBeforePush
+    } else {
+        ClaimOutcome::AlreadyClaimed
+    })
 }
 
 /// Mark the run finished (idempotent: only the first transition wins).
@@ -285,12 +336,15 @@ async fn persist_all(
     Ok(())
 }
 
-/// Apalis handler: thin wrapper over [`run_check_once`].
-pub async fn handle_check(job: CheckJob, pool: Data<PgPool>) {
+/// Apalis handler (M3.1 fix #3): returns `Err` on failure so the RetryPolicy layer
+/// actually retries the task — swallowing the error into a log line would make Apalis
+/// treat the job as completed. The business-side run row is still flipped to `failed`
+/// inside `run_check_once`; the retry is for transient faults (checker connection,
+/// missing terminal frame, DB errors), and idempotent persistence keeps redeliveries
+/// from double-counting.
+pub async fn handle_check(job: CheckJob, pool: Data<PgPool>) -> Result<(), anyhow::Error> {
     let pool: &PgPool = &pool;
-    if let Err(e) = run_check_once(pool, &job).await {
-        tracing::error!(run_id = %job.run_id, error = %e, "check run errored");
-    }
+    run_check_once(pool, &job).await
 }
 
 /// Namespace for deterministic schedule ids (arbitrary but fixed bytes).
@@ -302,6 +356,24 @@ fn scheduled_run_id(schedule_id: Uuid, batch: usize) -> Uuid {
     let mut v5 = schedule_id.as_bytes().to_vec();
     v5.extend_from_slice(&(batch as u64).to_le_bytes());
     Uuid::new_v5(&Uuid::from_bytes(SCHEDULE_NS), &v5)
+}
+
+/// The shared schedule identity for one logical period (M3.1 fix #1).
+///
+/// `now` is floored to the interval boundary, so two workers started minutes apart
+/// still derive the SAME label for the same wall-clock period — without this, each
+/// instance's own `interval_at` start time made the labels drift and the dedup
+/// constraint could never link them.
+pub fn aligned_period_label(now: chrono::DateTime<chrono::Utc>, interval_minutes: i32) -> String {
+    let mins = interval_minutes.max(1) as i64;
+    let epoch_min = now.timestamp() / 60;
+    let slot = epoch_min.div_euclid(mins);
+    let slot_start = slot * mins;
+    let start = chrono::DateTime::from_timestamp(slot_start * 60, 0)
+        .unwrap_or(now)
+        .format("%Y%m%dT%H%M")
+        .to_string();
+    format!("period-{start}+{mins}m")
 }
 
 /// Config values for the check scheduler (configs table; sane fallbacks for tests).
@@ -328,17 +400,40 @@ pub async fn load_check_schedule_config(pool: &PgPool) -> anyhow::Result<CheckSc
     })
 }
 
-/// Candidate node ids for one scheduling pass: Linked nodes that HAVE a readable sealed
-/// payload (nodes without payloads cannot be checked — M2 behavior — so they are
-/// excluded at scheduling time, not inside the run).
-async fn schedulable_node_ids(pool: &PgPool) -> anyhow::Result<Vec<Uuid>> {
-    let ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT n.id FROM nodes n JOIN node_payloads p ON p.node_id = n.id \
+/// Candidate node ids for one scheduling pass.
+///
+/// M3.1 fix #2: "schedulable" means the sealed payload **actually decrypts and parses
+/// as JSON** — a row in `node_payloads` is not enough. A wrong/mismatched key (e.g.
+/// after a restart with the ephemeral key) or corrupt ciphertext would otherwise be
+/// scheduled and only fail inside the run. Undecryptable nodes are excluded here and
+/// counted for the log; nothing is logged about the payload contents.
+async fn schedulable_node_ids(pool: &PgPool) -> anyhow::Result<(Vec<Uuid>, usize)> {
+    let rows: Vec<(Uuid, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        "SELECT n.id, p.nonce, p.ciphertext FROM nodes n \
+         JOIN node_payloads p ON p.node_id = n.id \
          WHERE n.membership='Linked' ORDER BY n.id",
     )
     .fetch_all(pool)
     .await?;
-    Ok(ids)
+    let mut ids = Vec::with_capacity(rows.len());
+    let mut undecryptable = 0usize;
+    for (id, nonce, ciphertext) in rows {
+        let ok = payload_crypto::global()
+            .open(
+                &payload_crypto::aad_for(&id.to_string()),
+                &nonce,
+                &ciphertext,
+            )
+            .ok()
+            .and_then(|plain| serde_json::from_slice::<Value>(&plain).ok())
+            .is_some();
+        if ok {
+            ids.push(id);
+        } else {
+            undecryptable += 1;
+        }
+    }
+    Ok((ids, undecryptable))
 }
 
 /// One scheduling pass (M3): build batches over schedulable nodes for `period` and
@@ -347,18 +442,24 @@ async fn schedulable_node_ids(pool: &PgPool) -> anyhow::Result<Vec<Uuid>> {
 /// `record_check_run` BEFORE the push, so a crash between push and run cannot
 /// duplicate either side).
 ///
-/// Returns (pushed_batches, skipped_duplicates, total_nodes).
+/// M3.1 fix #4 (crash window): a batch whose run row exists but whose job was never
+/// pushed (crash between the two) is detected via a sentinel — `record_check_run`
+/// returns a tri-state instead of a boolean, and `missing_push` batches are re-pushed
+/// by THIS pass. See [`RunRowState`].
+///
+/// Returns (pushed_batches, skipped_duplicates, re_pushed_lost, total_nodes,
+/// undecryptable_nodes).
 pub async fn enqueue_scheduled(
     storage: &mut apalis_sql::postgres::PostgresStorage<CheckJob>,
     pool: &PgPool,
     period_label: &str,
     cfg: &CheckScheduleConfig,
-) -> anyhow::Result<(usize, usize, usize)> {
-    use apalis::prelude::Storage as _;
+) -> anyhow::Result<(usize, usize, usize, usize, usize)> {
     let schedule_id = Uuid::new_v5(&Uuid::from_bytes(SCHEDULE_NS), period_label.as_bytes());
-    let ids = schedulable_node_ids(pool).await?;
+    let (ids, undecryptable) = schedulable_node_ids(pool).await?;
     let mut pushed = 0usize;
     let mut skipped = 0usize;
+    let mut re_pushed = 0usize;
     for (batch, chunk) in ids.chunks(cfg.batch_size).enumerate() {
         let job = CheckJob {
             run_id: scheduled_run_id(schedule_id, batch),
@@ -368,21 +469,63 @@ pub async fn enqueue_scheduled(
             // Ruling: initial schedule only pings; download matrices come later (M4+).
             presets: vec!["TEST_PING_RTT".into()],
         };
-        // Guard FIRST: only the instance that created the run row pushes the job.
-        if record_check_run(pool, &job).await? {
-            storage.push(job).await?;
-            pushed += 1;
-        } else {
-            skipped += 1;
+        match claim_for_push(pool, &job).await? {
+            ClaimOutcome::New => {
+                if storage.push(job.clone()).await.is_ok() {
+                    // Mark pushed=true AFTER a successful push so the second pass sees
+                    // AlreadyClaimed (not another "lost" re-push). The UPDATE is
+                    // idempotent and only touches this run row.
+                    let _ = mark_pushed(pool, job.run_id).await;
+                    pushed += 1;
+                } else {
+                    // Push failed: un-claim so a later pass can retry the push.
+                    let _ = mark_unpushed(pool, job.run_id).await;
+                }
+            }
+            ClaimOutcome::LostBeforePush => {
+                // The run row exists but no job was ever pushed for it (crash window).
+                // Re-push; on failure, un-claim again for the next pass.
+                if storage.push(job.clone()).await.is_ok() {
+                    let _ = mark_pushed(pool, job.run_id).await;
+                    re_pushed += 1;
+                } else {
+                    let _ = mark_unpushed(pool, job.run_id).await;
+                }
+            }
+            ClaimOutcome::AlreadyClaimed => skipped += 1,
         }
     }
-    Ok((pushed, skipped, ids.len()))
+    Ok((pushed, skipped, re_pushed, ids.len(), undecryptable))
+}
+
+use apalis::prelude::Storage as _;
+
+/// Mark a run as pushed (after a successful `storage.push`).
+async fn mark_pushed(pool: &PgPool, run_id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE check_runs SET pushed=true WHERE id=$1")
+        .bind(run_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Un-claim a run whose push failed, so a later pass can retry the push.
+async fn mark_unpushed(pool: &PgPool, run_id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE check_runs SET pushed=false WHERE id=$1")
+        .bind(run_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// API-facing scheduled-enqueue trigger (M3 stage 4): same service as the periodic
 /// scheduler, with an explicit node list (default: all schedulable). Batches by
 /// `batch_size`; `period_label` empty = derive from the current time PLUS a random
 /// suffix, so two manual triggers in the same second are still two logical runs.
+///
+/// Uses the same claim/re-push protocol as the periodic pass (M3.1 fix #4), so a
+/// manual trigger that dies between claim and push is recovered by the next periodic
+/// pass over the same label — or by re-invoking the trigger.
 pub async fn trigger_check_batch(
     jobs_dsn: &str,
     pool: &PgPool,
@@ -406,22 +549,20 @@ pub async fn trigger_check_batch(
     } else {
         period_label.to_string()
     };
-    // Explicit list wins but is FILTERED to schedulable nodes (exists + has payload) —
-    // the ruling forbids sending payload-less nodes to MiaoSpeed, and the API surface
-    // must not silently schedule ghost ids either. Default: the same schedulable set
-    // as the periodic pass.
+    // Explicit list wins but is FILTERED to schedulable nodes (decryptable payload) —
+    // the ruling forbids sending payload-less/undecryptable nodes to MiaoSpeed, and the
+    // API surface must not silently schedule ghost ids either.
+    let (schedulable, _undecryptable) = schedulable_node_ids(pool).await?;
     let ids = match node_ids {
         Some(ids) if !ids.is_empty() => {
-            let all = schedulable_node_ids(pool).await?;
-            let set: std::collections::HashSet<Uuid> = all.into_iter().collect();
+            let set: std::collections::HashSet<Uuid> = schedulable.into_iter().collect();
             ids.into_iter()
                 .filter(|id| set.contains(id))
                 .collect::<Vec<_>>()
         }
-        _ => schedulable_node_ids(pool).await?,
+        _ => schedulable,
     };
     let schedule_id = Uuid::new_v5(&Uuid::from_bytes(SCHEDULE_NS), label.as_bytes());
-    use apalis::prelude::Storage as _;
     let mut pushed = 0usize;
     let mut skipped = 0usize;
     for (batch, chunk) in ids.chunks(cfg.batch_size).enumerate() {
@@ -432,9 +573,13 @@ pub async fn trigger_check_batch(
             node_ids: chunk.to_vec(),
             presets: vec!["TEST_PING_RTT".into()],
         };
-        if record_check_run(pool, &job).await? {
-            storage.push(job).await?;
-            pushed += 1;
+        if claim_for_push(pool, &job).await? != ClaimOutcome::AlreadyClaimed {
+            if storage.push(job.clone()).await.is_ok() {
+                let _ = mark_pushed(pool, job.run_id).await;
+                pushed += 1;
+            } else {
+                let _ = mark_unpushed(pool, job.run_id).await;
+            }
         } else {
             skipped += 1;
         }

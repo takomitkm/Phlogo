@@ -77,9 +77,17 @@ async fn post(
 
 /// AdminJWT -> 202 + stats; ServiceBearer -> 403; anonymous -> 401 (ruling: the check
 /// trigger must NOT extend the service whitelist).
+///
+/// M3.1: the jobs queue MUST be a dedicated disposable DB. Without
+/// PHLOGO_TEST_JOBS_DSN the test SKIPS instead of silently using DATABASE_URL as the
+/// queue (ruling: never point test traffic at the business database).
 #[tokio::test]
 async fn check_trigger_permission_matrix() {
     let Some(pool) = setup().await else {
+        return;
+    };
+    let Ok(jobs_dsn) = std::env::var("PHLOGO_TEST_JOBS_DSN") else {
+        eprintln!("skip: PHLOGO_TEST_JOBS_DSN not set (refusing to use DATABASE_URL as queue)");
         return;
     };
     std::env::set_var("PHLOGO_AUTH_JWT_SECRET", "test-jwt-secret-m3");
@@ -119,11 +127,7 @@ async fn check_trigger_permission_matrix() {
     let addr = listener.local_addr().unwrap();
     // Non-empty secrets so the permission matrix distinguishes 401 vs 403; the handler
     // enqueues into the DISPOSABLE test jobs DB (never the production queue).
-    std::env::set_var(
-        "PHLOGO_DATABASE_JOBS_DSN",
-        std::env::var("PHLOGO_TEST_JOBS_DSN")
-            .unwrap_or_else(|_| std::env::var("DATABASE_URL").expect("DATABASE_URL")),
-    );
+    std::env::set_var("PHLOGO_DATABASE_JOBS_DSN", &jobs_dsn);
     let mut cfg = app_config::Config::default();
     cfg.auth.service_secret = "test-service-secret-m3".into();
     cfg.auth.jwt_secret = "test-jwt-secret-m3".into();
@@ -169,6 +173,18 @@ async fn check_trigger_permission_matrix() {
     )
     .await;
     assert_eq!(status, 422, "explicit-but-unschedulable must be 422");
+
+    // M3.1: >500 explicit ids must be REJECTED (422), never silently truncated.
+    let mut ids = Vec::new();
+    for _ in 0..501 {
+        ids.push(Uuid::new_v4().to_string());
+    }
+    let body501 = format!(r#"{{"node_ids":{}}}"#, serde_json::to_string(&ids).unwrap());
+    let (status, msg) = post(addr, "/api/v1/check/trigger", Some(&token), &body501).await;
+    assert_eq!(
+        status, 422,
+        "501 ids must be rejected, not truncated: {msg}"
+    );
 
     sqlx::query("DELETE FROM nodes WHERE id=$1")
         .bind(node_id)

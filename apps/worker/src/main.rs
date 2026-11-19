@@ -97,17 +97,33 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 _ = check_tick.tick() => {
-                    // Period label = UTC date + slot index so the label changes every
-                    // period even across worker restarts within the same minute.
-                    let period = format!(
-                        "period-{}",
-                        chrono::Utc::now().format("%Y%m%dT%H%M")
+                    // Period label = ALIGNED UTC boundary (M3.1 fix #1): every worker
+                    // derives the label from wall-clock now floored to the period
+                    // length, so instances started at different moments still share
+                    // one schedule identity for the same logical period — the
+                    // check_runs unique constraint then actually dedups them.
+                    let period = worker::check_job::aligned_period_label(
+                        chrono::Utc::now(),
+                        check_cfg.interval_minutes,
                     );
                     match worker::enqueue_scheduled(&mut sched_check, &sched_pool, &period, &check_cfg).await {
-                        Ok((pushed, skipped, nodes)) if pushed > 0 => {
-                            tracing::info!(pushed, skipped, nodes, %period, "check batch scheduled")
+                        Ok((pushed, skipped, re_pushed, nodes, undecryptable)) => {
+                            if pushed > 0 || re_pushed > 0 {
+                                tracing::info!(
+                                    pushed, skipped, re_pushed, nodes, undecryptable, %period,
+                                    "check batch scheduled"
+                                );
+                            }
+                            if undecryptable > 0 {
+                                // Counts only; never any payload contents.
+                                tracing::warn!(
+                                    undecryptable, %period,
+                                    "linked nodes skipped: sealed payload not decryptable \
+                                     (wrong key or corrupt ciphertext) — re-fetch their sources \
+                                     or fix PHLOGO_PAYLOAD_KEY"
+                                );
+                            }
                         }
-                        Ok(_) => {}
                         Err(e) => tracing::error!(error = %e, "check scheduling failed"),
                     }
                 }
@@ -128,8 +144,12 @@ async fn main() -> anyhow::Result<()> {
         })
         .register({
             let p = pool.clone();
+            // M3.1 fix #3: the check handler returns Err on failure, and this retry
+            // layer turns that into an actual Apalis retry (3 attempts, immediate).
+            // Idempotent persistence keeps redeliveries from double-counting.
             WorkerBuilder::new("phlogo-check-worker")
                 .enable_tracing()
+                .retry(apalis::layers::retry::RetryPolicy::retries(3))
                 .data(p)
                 .backend(check_storage)
                 .build_fn(handle_check)

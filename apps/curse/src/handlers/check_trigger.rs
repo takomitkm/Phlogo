@@ -33,10 +33,19 @@ pub async fn trigger(State(st): State<AppState>, req: Option<Json<CheckTriggerRe
     }
     let req = req.map(|Json(r)| r).unwrap_or_default();
 
-    // Hard caps: never let one request enqueue the whole fleet.
+    // Hard caps (M3.1: explicit rejection, never silent truncation).
     let explicit = !req.node_ids.is_empty();
-    let mut node_ids = req.node_ids;
-    node_ids.truncate(500);
+    if req.node_ids.len() > 500 {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "node_ids exceeds the 500-node cap (got {})",
+                req.node_ids.len()
+            ),
+        )
+            .into_response();
+    }
+    let node_ids = req.node_ids;
     let default_batch = worker::load_check_schedule_config(st.pool())
         .await
         .map(|c| c.batch_size)
