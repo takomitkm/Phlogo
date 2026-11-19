@@ -40,7 +40,7 @@ utoipa = { version = "5", features = ["axum_extras", "uuid"] }
 utoipa-swagger-ui = { version = "8", features = ["axum"] }
 # auth / ids
 jsonwebtoken = "9"
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 # serialization / errors
 serde = { version = "1", features = ["derive"] }

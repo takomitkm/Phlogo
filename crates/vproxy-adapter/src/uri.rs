@@ -128,6 +128,13 @@ fn tls_from_query(query: &[(String, String)]) -> Option<TlsSettings> {
     })
 }
 
+/// Client-fingerprint (`fp=`): a connection-affecting parameter the builder emits, so
+/// the parser must carry it into the rebuilt payload (kept out of `TlsSettings`, which
+/// has no fingerprint field — the payload is its only home).
+fn fp_from_query(query: &[(String, String)]) -> Option<String> {
+    q_get(query, "fp").filter(|s| !s.is_empty())
+}
+
 fn display_name(fragment: &str) -> Option<String> {
     if fragment.is_empty() {
         None
@@ -144,12 +151,21 @@ fn build_node(
 ) -> Option<NormalizedNode> {
     let transport = transport_from_query(&parts.query);
     let tls = tls_from_query(&parts.query);
-    let raw = json!({
+    // Seed the payload skeleton with URI-only fields BEFORE rebuild_raw: short-id and
+    // fingerprint have no NormalizedNode slot, so the payload is their only round-trip
+    // home (builder emits them; parser must not drop them).
+    let mut raw = json!({
         "name": parts.fragment,
         "type": protocol,
         "server": parts.host,
         "port": parts.port,
     });
+    if let Some(sid) = q_get(&parts.query, "sid").filter(|s| !s.is_empty()) {
+        raw["reality-opts"] = json!({"short-id": sid});
+    }
+    if let Some(fp) = fp_from_query(&parts.query) {
+        raw["client-fingerprint"] = json!(fp);
+    }
     let mut node = NormalizedNode {
         protocol: protocol.to_string(),
         server: parts.host.clone(),
@@ -209,10 +225,15 @@ impl RebuildRaw for NormalizedNode {
                 obj.insert("alpn".into(), json!(tls.alpn));
             }
             if let Some(p) = &tls.reality {
-                obj.insert(
-                    "reality-opts".into(),
-                    json!({"public-key": p, "short-id": ""}),
-                );
+                // Merge with the seeded object so short-id survives; only public-key
+                // is authoritative from TlsSettings (it has no short-id slot).
+                let mut ro = obj
+                    .get("reality-opts")
+                    .and_then(|v| v.as_object())
+                    .cloned()
+                    .unwrap_or_default();
+                ro.insert("public-key".into(), json!(p));
+                obj.insert("reality-opts".into(), serde_json::Value::Object(ro));
             }
         }
         match &self.credentials {
@@ -336,17 +357,28 @@ fn parse_vmess(rest: &str, ctx: &SourceContext) -> Option<NormalizedNode> {
         host: ws_host.map(str::to_string),
         service_name: None,
     });
-    let tls = if tls_on || sni.is_some() {
+    let alpn: Vec<String> = v
+        .get("alpn")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|a| a.split(',').map(str::to_string).collect())
+        .unwrap_or_default();
+    let fp = v
+        .get("fp")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let tls = if tls_on || sni.is_some() || !alpn.is_empty() {
         Some(TlsSettings {
             enabled: tls_on,
             sni: sni.map(str::to_string),
-            alpn: vec![],
+            alpn: alpn.clone(),
             reality: None,
         })
     } else {
         None
     };
-    let raw = json!({
+    let mut raw = json!({
         "name": v.get("ps").and_then(|x| x.as_str()).unwrap_or(""),
         "type": "vmess", "server": server, "port": port,
         "uuid": uuid.to_string(),
@@ -354,6 +386,14 @@ fn parse_vmess(rest: &str, ctx: &SourceContext) -> Option<NormalizedNode> {
         "cipher": v.get("scy").and_then(|x| x.as_str()).unwrap_or("auto"),
         "network": net, "tls": tls_on,
     });
+    if let Some(f) = &fp {
+        raw["client-fingerprint"] = json!(f);
+    }
+    // ALPN has a NormalizedNode slot (TlsSettings.alpn) but vmess does not go through
+    // rebuild_raw, so the payload must carry it explicitly (S68 field fidelity).
+    if !alpn.is_empty() {
+        raw["alpn"] = json!(alpn);
+    }
     let uuid_owned = uuid.to_string();
     let mut node = NormalizedNode {
         protocol: "vmess".into(),
@@ -630,6 +670,9 @@ mod uri_tests {
         let payload: serde_json::Value = serde_json::from_str(&n.raw_config_reference).unwrap();
         assert_eq!(payload["flow"], "xtls-rprx-vision");
         assert_eq!(payload["reality-opts"]["public-key"], "PBKVALUE");
+        // Field-fidelity fixes: sid and fp must survive the parse (S68 ruling).
+        assert_eq!(payload["reality-opts"]["short-id"], "ab");
+        assert_eq!(payload["client-fingerprint"], "chrome");
     }
 
     #[test]
@@ -714,6 +757,10 @@ mod uri_tests {
 
     /// Round-trip the URIs OUR OWN builder emits back into normalized nodes and compare
     /// field by field (credentials included, never logged).
+    ///
+    /// Mapping table (S68): Clash field → URI part → parsed slot → rebuilt payload.
+    /// `*` = parser-only home (no NormalizedNode slot): reality-opts.short-id,
+    /// client-fingerprint. Unsupported-by-design: plugin (ss), wireguard family.
     #[test]
     fn builder_output_roundtrips_through_the_parser() {
         use distribution::uri::uri_from_clash;
@@ -760,5 +807,85 @@ mod uri_tests {
                 assert_eq!(got, want, "credential roundtrip for {protocol}");
             }
         }
+    }
+
+    /// VLESS Reality + ws: EVERY field the builder emits must come back through the
+    /// parser (sid, fp, flow, ws path/host, sni) — the S68 "complete, not core-only"
+    /// round-trip requirement. Also asserts the identity hash is stable across the
+    /// round trip (field fidelity must not silently change node identity).
+    #[test]
+    fn vless_reality_full_fidelity_roundtrip() {
+        use distribution::uri::uri_from_clash;
+        let payload = serde_json::json!({
+            "type":"vless","server":"r.example","port":443,
+            "uuid":"55555555-5555-5555-5555-555555555555",
+            "tls":true,"servername":"r.example","client-fingerprint":"chrome",
+            "flow":"xtls-rprx-vision",
+            "reality-opts":{"public-key":"PBKVAL","short-id":"6969"},
+            "network":"ws","ws-opts":{"path":"/wspath","headers":{"Host":"ws.example"}},
+            "name":"REALITY-01"
+        });
+        let uri = uri_from_clash(&payload).expect("vless uri");
+        let n = parse_uri_line(&uri, &ctx()).expect("parse");
+        assert_eq!(n.protocol, "vless");
+        assert_eq!(n.server, "r.example");
+        assert_eq!(n.port, 443);
+        assert!(
+            matches!(&n.credentials, Credential::Uuid(u) if u == "55555555-5555-5555-5555-555555555555")
+        );
+        let tls = n.tls.as_ref().expect("tls");
+        assert!(tls.enabled);
+        assert_eq!(tls.sni.as_deref(), Some("r.example"));
+        assert_eq!(tls.reality.as_deref(), Some("PBKVAL"));
+        let t = n.transport.as_ref().expect("ws");
+        assert_eq!(t.kind, "ws");
+        assert_eq!(t.path.as_deref(), Some("/wspath"));
+        assert_eq!(t.host.as_deref(), Some("ws.example"));
+
+        let rebuilt: serde_json::Value =
+            serde_json::from_str(&n.raw_config_reference).expect("payload");
+        assert_eq!(rebuilt["reality-opts"]["public-key"], "PBKVAL");
+        assert_eq!(
+            rebuilt["reality-opts"]["short-id"], "6969",
+            "sid must survive"
+        );
+        assert_eq!(rebuilt["client-fingerprint"], "chrome", "fp must survive");
+        assert_eq!(rebuilt["flow"], "xtls-rprx-vision");
+        assert_eq!(rebuilt["ws-opts"]["path"], "/wspath");
+        assert_eq!(rebuilt["ws-opts"]["headers"]["Host"], "ws.example");
+        assert_eq!(rebuilt["servername"], "r.example");
+
+        // Field fidelity must not change identity: stamping the original payload and
+        // the round-tripped node must yield the same hash (both via from_clash).
+        let ctx2 = ctx();
+        let orig = crate::from_clash(&payload, &ctx2).expect("orig node");
+        let back = crate::from_clash(&rebuilt, &ctx2).expect("rebuilt node");
+        let h1 = domain::compute_identity(&orig);
+        let h2 = domain::compute_identity(&back);
+        assert_eq!(h1, h2, "round trip must preserve node identity");
+    }
+
+    /// VMess: builder emits alpn/fp in the JSON; parser must restore them (S68).
+    #[test]
+    fn vmess_alpn_fp_roundtrip() {
+        use base64::Engine;
+        let body = serde_json::json!({
+            "v":"2","ps":"VM-FP","add":"vm.example","port":"443",
+            "id":"66666666-6666-6666-6666-666666666666","aid":"0","scy":"auto",
+            "net":"ws","type":"none","host":"vmcdn.example","path":"/vmpath",
+            "tls":"tls","sni":"vm.example","alpn":"h2,http/1.1","fp":"firefox"
+        })
+        .to_string();
+        let uri = format!(
+            "vmess://{}",
+            base64::engine::general_purpose::STANDARD.encode(body)
+        );
+        let n = parse_uri_line(&uri, &ctx()).expect("vmess");
+        let tls = n.tls.as_ref().expect("tls");
+        assert_eq!(tls.alpn, vec!["h2", "http/1.1"], "alpn must survive");
+        let rebuilt: serde_json::Value =
+            serde_json::from_str(&n.raw_config_reference).expect("payload");
+        assert_eq!(rebuilt["client-fingerprint"], "firefox", "fp must survive");
+        assert_eq!(rebuilt["alpn"], serde_json::json!(["h2", "http/1.1"]));
     }
 }

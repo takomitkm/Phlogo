@@ -55,4 +55,3 @@ pub struct NodeView {
 }
 
 pub type Uuid = uuid::Uuid;
-

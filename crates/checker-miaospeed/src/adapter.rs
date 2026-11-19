@@ -51,16 +51,17 @@ impl MiaoSpeedAdapter {
             .map_err(|e| CheckerError::Ws(e.to_string()))?;
 
         let mut out = Vec::new();
+        // The terminal `Result` frame is the ONLY proof the task actually ran (M2.1):
+        // an early Close without it must surface as a protocol error so the run lands
+        // in the retry path instead of being persisted as a successful all-unknown check.
+        let mut saw_terminal = false;
         while let Some(msg) = ws.next().await {
             let msg = msg.map_err(|e| CheckerError::Ws(e.to_string()))?;
             match msg {
                 Message::Text(t) => {
                     let v: Value = serde_json::from_str(&t)
                         .map_err(|e| CheckerError::Protocol(e.to_string()))?;
-                    // Diagnostics for live debugging; never logs the auth token.
-                    if std::env::var("PHLOGO_DEBUG_FRAMES").is_ok() {
-                        eprintln!("frame: {}", &t[..t.len().min(4000)]);
-                    }
+                    debug_frame(&v);
                     if let Some(err) = v["Error"].as_str() {
                         if !err.is_empty() {
                             return Err(CheckerError::Auth(err.to_string()));
@@ -69,12 +70,18 @@ impl MiaoSpeedAdapter {
                     let done = v["Result"].is_object();
                     out.push(v);
                     if done {
+                        saw_terminal = true;
                         break;
                     }
                 }
                 Message::Close(_) => break,
                 _ => {}
             }
+        }
+        if !saw_terminal {
+            return Err(CheckerError::Protocol(
+                "connection closed before the terminal Result frame".into(),
+            ));
         }
         Ok(out)
     }
@@ -209,6 +216,62 @@ impl MiaoSpeedAdapter {
         let frames = self.roundtrip(&req, &job.vendor).await?;
         Ok(self.map_results(&frames))
     }
+}
+
+/// Structured, REDACTED frame dump for `PHLOGO_DEBUG_FRAMES` (M2.1 hardening).
+///
+/// The raw frame contains the full Clash payload of every node (passwords, UUIDs,
+/// PSKs, private keys), so printing it verbatim would leak node credentials into the
+/// log. Instead: protocol state, per-node Name/InvokeDuration (no Payload), and the
+/// error text — with a recursion cap so a malformed frame can't blow up the log.
+fn debug_frame(v: &Value) {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static COUNT: AtomicU8 = AtomicU8::new(0);
+    if COUNT.load(Ordering::Relaxed) >= 40 {
+        return; // cap the debug output volume
+    }
+    COUNT.fetch_add(1, Ordering::Relaxed);
+
+    let err = v["Error"].as_str().unwrap_or("");
+    let has_result = v["Result"].is_object();
+    let progress = &v["Progress"];
+    let queueing = progress["Queuing"].as_i64();
+    let idx = progress["Index"].as_i64();
+
+    let mut line = format!(
+        "frame: id={} terminal={} error={}",
+        v["ID"].as_str().unwrap_or("?"),
+        has_result,
+        if err.is_empty() { "-" } else { err }
+    );
+    if let Some(q) = queueing {
+        line.push_str(&format!(" queuing={q}"));
+    }
+    if let Some(i) = idx {
+        line.push_str(&format!(" index={i}"));
+    }
+    // Progress record: name + latency only. NEVER the Payload.
+    if let Some(rec) = &progress["Record"].as_object() {
+        let name = rec
+            .get("ProxyInfo")
+            .and_then(|p| p.get("Name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("");
+        let dur = rec
+            .get("InvokeDuration")
+            .and_then(|d| d.as_i64())
+            .unwrap_or(0);
+        if !name.is_empty() {
+            line.push_str(&format!(" record={name} duration={dur}"));
+        }
+    }
+    if has_result {
+        let results = v["Result"]["Results"].as_array().map(|a| a.len());
+        if let Some(n) = results {
+            line.push_str(&format!(" results={n}"));
+        }
+    }
+    eprintln!("{line}");
 }
 
 /// Unused import guard: `sign_request` is re-exported for contract tests.

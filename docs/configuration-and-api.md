@@ -34,7 +34,9 @@ Phlogo Gnosis的配置分为两层：
 | `PHLOGO_CHECKER_WS_URL` | MiaoSpeed 的 WebSocket 地址（如 `ws://127.0.0.1:65432/`）。**worker 未设置时测活任务直接失败**，不会伪造成功。 |
 | `PHLOGO_CHECKER_SECRET` | MiaoSpeed 内联鉴权 token。 |
 | `PHLOGO_CHECKER_VENDOR` | 默认 `Clash`（载荷是 Clash proxy 对象）；`Local` 走直连语义。 |
-| `PHLOGO_DEBUG_FRAMES` | 仅排障：把每个 WS 帧（截断 4000 字符）打到 stderr。**生产不要开**。 |
+| `PHLOGO_DEBUG_FRAMES` | 仅排障：输出**脱敏后**的 WS 帧摘要（frame id、终态标志、错误文本、记录名与延迟、结果数）——**不包含节点 Payload（凭据）与鉴权 token**，总量上限 40 帧。 |
+| `check_schedule_interval_minutes`（configs 表） | CheckJob 周期调度间隔（分钟，默认 30）。**不是** `node_alive_check_window_minutes`（那是健康窗口）。 |
+| `check_batch_size`（configs 表） | 每批提交给 MiaoSpeed 的节点数（默认 50）。 |
 | `PHLOGO_LOGIN_RATE_LIMIT_PER_MIN` | 登录限流阈值（默认 10/min，按真实客户端 IP 分桶）。 |
 | `PHLOGO_TOKEN_PEPPER` | 订阅 token 哈希 pepper。 |
 

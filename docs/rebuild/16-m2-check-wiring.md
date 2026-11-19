@@ -1,8 +1,8 @@
 # 16 M2 · CheckJob 接 MiaoSpeed 真测
 
-> 状态：**完成**（接线 + mock 端到端 + **真 MiaoSpeed 4.7.9 跑通**）。
+> 状态：**完成**，并按 S69 复审完成 **M2.1 可靠性加固**（终态帧强制、调试帧脱敏、持久化一致性）。
 > 依据：方案 §8 / 09 §D.2（M2）；配置键由用户裁定为 `PHLOGO_CHECKER_WS_URL` / `PHLOGO_CHECKER_SECRET`。
-> 提交：ACTION-LOG **S66**。
+> 提交：ACTION-LOG **S66**（接线 + 真机）与 **S69**（加固）。
 
 ## 1. 之前是什么状态
 
@@ -83,10 +83,16 @@ mihomo 的 vmess 还需要 `alterId` 等字段。**这是载荷完整性/保真�
 
 ## 6. 遗留
 
-1. **单位归一化**：`InvokeDuration` 原值直接当毫秒存（除 0→-1 外）。p3-03 的 `normalize`/
-   `reconcile` 有完整逻辑，M4 接上（含 deep 矩阵 → `avg/jitter/speed/region/streaming`）。
-2. **deep 结果**：当前只映射 initial（`TEST_PING_RTT`）；`deep: None`。
-3. **调度**：本页只保证"任务来了能跑完"。谁生成 CheckJob（定时/手动/按分数阈值）是 **M3**。
-4. **vendor 语义**：`Clash` 期待单个 mihomo proxy 对象；`Local` 期待什么（直连 URL？）
-   没有在真机上验证过，登记。
-5. **`PHLOGO_DEBUG_FRAMES` 会打帧内容**（不含 token，但含节点地址），生产别开。
+> S69 加固后更新如下（原 1/2/3 项随 M4/M3 推进）。
+
+1. ~~单位归一化/deep~~ → M4。
+2. ~~调度~~ → 已由 **M3** 交付（见 `17-m3-checkjob-scheduling.md`）。
+3. `PHLOGO_DEBUG_FRAMES` **已脱敏**（S69）：不再输出原始帧；只打 frame id/终态标志/错误文本/
+   queuing/index/记录名与延迟/结果数——**不含 Payload（节点凭据）、不含鉴权 token**，且总量上限
+   40 帧。部署文档同步更新。
+4. **终态帧强制**（S69）：`roundtrip()` 在连接关闭但未收到 `Result` 帧时返回
+   `CheckerError::Protocol`——早期断连不再被当成"全部 unknown 的成功测活"，
+   `early_close_fails_the_run` 测试钉死该行为。
+5. **持久化一致性**（S69）：`persist_all` 把 results + node_status + `check_runs` 终态放进
+   **同一事务**；`existing_ids` 的 DB 错误不再被 `unwrap_or_default()` 吞掉而是让 run 失败；
+   任何必要写入失败都不会留下表面 success 的任务。迟到结果保护规则（late-result guard）未变。

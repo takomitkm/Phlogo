@@ -276,4 +276,20 @@ pub mod misc {
     )]
     #[allow(dead_code)]
     pub fn trigger() {}
+
+    #[utoipa::path(
+        operation_id = "CheckTrigger",
+        post,
+        path = "/api/v1/check/trigger",
+        request_body = serde_json::Value,
+        responses(
+            (status = 202, description = "check jobs enqueued (AdminJWT only)", body = serde_json::Value),
+            (status = 401, description = "missing or invalid credentials"),
+            (status = 403, description = "service identity is not allowed to trigger checks"),
+            (status = 422, description = "no schedulable nodes in the request"),
+            (status = 503, description = "jobs dsn not configured"),
+        )
+    )]
+    #[allow(dead_code)]
+    pub fn check_trigger() {}
 }

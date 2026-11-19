@@ -195,6 +195,7 @@ pub mod health_path {
         paths2::sponsors::delete,
         paths2::misc::login,
         paths2::misc::trigger,
+        paths2::misc::check_trigger,
     ),
     components(schemas(
         CreateSourceReq,

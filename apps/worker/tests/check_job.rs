@@ -13,6 +13,7 @@ async fn setup() -> Option<PgPool> {
 fn job() -> CheckJob {
     CheckJob {
         run_id: Uuid::new_v4(),
+        schedule_id: Uuid::new_v4(),
         checker_tag: "default".into(),
         node_ids: vec![Uuid::new_v4(), Uuid::new_v4()],
         presets: vec!["idle".into()],
@@ -27,7 +28,10 @@ async fn no_duplicate_work() {
         return;
     };
     let j = job();
-    assert!(record_check_run(&pool, &j).await.unwrap(), "first insert wins");
+    assert!(
+        record_check_run(&pool, &j).await.unwrap(),
+        "first insert wins"
+    );
     for _ in 0..3 {
         assert!(
             !record_check_run(&pool, &j).await.unwrap(),

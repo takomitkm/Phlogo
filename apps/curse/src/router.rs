@@ -12,8 +12,8 @@ use app_config::Config;
 
 use crate::auth::{require_api_auth, AuthState};
 use crate::handlers::{
-    auth, config, fetch_trigger, format_config, metrics, node, search, source, sponsor_admin,
-    subscription, subscriptions_admin, views,
+    auth, check_trigger, config, fetch_trigger, format_config, metrics, node, search, source,
+    sponsor_admin, subscription, subscriptions_admin, views,
 };
 use crate::state::AppState;
 
@@ -64,6 +64,7 @@ pub fn build(cfg: Config) -> Router {
 
     let api_v1 = Router::new()
         .route("/fetch/trigger", post(fetch_trigger::trigger))
+        .route("/check/trigger", post(check_trigger::trigger))
         .route("/sources", get(source::list).post(source::create))
         .route(
             "/sources/:id",

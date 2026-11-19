@@ -140,6 +140,63 @@ async fn get(addr: SocketAddr, path: &str) -> (u16, String) {
     (status, body)
 }
 
+/// Raw GET that returns the whole response, headers included (for header assertions).
+async fn get_raw(addr: SocketAddr, path: &str) -> (u16, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nconnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).await.unwrap();
+    stream.flush().await.unwrap();
+    let mut buf = vec![0u8; 262144];
+    let n = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut buf))
+        .await
+        .unwrap()
+        .unwrap_or(0);
+    let text = String::from_utf8_lossy(&buf[..n]).to_string();
+    let status = text
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    (status, text.to_lowercase())
+}
+
+/// Every /sub response — success AND failure — must carry `Cache-Control: no-store`
+/// (S64 review finding #1; real-header assertion demanded by the S68 ruling).
+#[tokio::test]
+async fn every_sub_response_is_no_store() {
+    let Some(pool) = setup().await else {
+        return;
+    };
+    insert_node(&pool, "nocache.example", "pw").await;
+    let token = insert_profile_and_token(&pool, r#"{"operator":"and","conditions":[]}"#).await;
+    let addr = spawn().await;
+
+    for path in [
+        format!("/sub/{token}.yaml"),
+        format!("/sub/{token}.json"),
+        format!("/sub/{token}.base64"),
+        // failure shapes: bad format, unknown token
+        "/sub/not-a-token.bogus".to_string(),
+        "/sub/definitely-unknown-token.yaml".to_string(),
+    ] {
+        let (status, raw) = get_raw(addr, &path).await;
+        assert!(
+            raw.contains("cache-control: no-store"),
+            "{path} (status {status}) must carry Cache-Control: no-store; got:\n{raw}"
+        );
+    }
+
+    sqlx::query("DELETE FROM nodes WHERE server='nocache.example'")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM subscription_profiles WHERE name='m1b-test'")
+        .execute(&pool)
+        .await
+        .ok();
+}
+
 /// YAML and sing-box output must carry the real node, and the profile's AST must filter.
 #[tokio::test]
 async fn renders_real_nodes_and_applies_the_profile_filter() {

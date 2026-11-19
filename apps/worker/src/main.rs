@@ -36,19 +36,44 @@ async fn main() -> anyhow::Result<()> {
         .await
         .expect("unable to run apalis postgres migrations (create the jobs database first)");
 
-    // Periodic scheduling: batch-enqueue fetches for active sources, then run one
-    // lifecycle cleanup tick — both on fixed intervals (plan §2.1 worker loop).
-    // The cleanup interval is config-driven (`cleanup_interval_minutes`, default 30).
+    // Periodic scheduling: batch-enqueue fetches for active sources, run one lifecycle
+    // cleanup tick and one check-scheduling pass — all on fixed intervals (plan §2.1).
+    // First-tick behavior is EXPLICIT: `interval_at(now + period)` (M3 ruling) so a
+    // worker restart does not immediately re-run every scheduler pass; the next tick
+    // happens one full period after startup.
     let cleanup_secs = lifecycle::cleanup_interval_minutes(&pool)
         .await
         .unwrap_or(30)
         .max(1) as u64
         * 60;
+    let check_cfg =
+        worker::load_check_schedule_config(&pool)
+            .await
+            .unwrap_or(worker::CheckScheduleConfig {
+                interval_minutes: 30,
+                batch_size: 50,
+            });
+    let check_secs = check_cfg.interval_minutes.max(1) as u64 * 60;
     let sched_pool = pool.clone();
     let mut sched_fetch = fetch_storage.clone();
+    let mut sched_check = check_storage.clone();
     tokio::spawn(async move {
-        let mut fetch_tick = tokio::time::interval(Duration::from_secs(300));
-        let mut cleanup_tick = tokio::time::interval(Duration::from_secs(cleanup_secs));
+        let now = tokio::time::Instant::now();
+        // All three start one full period AFTER startup (no immediate-fire first tick).
+        // NOTE on the period label: it is minute-granular, so two ticks within the same
+        // minute would share a label and the second would be skipped as duplicate —
+        // that is the desired behavior for sub-minute restarts, and the interval is
+        // always >= 60s by config.
+        let mut fetch_tick =
+            tokio::time::interval_at(now + Duration::from_secs(300), Duration::from_secs(300));
+        let mut cleanup_tick = tokio::time::interval_at(
+            now + Duration::from_secs(cleanup_secs),
+            Duration::from_secs(cleanup_secs),
+        );
+        let mut check_tick = tokio::time::interval_at(
+            now + Duration::from_secs(check_secs),
+            Duration::from_secs(check_secs),
+        );
         loop {
             tokio::select! {
                 _ = fetch_tick.tick() => {
@@ -69,6 +94,21 @@ async fn main() -> anyhow::Result<()> {
                         }
                         Ok(_) => {}
                         Err(e) => tracing::error!(error = %e, "cleanup tick failed"),
+                    }
+                }
+                _ = check_tick.tick() => {
+                    // Period label = UTC date + slot index so the label changes every
+                    // period even across worker restarts within the same minute.
+                    let period = format!(
+                        "period-{}",
+                        chrono::Utc::now().format("%Y%m%dT%H%M")
+                    );
+                    match worker::enqueue_scheduled(&mut sched_check, &sched_pool, &period, &check_cfg).await {
+                        Ok((pushed, skipped, nodes)) if pushed > 0 => {
+                            tracing::info!(pushed, skipped, nodes, %period, "check batch scheduled")
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::error!(error = %e, "check scheduling failed"),
                     }
                 }
             }

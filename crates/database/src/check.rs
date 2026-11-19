@@ -9,7 +9,14 @@ use uuid::Uuid;
 /// `latency_ms == -1` dead; `speed_kbps == 0` untested (Phlogo conventions).
 pub fn build_metrics(
     latency_ms: i32,
-    deep: Option<(i32, i32, i32, Option<String>, serde_json::Value, serde_json::Value)>,
+    deep: Option<(
+        i32,
+        i32,
+        i32,
+        Option<String>,
+        serde_json::Value,
+        serde_json::Value,
+    )>,
 ) -> serde_json::Value {
     let mut m = serde_json::json!({ "latency_ms": latency_ms });
     if let Some((avg, jitter, speed, region, streaming, metadata)) = deep {
@@ -29,7 +36,14 @@ pub fn build_metrics(
 pub struct CheckResultRow {
     pub node_id: Uuid,
     pub latency_ms: i32,
-    pub deep: Option<(i32, i32, i32, Option<String>, serde_json::Value, serde_json::Value)>,
+    pub deep: Option<(
+        i32,
+        i32,
+        i32,
+        Option<String>,
+        serde_json::Value,
+        serde_json::Value,
+    )>,
 }
 
 pub fn result_status_of(latency_ms: i32) -> &'static str {
@@ -50,7 +64,21 @@ pub async fn persist_check_run(
     unreported: &[Uuid],
 ) -> anyhow::Result<usize> {
     let mut tx = pool.begin().await?;
+    let n = persist_check_run_in(tx.as_mut(), run_id, tag, started_at, results, unreported).await?;
+    tx.commit().await?;
+    Ok(n)
+}
 
+/// [`persist_check_run`] inside a caller-owned transaction (M2.1: results + node_status
+/// + terminal state commit together).
+pub async fn persist_check_run_in(
+    tx: &mut sqlx::PgConnection,
+    run_id: Uuid,
+    tag: &str,
+    started_at: Option<DateTime<Utc>>,
+    results: &[CheckResultRow],
+    unreported: &[Uuid],
+) -> anyhow::Result<usize> {
     sqlx::query(
         "INSERT INTO check_runs (id,checker_tag,node_count,status,started_at,finished_at) \
          VALUES ($1,$2,$3,'success',COALESCE($4, now()),now()) \
@@ -94,13 +122,26 @@ pub async fn persist_check_run(
         .rows_affected();
         inserted += n as usize;
     }
-    tx.commit().await?;
     Ok(inserted)
 }
 
 /// Per-tag snapshot upsert guarded by the late-result rule (only strictly newer wins).
 pub async fn upsert_node_status(
     pool: &PgPool,
+    node_id: Uuid,
+    tag: &str,
+    health: &str,
+    checked_at: DateTime<Utc>,
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    upsert_node_status_in(tx.as_mut(), node_id, tag, health, checked_at).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`upsert_node_status`] inside a caller-owned transaction (M2.1 persistence consistency).
+pub async fn upsert_node_status_in(
+    tx: &mut sqlx::PgConnection,
     node_id: Uuid,
     tag: &str,
     health: &str,
@@ -117,7 +158,20 @@ pub async fn upsert_node_status(
     .bind(tag)
     .bind(health)
     .bind(checked_at)
-    .execute(pool)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
+}
+
+/// Flip a run to `success` inside a caller-owned transaction (M2.1: the terminal write
+/// participates in the same commit as the results).
+pub async fn finish_check_run_in(tx: &mut sqlx::PgConnection, run_id: Uuid) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE check_runs SET status='success', finished_at=now() \
+         WHERE id=$1 AND finished_at IS NULL",
+    )
+    .bind(run_id)
+    .execute(&mut *tx)
     .await?;
     Ok(())
 }

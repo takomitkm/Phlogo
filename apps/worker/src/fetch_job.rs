@@ -21,13 +21,13 @@ pub async fn handle_fetch(job: FetchJob, pool: Data<PgPool>) {
 
 /// Run the fetch loop for one source (also used directly by integration tests).
 pub async fn run_fetch(pool: &PgPool, job: FetchJob) {
-    let Some((source_type, content)) = sqlx::query_as::<_, (String, String)>(
-        "SELECT type, content FROM sources WHERE id=$1",
-    )
-    .bind(job.source_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None) else {
+    let Some((source_type, content)) =
+        sqlx::query_as::<_, (String, String)>("SELECT type, content FROM sources WHERE id=$1")
+            .bind(job.source_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None)
+    else {
         tracing::warn!(source_id = %job.source_id, "fetch job for missing source");
         return;
     };
@@ -66,7 +66,9 @@ pub async fn run_fetch(pool: &PgPool, job: FetchJob) {
                             removed = sum.removed,
                             "fetch loop complete"
                         ),
-                        Err(e) => tracing::error!(source_id = %job.source_id, error = %e, "reconcile failed"),
+                        Err(e) => {
+                            tracing::error!(source_id = %job.source_id, error = %e, "reconcile failed")
+                        }
                     }
                 }
                 Err(e) => {

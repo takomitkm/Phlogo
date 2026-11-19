@@ -1647,3 +1647,86 @@ CDN 的默认缓存行为。
 - **`key_version` 未按版本选钥**：轮换 = 多版本密钥 + 逐行重封，独立任务。
 - **`sources.content` 可能含凭据**（订阅原文/URL）：M1a 只解决节点载荷，未解决此暴露面。
 - M2 已完成（`fdd0f67`）；下一步按序 M3（入队/调度）。
+
+---
+
+## [UTC 2026-11-19T17:45:00Z] S68 · M1c 字段保真补齐 + M2.1 加固 + M3 调度完整交付
+
+**用户裁定**（2026-11-19 复审 `9767908`/`5c54424`/`fdd0f67`）：连续执行 M1c 补齐 → M2.1 加固 →
+M3 完整交付；完成后停止，不提前进入 M4。
+
+### A. 阶段一：M1c 字段保真（裁定：闭环要完整，不是核心字段闭环）
+
+| 缺口 | 修复 |
+| --- | --- |
+| VLESS `reality-opts.short-id` 丢失（rebuild 固定 `""`） | `build_node` 先把 URI query 的 `sid` 种进 payload 骨架；`rebuild_raw` 改为**合并**进已存在的 `reality-opts`，只覆写 `public-key` |
+| VLESS `client-fingerprint`（`fp=`）丢失 | 同上：query `fp` → payload `client-fingerprint` |
+| VMess `fp`/ALPN 不恢复 | `parse_vmess` 恢复 `alpn`（逗号拆分）入 `TlsSettings`，并把 `alpn`/`client-fingerprint` 写进重建 payload |
+
+映射表已写进测试注释（Clash field → URI part → parsed slot → rebuilt payload）；
+`sid`/`fp` 标注为 parser-only home（`NormalizedNode` 无对应槽位）。
+
+**身份影响核查（裁定第 4 点）**：`vless_reality_full_fidelity_roundtrip` 断言
+`compute_identity(from_clash(原始payload)) == compute_identity(from_clash(往返重建payload))`
+—— 字段保真修复**不改变**现有节点身份；14 个 golden 指纹测试全部通过（未触碰 `fingerprint.rs`）。
+
+**`/sub` 头部断言（裁定）**：新增 `every_sub_response_is_no_store`（真实 TCP）——
+yaml/json/base64/未知格式/未知 token 五种响应全部断言 `Cache-Control: no-store`。
+
+### B. 阶段二：M2.1 加固（裁定 A/B/C）
+
+- **A 终态帧**：`roundtrip()` 增加 `saw_terminal` 标志——连接在终态 `Result` 前关闭 →
+  `CheckerError::Protocol("connection closed before the terminal Result frame")`。
+  新测试 `early_close_fails_the_run`：无终态帧 → run `failed` 且 **0 行结果**。
+- **B 调试脱敏**：`PHLOGO_DEBUG_FRAMES` 改为结构化输出 `debug_frame()`：frame id/terminal 标志/
+  error 文本/queuing/index/记录名与延迟/结果数——**永不输出 Payload（含节点凭据）与 token**，
+  上限 40 帧。部署文档同步（`docs/configuration-and-api.md`）。
+- **C 持久化一致性**：新 `persist_all()` 把 `persist_check_run_in` + `upsert_node_status_in` +
+  `finish_check_run_in` 放进**一个事务**（`database::check.rs` 新增三个 `*_in` 变体接受
+  `&mut PgConnection`）；`existing_ids()` 的 DB 错误不再 `unwrap_or_default()` 而是让 run 失败。
+  迟到结果保护（late-result guard）语义未动，schema 未动。
+
+### C. 阶段三+四：M3 调度 + 手动触发
+
+- **周期调度**（`apps/worker/src/main.rs` + `check_job.rs::enqueue_scheduled`）：
+  - 配置键 `check_schedule_interval_minutes`（默认 30）与 `check_batch_size`（默认 50），
+    迁移 `0013_check_schedule`；**明确不使用** `node_alive_check_window_minutes` 作间隔（裁定）。
+  - 只调度 **Linked 且有可读密封载荷** 的节点（`schedulable_node_ids`）；首批只用 `TEST_PING_RTT`。
+  - **确定性去重**：`schedule_id = v5(NS, period_label)`，`run_id = v5(schedule_id, batch)`；
+    先 `record_check_run`（幂等 INSERT），**赢的实例才 push job** —— 多 worker/重启不重复。
+  - **首次 tick**：`interval_at(now + interval, ...)` 显式推迟一个整周期（裁定：不依赖 interval
+    隐含的立即首 tick）。
+- **手动触发** `POST /api/v1/check/trigger`（`handlers/check_trigger.rs`）：
+  AdminJWT only（**不扩 ServiceBearer 白名单**，fail-closed 403）；API 只入队，绝不调 MiaoSpeed；
+  显式节点列表先过滤为可调度节点（无 ghost 调度），上限 500 节点、batch clamp [1,100]；
+  返回 **202** + `{enqueued_batches, duplicate_batches, nodes, batch_size}`；全不可调度 → 422；
+  label 带 uuid4 后缀 → 同秒两次触发也是两个独立逻辑运行。
+- OpenAPI 增加 `CheckTrigger` 操作（401/403/202/422/503）。
+
+### D. 验收（一次性 `phlogo_jobs_test_m3`，创建→测试→销毁；不触碰生产队列）
+
+| 套件 | 结果 |
+| --- | --- |
+| worker（含 M3 调度/去重/手动触发/早断连 5 用例） | **7 passed** |
+| curse（含权限矩阵真 TCP 401/403/202/422） | **37 passed** |
+| database（含事务变体回归） | **4 passed** |
+| distribution | **43 passed** |
+| vproxy-adapter（含 sid/fp/alpn 保真 + 身份哈希往返） | **18 passed** |
+| checker-miaospeed | **11 passed** |
+| workspace `rustfmt --check`（含此前两处既有漂移文件，本轮顺手修正） | **clean** |
+| workspace `cargo clippy --all-targets -- -D warnings` | **0** |
+
+### E. 途中修正（记要点）
+
+1. 测试假设 dev 库只有自己的夹具 → 调度测试改**相对断言**（同周期 push==n、重跑全 skip）。
+2. manual 触发的 label 秒级时间戳会撞车 → 服务端 label 加 uuid4 后缀（同秒两次也独立）。
+3. 显式节点列表里的未知 id 会产生 ghost 调度 → 服务端先过滤为可调度节点（`n3` 从 1 改 0）。
+4. `uuid` crate 缺 `v5` feature → workspace 开启。
+5. **校机 C 盘满**（0 GB）→ `cargo clean` 释放 21.9 GB 后重跑。
+6. clippy `explicit_auto_deref`（`&mut *tx` → `tx.as_mut()`）。
+7. `distribution`/`adapter` 合跑一次出现 mingw linker 偶发失败与磁盘错误 → 分包重跑通过。
+
+### 遗留（裁定明确不混入本轮）
+
+- 增量测活、连续失败降级、评分接入（M5）；deep 矩阵与 `InvokeDuration` 归一化（M4）。
+- `enqueue_for_active_sources`（fetch）仍为周期全量入队，无 period 去重（另行裁定是否复用同策略）。

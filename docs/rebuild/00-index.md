@@ -49,6 +49,9 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 | **P1 · M1c** | base64 真实 URI | `15-m1-payload-encryption.md` §5/§6 | 新增 `distribution::uri::uri_from_clash`（ss/vmess/vless/trojan/hysteria2/tuic/socks5/http）；不支持的协议**省略**而非发假链接；**真 mihomo 读 provider：52 节点 → 解析 52，类型 36 Vless + 16 Hysteria2 与源一致**；`distribution` 42 passed |
 | **P1 · M2** | CheckJob 接 MiaoSpeed | `16-m2-check-wiring.md` | `run_check_once`：解密载荷 → `adapter.check()` → 落库 + 节点状态；**真机暴露 3 条协议事实**（Payload 必须是字符串、结果按 payload `name` 映射、`InvokeDuration=0` 即 dead）；mock **2 passed**（含重复投递幂等），**真 MiaoSpeed 4.7.9 跑通** |
 | **P1 · 复审修正** | S64/S65 复审裁定落地 | `15-m1-payload-encryption.md` §5.1 | ① `/sub` 全响应 **Cache-Control: no-store**；② **health 过滤修正**：AST 看节点真实状态（原把档案期望值当节点状态，dead 会漏过），`ProfileSpec.health` 明确为硬条件 alive>degraded>dead>unknown；③ **URI 解析闭环**：vproxy-adapter 新增 URI 列表解析（8 协议、凭据缺失跳过），**builder→parser 逐字段往返测试**；distribution 43 / adapter 16 / curse 35 passed |
+| **P1 · M1c 字段保真** | S69 复审补齐 | `15-m1-payload-encryption.md` §5.2 | **完整无损闭环**：VLESS Reality `sid`/`fp` 不再丢失（rebuild 合并而非固定空串）、VMess `fp`/ALPN 恢复；**身份哈希往返一致**断言（字段保真不得改变节点身份）；`/sub` 增加成功+失败响应的 **no-store 真实头部断言**；adapter 18 passed |
+| **P1 · M2.1 加固** | S69 复审落地 | `16-m2-check-wiring.md` §6 | ① **终态帧强制**：早期断连 → 协议错误 → run failed（不再表面成功）；② **调试帧脱敏**：结构化输出，不含 Payload/token，上限 40 帧；③ **持久化一致性**：results+status+终态同一事务，`existing_ids` 错误上抛；`early_close_fails_the_run` 等新测试钉死 |
+| **P1 · M3 调度** | CheckJob 生产与调度 | `17-m3-checkjob-scheduling.md` | 周期调度（`check_schedule_interval_minutes`/`check_batch_size` 新配置键）+ `POST /api/v1/check/trigger`（AdminJWT only，ServiceBearer 403，202+stats）；**确定性 period/batch UUID v5 去重**（多 worker 不重复）；只调度 Linked+有载荷节点；首批只用 `TEST_PING_RTT`；首次 tick 显式推迟；一次性可销毁 jobs 测试库验证；worker 7 / curse 37 / database 4 / distribution 43 / adapter 18 / checker 11 全绿，workspace fmt+clippy 0 |
 
 ### 实施状态总览（2026-11-13 更新）
 
@@ -58,7 +61,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 > `/sub` 仍输出占位载荷（见 `09-self-completed-gaps.md` §D）。**M1–M27 全部要做**，分两道门禁：
 > 可部署门禁（M1–M5 + M15）/ 生产级门禁（M6–M14 + M18–M27）。
 > 上线总门禁是「抓取 → 真测活 → deep 落库 → 评分更新 → /sub 出真实节点 → mihomo -t 通过 → 真代理出网 204」。
-> **进度**：M1 ✅（S63/S64/S65）；M2 ✅（S66，CheckJob 真测接线 + 真机验证）；下一步 M3（入队/调度）。
+> **进度**：M1 ✅（S63/S64/S65 + S69 保真补齐）；M2 ✅（S66 + S69 加固）；**M3 ✅**（S68，调度 + 手动触发 + 去重）；下一步 M4（deep 测活与协议载荷保真）。
 > 关键决策与偏差均写入对应页面：
 
 - **P0**：VProxy 最小化移植（不作依赖）；MiaoSpeed 自建 `4.7.9`（sha256 记录）；Apalis `0.7.4` PG backend；Vben `v5.7.0`。
