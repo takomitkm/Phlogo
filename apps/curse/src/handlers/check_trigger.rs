@@ -26,9 +26,16 @@ pub struct CheckTriggerReq {
     /// M3.1-2 idempotency key (ruling): the label is used VERBATIM as the schedule
     /// identity. Re-sending the SAME key recovers lost/unpushed batches instead of
     /// creating a second logical run. Omit it for a fresh one-shot trigger.
+    ///
+    /// Capped at 128 characters (S76): the key is concatenated into the period label,
+    /// which is hashed for the schedule id AND echoed back in the response — an
+    /// unbounded key would let a caller put megabytes into a response and a log line.
     #[serde(default)]
     pub idempotency_key: Option<String>,
 }
+
+/// Maximum accepted length of the client-supplied idempotency key (S76).
+const MAX_IDEMPOTENCY_KEY_LEN: usize = 128;
 
 /// POST /api/v1/check/trigger — enqueue CheckJobs (AdminJWT only; 202 with stats).
 pub async fn trigger(State(st): State<AppState>, req: Option<Json<CheckTriggerReq>>) -> Response {
@@ -60,7 +67,21 @@ pub async fn trigger(State(st): State<AppState>, req: Option<Json<CheckTriggerRe
     // Period label = the client's idempotency key when present (verbatim: re-sending
     // the same key recovers instead of duplicating); otherwise a fresh unique label
     // (a new one-shot trigger).
-    let period = match req.idempotency_key.as_deref().map(str::trim) {
+    let key = req.idempotency_key.as_deref().map(str::trim);
+    if let Some(k) = key {
+        if k.len() > MAX_IDEMPOTENCY_KEY_LEN {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!(
+                    "idempotency_key exceeds the {MAX_IDEMPOTENCY_KEY_LEN}-character cap \
+                     (got {})",
+                    k.len()
+                ),
+            )
+                .into_response();
+        }
+    }
+    let period = match key {
         Some(k) if !k.is_empty() => format!("manual-{k}"),
         _ => format!(
             "manual-{}-{}",

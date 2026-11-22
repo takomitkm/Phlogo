@@ -90,6 +90,12 @@ async fn check_trigger_permission_matrix() {
         eprintln!("skip: PHLOGO_TEST_JOBS_DSN not set (refusing to use DATABASE_URL as queue)");
         return;
     };
+    // S76: the disposable queue DB needs the apalis schema. Without this the test only
+    // passed because the WORKER test binary happened to run first in the same gate and
+    // created the tables (a test-order dependency): run this test alone and the push
+    // failed with `relation "apalis.jobs" does not exist`.
+    let jobs_pool = database::connect(&jobs_dsn).await.expect("jobs connect");
+    let _ = apalis_sql::postgres::PostgresStorage::setup(&jobs_pool).await;
     std::env::set_var("PHLOGO_AUTH_JWT_SECRET", "test-jwt-secret-m3");
 
     // Fixture node with a payload so explicit selection has something to schedule.
@@ -184,6 +190,25 @@ async fn check_trigger_permission_matrix() {
     assert_eq!(
         status, 422,
         "501 ids must be rejected, not truncated: {msg}"
+    );
+
+    // S76: an over-long idempotency key must be REJECTED, not accepted and echoed
+    // back (the key lands in the period label, which is hashed AND returned).
+    let long_key = "k".repeat(129);
+    let body_long = format!(r#"{{"idempotency_key":"{long_key}"}}"#);
+    let (status, msg) = post(addr, "/api/v1/check/trigger", Some(&token), &body_long).await;
+    assert_eq!(
+        status, 422,
+        "a 129-character idempotency key must be rejected: {msg}"
+    );
+    // A key AT the cap is accepted (the boundary is inclusive).
+    let ok_key = "k".repeat(128);
+    let body_ok = format!(r#"{{"idempotency_key":"{ok_key}"}}"#);
+    let (status, msg) = post(addr, "/api/v1/check/trigger", Some(&token), &body_ok).await;
+    assert!(
+        status == 202 || status == 422,
+        "a 128-character key is within the cap (422 here would be 'no schedulable \
+         nodes', which is fine): {status} {msg}"
     );
 
     sqlx::query("DELETE FROM nodes WHERE id=$1")

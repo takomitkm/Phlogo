@@ -2162,3 +2162,47 @@ worker **22**（`check_wiring` 20，含 15 项故障注入）/ curse **37** / da
 distribution **43** / adapter **18** / checker **11** 全绿；`rustfmt --check` +
 `clippy --all-targets -- -D warnings` 0；一次性 `phlogo_jobs_test_m3` 建库→测试→销毁，链内断言确认
 删除（`TESTDB_LEFT` 计数 = 0）。
+
+## [UTC 2026-11-22T15:40:00Z] S77 · smart 侧续：幂等键长度上限 + 修掉 curse 测试的顺序依赖
+
+**角色**：本会话已在 `group/group-2` 上运行，本轮检查由本会话直接承担（子代理路由 `group/group-2`
+仍未授权）。本轮沿两条线继续扫 HEAD：API 输入面、以及「测试之间是否有隐藏依赖」。
+
+### 1. `idempotency_key` 无长度上限（已修）
+
+key 会被拼进 period label（原样进 v5 派生、**并回显在响应里**），但此前没有任何长度限制 —— 调用方
+可以把任意长度的字符串塞进响应与日志。新增 `MAX_IDEMPOTENCY_KEY_LEN = 128`，超限一律 **422 明确拒绝**
+（与 `node_ids > 500` 同一口径：不静默截断）。测试断言 129 字符 → 422；128 字符 → 不因长度被拒。
+
+### 2. curse 的 API 测试**依赖 worker 测试的副作用**（已修，且做了基线判定）
+
+单跑 `cargo test -p curse --test check_trigger` 失败：
+
+```
+admin must get 202: error returned from database: relation "apalis.jobs" does not exist
+  left: 500  right: 202
+```
+
+真因不是产品缺陷，而是 curse 测试的 `setup()` 只 migrate **主库**，**从不建 jobs 库的 apalis 表**；
+它在全量门禁里能过，只是因为 worker 测试二进制先跑、顺手建了表 —— 一个**隐藏的测试顺序依赖**。
+
+基线判定（重要）：把 S76 的 push 失败处理退回成原来的 `storage.push(job).await?` 后**同样失败**
+（错误消息少了 `push: ` 前缀而已）⇒ **该失败是既有的**，不是最近几轮引入的回归。
+（顺带说明：想用 `e1d5105` 整体做基线是不行的 —— 那版 `check_job.rs` 与现版 `lib.rs` 不兼容，
+编译不过；改用「只回退这一处」的基线。）
+
+修法：curse 测试自己 `PostgresStorage::setup(&jobs_pool)` 建 apalis schema。现在**单跑也通过**。
+
+### 3. fetch 侧同类问题：如实登记，未擅自扩范围
+
+`handle_fetch` 把错误吞进日志（`let _ = registry::reconcile_fetch_result(..)`）且 fetch worker **没有**
+`.retry(RetryPolicy::..)` —— 与 M3.1 裁定第 3 点在 check 侧修过的问题同构（Apalis 认为成功、不重试）。
+但 fetch 属 **P2 阶段**，裁定明确「M3 只做小范围、不进 M4」，故本轮**只登记不修**，写在 §10.4 第 5 条
+与 §11（业务上不会永久漏抓：下一个 5 分钟周期会重新入队；缺的是单次失败的重试）。
+
+### 门禁（本轮实测）
+
+worker **22** / curse **37** / database **4** / distribution **43** / adapter **18** / checker **11**
+全绿；`rustfmt --check` + `clippy --all-targets -- -D warnings` 0；一次性 `phlogo_jobs_test_m3`
+建库→测试→销毁，链内断言确认删除（`TESTDB_LEFT` 计数 = 0）。另单独验证：`curse` 的
+`check_trigger_permission_matrix` **单跑**通过（此前必须依赖 worker 测试先跑）。

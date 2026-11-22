@@ -493,6 +493,13 @@ S75 就是这么抓到的：`existing_ids()`（测活**返回之后**读主库�
    > 可以**立即**重试，不必等 60s 租约过期；而「租约自然过期、但没人再推」的那种（进程在 push
    > 之后、mark 之前硬死）仍然无自动回收 —— 那才是需要扫描器的那一类。测试
    > `failed_push_releases_the_delivery_claim`。
+5. **fetch（抓取）侧有同一类问题，但不在 M3 范围**（S76 实测记录，未修）：`handle_fetch` 把错误吞进
+   日志（`let _ = registry::reconcile_fetch_result(..)`），返回 `()`；而 fetch worker **没有**配
+   `.retry(RetryPolicy::..)`（check 侧在 M3.1 裁定 3 已经改成「返回 Err + RetryPolicy(3)」）。
+   ⇒ 抓取失败时 Apalis 认为任务**成功**、不会重试，只留一条 `source_fetch_runs` 失败记录；
+   下一个 5 分钟周期会重新入队，所以业务上不会永久漏抓，但**单次失败没有重试**。
+   修法与 check 侧同构（`handle_fetch` 返回 `Result` + worker 加 retry 层），属 P2/fetch 阶段，
+   需要另行裁定（不在 M3 的「小范围」内，本轮不擅自扩范围）。
 
 ### 10.5 门禁（S75 实测，含 timeout 与租约泄漏回归）
 
