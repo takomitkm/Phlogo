@@ -552,6 +552,6 @@ workspace `rustfmt --check` + `clippy --all-targets -- -D warnings` **0**。迁�
 8. **投递侧死行需要运维清理**（S80 实测）：校机 dev 库里有 44 行「过期 `dispatching` +
    `status='started'`」且队列里无对应 job —— 永远不会被认领、也永远不会变终态。节点不受影响
    （见 §10.4.4），但这些行是噪声。清理方式（运维 SQL / 定期任务 / 迁移）待定。
-8. **M4 深度矩阵上线时**：P3 设计稿记的是 30 分钟硬超时（上游 `context.WithTimeout(30*time.Minute)`
+9. **M4 深度矩阵上线时**：P3 设计稿记的是 30 分钟硬超时（上游 `context.WithTimeout(30*time.Minute)`
    等价），当前实现只有 180s（够 ping 批次）。必须**同时**抬高 timeout 与执行租约（或改成执行期心跳
    续租），并重新核算它与 apalis 孤儿窗口的关系——否则 §10.2 的链会断。
