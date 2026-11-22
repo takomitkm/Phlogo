@@ -116,6 +116,45 @@ pub async fn claim_for_push(pool: &PgPool, job: &CheckJob) -> sqlx::Result<Optio
     }))
 }
 
+/// Release a delivery claim WITHOUT enqueuing (the push failed).
+///
+/// The row goes back to `pending`, so the very next attempt can claim it again
+/// immediately — instead of waiting for the 60 s lease to expire. This matters because
+/// nothing re-pushes an expired `dispatching` row on its own (there is no recovery
+/// scanner: §10.4.4), and the periodic scheduler derives a NEW `run_id` per period, so a
+/// batch whose push failed would otherwise be stranded in `dispatching` for good.
+///
+/// Owner-guarded like every other transition: a superseded lease must not resurrect a
+/// row the current holder is already pushing.
+async fn release_push_claim(pool: &PgPool, run_id: Uuid, owner: Uuid) -> sqlx::Result<()> {
+    let applied = sqlx::query(
+        "UPDATE check_runs SET push_state='pending', lease_until=NULL, lease_owner=NULL \
+         WHERE id=$1 AND push_state='dispatching' AND lease_owner=$2",
+    )
+    .bind(run_id)
+    .bind(owner)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        > 0;
+    if !applied {
+        tracing::warn!(
+            run_id = %run_id,
+            "push failed and the delivery lease was already superseded; not releasing it"
+        );
+    }
+    Ok(())
+}
+///
+/// Errors are PROPAGATED to the caller (ruling: never silently swallowed). A failure
+/// here leaves the row in `dispatching` with a running lease — delivery is
+/// at-least-once and the next pass will re-push after the lease expires; the
+/// execution-side gate keeps a redelivered job from re-running a succeeded check.
+///
+/// Returns `true` when the transition applied. `false` means this lease was already
+/// superseded (a slower instance lost it), so the row will be — or is being — pushed
+/// again by its current holder: the caller logs that as the at-least-once window
+/// instead of treating it as success.
 /// Transition a claimed batch to `enqueued` after a successful `storage.push`.
 ///
 /// Errors are PROPAGATED to the caller (ruling: never silently swallowed). A failure
@@ -765,7 +804,14 @@ pub async fn enqueue_scheduled(
         // that wins here will be marked enqueued below; a mark failure surfaces as an
         // error from this pass — delivery stays at-least-once via the expired lease.
         if let Some(claim) = claim_for_push(pool, &job).await? {
-            storage.push(job.clone()).await?;
+            // A failed push must NOT leave the row in 'dispatching': nothing re-pushes
+            // an expired delivery lease (no recovery scanner), and the periodic
+            // scheduler derives a new run_id per period, so a stranded batch would be
+            // lost for good. Release the claim so the next attempt can take it at once.
+            if let Err(e) = storage.push(job.clone()).await {
+                release_push_claim(pool, job.run_id, claim.owner).await?;
+                return Err(anyhow::anyhow!("push: {e}"));
+            }
             // A superseded lease is not an error — the current holder pushes again
             // (that IS the at-least-once window) — but it must be visible in logs.
             if !mark_enqueued(pool, job.run_id, claim.owner).await? {
@@ -838,7 +884,14 @@ pub async fn trigger_check_batch(
             presets: vec!["TEST_PING_RTT".into()],
         };
         if let Some(claim) = claim_for_push(pool, &job).await? {
-            storage.push(job.clone()).await?;
+            // A failed push must NOT leave the row in 'dispatching': nothing re-pushes
+            // an expired delivery lease (no recovery scanner), and the periodic
+            // scheduler derives a new run_id per period, so a stranded batch would be
+            // lost for good. Release the claim so the next attempt can take it at once.
+            if let Err(e) = storage.push(job.clone()).await {
+                release_push_claim(pool, job.run_id, claim.owner).await?;
+                return Err(anyhow::anyhow!("push: {e}"));
+            }
             // A superseded lease is not an error — the current holder pushes again
             // (that IS the at-least-once window) — but it must be visible in logs.
             if !mark_enqueued(pool, job.run_id, claim.owner).await? {

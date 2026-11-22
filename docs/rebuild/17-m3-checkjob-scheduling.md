@@ -474,6 +474,25 @@ S75 就是这么抓到的：`existing_ids()`（测活**返回之后**读主库�
 3. **幂等键不绑定请求内容**：服务端不保存 `node_ids`/`batch_size` 摘要，同 key 配不同请求会让
    batch k 对应不同节点集合。执行侧仍按 `run_id` 去重（先到者执行），所以不会重复测活，但
    「恢复」的语义不完整。后续应为 key 保存请求摘要（fingerprint）。
+4. **投递侧（`push_state='dispatching'`）的过期租约也没有人回收**（S76 实测确认）：迁移 0014 建了
+   `idx_check_runs_push_recovery` 索引，但**没有任何代码查询它** —— 没有扫描器、没有后台任务。
+   后果具体是：
+   - `enqueue_scheduled` 里 `storage.push(job).await?` 失败 → 该批次停在 `dispatching`，租约 60s 后过期；
+   - 但**周期调度不会回头重推它**：下一周期用的是**新** `run_id`（`scheduled_run_id(schedule_id, batch)`
+     按周期 label 派生），旧 run_id 再也不会被 `claim_for_push` 命中；
+   - 所以一个 push 失败的批次，**在周期任务里就是永久丢失**（节点要等下一周期才被重新测活，
+     因为每周期都会按新 run_id 重新调度同一批节点——所以业务上「不会漏测」，但那一轮的
+     `check_runs` 行会永远停在 `dispatching`）；
+   - **手动触发**则可以救：同一 `idempotency_key` 重发 → 同一个 label → 同一个 `run_id` →
+     `claim_for_push` 命中「过期 dispatching」→ 重推。
+   ⇒ 结论：**投递侧没有自动恢复；可自动恢复的只有「同一幂等键重发」。** 这与执行侧不同
+   （执行侧靠 apalis 孤儿重投自愈，见 §10.4.1）。要统一，得写那个扫描器（用现成的
+   `idx_check_runs_push_recovery` 索引），或让周期调度在派发前先回收本周期 label 下的旧行。
+   > **S76 已把「push 失败」这一最常见的入口堵上**：`storage.push()` 出错时立刻
+   > `release_push_claim()` 把该行从 `dispatching` 放回 **`pending`**（owner 守卫），于是下一次尝试
+   > 可以**立即**重试，不必等 60s 租约过期；而「租约自然过期、但没人再推」的那种（进程在 push
+   > 之后、mark 之前硬死）仍然无自动回收 —— 那才是需要扫描器的那一类。测试
+   > `failed_push_releases_the_delivery_claim`。
 
 ### 10.5 门禁（S75 实测，含 timeout 与租约泄漏回归）
 
@@ -497,8 +516,9 @@ workspace `rustfmt --check` + `clippy --all-targets -- -D warnings` **0**。迁�
 4. 投递语义是 **at-least-once**：崩溃窗口内可能有重复 push；执行侧已由**原子执行租约**收口（§10），
    所以同一 `run_id` 只会有一个执行者进 MiaoSpeed。
 5. **没有我们自己的统一 outbox / 过期租约恢复扫描器**（投递租约与执行租约都没有）。执行侧崩溃靠
-   apalis 的孤儿重投（300s，见 §10.4.1），周期任务不会回头救旧周期。要「无人值守地恢复所有过期
-   未完成 run（含队列行已被消费的）」就需要该扫描器——本轮按裁定未加。
+   apalis 的孤儿重投（300s，见 §10.4.1），周期任务不会回头救旧周期。**投递侧的过期租约连 apalis 也
+   救不了**（队列里根本没有那个 job），只能靠同一幂等键重发——见 §10.4.4。要「无人值守地恢复所有
+   过期未完成 run」就需要该扫描器（`idx_check_runs_push_recovery` 索引已就位），本轮按裁定未加。
 6. 常数是一组**互相约束**的值，改动前先读 §10.2 的不等式链：投递租约 60s（`DELIVERY_LEASE_SECS`）、
    执行租约 240s（`EXEC_LEASE_SECS`）、单次执行超时 180s（`CHECK_RUN_TIMEOUT_SECS`）、
    apalis 孤儿窗口 300s（`APALIS_ORPHAN_REENQUEUE_SECS`，我们**显式设置**而非依赖默认）与

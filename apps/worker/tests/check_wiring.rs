@@ -1237,6 +1237,84 @@ async fn concurrent_executions_of_one_run_id_hit_miaospeed_once() {
         .ok();
 }
 
+/// Fault #12 (M3.1-3d): a FAILED push releases the delivery claim.
+///
+/// Nothing re-pushes an expired `dispatching` row (there is no recovery scanner), and
+/// the periodic scheduler derives a new `run_id` per period — so a batch whose push
+/// failed would be stranded in `dispatching` for good. The scheduler therefore releases
+/// the claim on a push failure, putting the row back to `pending` so the next attempt
+/// can take it immediately.
+///
+/// Forced by pointing the storage at a database that does not exist: the push fails
+/// while the claim (on the real DB) has already been taken.
+#[tokio::test]
+async fn failed_push_releases_the_delivery_claim() {
+    use worker::{
+        enqueue_scheduled, schedule_id_for_label, scheduled_run_id, CheckJob, CheckScheduleConfig,
+    };
+
+    let Some(pool) = setup().await else {
+        return;
+    };
+
+    let server = format!("m31-pushfail-{}.example", Uuid::new_v4().simple());
+    let node = seed_node(&pool, &server, "pw").await;
+
+    // The scheduler derives its own run id from the period label — derive the very same
+    // one here, so we can inspect the row the scheduler will claim.
+    let period = "m31-pushfail-period";
+    let run_id = scheduled_run_id(schedule_id_for_label(period), 0);
+
+    // A storage pointed at a dead database: every push fails.
+    let dead_dsn = "postgres://phlogo:change-me@127.0.0.1:1/phlogo_jobs_dead";
+    let dead_pool = database::connect_lazy(dead_dsn).expect("lazy dead pool");
+    let mut dead_storage: apalis_sql::postgres::PostgresStorage<CheckJob> =
+        apalis_sql::postgres::PostgresStorage::new(dead_pool);
+    let cfg = CheckScheduleConfig {
+        interval_minutes: 30,
+        batch_size: 10,
+    };
+    let res = enqueue_scheduled(&mut dead_storage, &pool, period, &cfg).await;
+    assert!(res.is_err(), "the push must surface as an error");
+
+    let state: Option<String> = sqlx::query_scalar("SELECT push_state FROM check_runs WHERE id=$1")
+        .bind(run_id)
+        .fetch_optional(&pool)
+        .await
+        .expect("state query");
+    assert_eq!(
+        state.as_deref(),
+        Some("pending"),
+        "a failed push must release the delivery claim so the batch can be retried"
+    );
+
+    // And the released row is claimable again right away (no 60 s lease wait).
+    let reclaim = worker::claim_for_push(
+        &pool,
+        &CheckJob {
+            run_id,
+            schedule_id: schedule_id_for_label(period),
+            checker_tag: "default".into(),
+            node_ids: vec![node],
+            presets: vec![],
+        },
+    )
+    .await
+    .expect("re-claim");
+    assert!(reclaim.is_some(), "a released row must be claimable again");
+
+    sqlx::query("DELETE FROM nodes WHERE server=$1")
+        .bind(&server)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM check_runs WHERE id=$1")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
 /// Fault #11 (M3.1-3c): a SOURCE-SHAPE guard for the "every early exit releases the lease"
 /// rule.
 ///

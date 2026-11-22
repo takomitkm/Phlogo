@@ -2118,3 +2118,47 @@ distribution **43** / adapter **18** / checker **11** 全绿；`cargo check --wo
 
 子代理路由 `magpie/group/group-2` 未授权 —— 若希望「检查由 group-2 的**独立代理**做」而不是由本会话
 以 group-2 身份做，需要在会话/插件配置里放开该路由。
+
+## [UTC 2026-11-22T15:10:00Z] S76 · smart 侧复核续：投递侧 push 失败释放认领 + 形状守卫的盲区自查
+
+**角色**：本会话已在 `group/group-2` 上运行，故本轮「检查/裁定」由本会话直接承担（子代理路由
+`magpie/group/group-2` 仍未授权，白名单只有 `group/group-3`）。上一条 S75 修掉了执行侧第三处租约泄漏；
+本轮继续按「逐条早退路径」与「投递侧租约归属」两条线扫 HEAD。
+
+### 发现 1：投递侧的「无人回收」缺口（已修最常见入口）
+
+实测确认：迁移 0014 建了 `idx_check_runs_push_recovery` 索引，但**没有任何代码查询它** —— 没有扫描器、
+没有后台任务。而 `enqueue_scheduled` / `trigger_check_batch` 里 `storage.push(job).await?` 失败时直接
+`?` 返回，该行停在 `dispatching`：
+
+- 周期调度**不会**回头重推它：下一周期是**新** `run_id`（`scheduled_run_id(schedule_id, batch)` 按
+  周期 label 派生），旧 run_id 再也不会被 `claim_for_push` 命中；
+- 手动触发可以救：同一 `idempotency_key` 重发 → 同一 label → 同一 run_id → 命中「过期 dispatching」。
+
+修法（不扩裁定范围、不写扫描器）：push 失败时调用新增的 `release_push_claim()`，把该行从
+`dispatching` 放回 **`pending`**（owner 守卫：租约已被接管时不动别人的行），于是下一次尝试可以
+**立即**重试，不必等 60s 租约过期。两处 push 调用点（调度路径 + 手动触发路径）都改。
+仍无自动回收的是「进程在 push 之后、mark 之前硬死」那一类 —— 那才是需要扫描器的。
+
+测试 `failed_push_releases_the_delivery_claim`：把 storage 指向一个**不存在的数据库**让 push 必然
+失败，断言调度器派生出的那一行回到 `pending`，并可立即重新认领。
+
+### 发现 2：我自己写的守卫有盲区（已修）
+
+`every_early_exit_after_the_exec_claim_releases_the_lease` 第一版只匹配 `return Err(`，而 S75 那个泄漏
+恰恰是**裸 `?`**（没有 `return`）—— 也就是说，我为它写的守卫**抓不到它自己要防的形状**。
+基线对照暴露了这一点（回退修复后守卫仍报「passed」）。现在守卫同时匹配「以 `?` 结尾的行」，
+基线对照再跑即失败并点名那一行。
+
+### 文档
+
+- §10.4 新增第 4 条「投递侧过期租约也没有人回收」（含索引存在但无人查询的实测），并说明 S76 堵住了
+  push 失败这一入口、剩下的类别仍需扫描器；
+- §11.5 同步（执行侧靠 apalis 孤儿重投自愈，投递侧连 apalis 也救不了 —— 队列里根本没有那个 job）。
+
+### 门禁（本轮实测）
+
+worker **22**（`check_wiring` 20，含 15 项故障注入）/ curse **37** / database **4** /
+distribution **43** / adapter **18** / checker **11** 全绿；`rustfmt --check` +
+`clippy --all-targets -- -D warnings` 0；一次性 `phlogo_jobs_test_m3` 建库→测试→销毁，链内断言确认
+删除（`TESTDB_LEFT` 计数 = 0）。
