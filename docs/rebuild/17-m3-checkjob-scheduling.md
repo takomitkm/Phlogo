@@ -348,8 +348,8 @@ MiaoSpeed.check(...)             // 两个执行者都读到了 'started' → �
 ### 10.2 执行租约（迁移 0015）
 
 `check_runs` 新增 `exec_owner uuid` + `exec_lease_until timestamptz`，并加部分索引
-`idx_check_runs_exec_lease (exec_lease_until) WHERE exec_lease_until IS NOT NULL`（供恢复扫描用）。
-**0014 未改动**（已应用迁移不可再改，§9.6 纪律）。
+`idx_check_runs_exec_lease (exec_lease_until) WHERE exec_lease_until IS NOT NULL`（供将来自动恢复
+扫描 / 运维查询用；**本轮没有**扫描器，见 §10.4）。**0014 未改动**（已应用迁移不可再改，§9.6 纪律）。
 
 **认领是一条语句**（`claim_for_exec`）：
 
@@ -371,7 +371,31 @@ RETURNING exec_owner
 - 认领同时**开启一次新尝试**（`status='started'`、`finished_at=NULL`）：`failed` 是可认领的
   （Apalis 重试路径），不重置的话终态写入永远被 `finished_at IS NULL` 挡住，重试成功也记不进
   `success`。
-- 执行租约 900s（`EXEC_LEASE_SECS`），要覆盖一批真实测活；超时即「死亡执行者让位」。
+
+#### 三个数字是**有依赖关系**的（S73 修正）
+
+租约长度不能随手定。实现里是一条不等式链（`check_job.rs` 的 `CHECK_RUN_TIMEOUT_SECS` /
+`EXEC_LEASE_SECS` 常量注释里也钉着）：
+
+```text
+CHECK_RUN_TIMEOUT_SECS (180s) < EXEC_LEASE_SECS (240s) < apalis reenqueue_orphaned_after (300s)
+   活着执行者一定在租约被     死掉的执行者，等到孤儿 job                 …所以那次重投**能赢**
+   抢走之前结束                被重投时租约已过期                        认领，而不是空转
+```
+
+- **为什么必须有 timeout**：adapter 自身**没有任何超时**（查证 `crates/checker-miaospeed`，无
+  `timeout`）；一个「接了 WebSocket 但永不发终态帧」的 MiaoSpeed 会把 worker 槽位永久占住，而且
+  执行会跨过租约边界 → 另一条投递可以抢到租约并**同时**进 MiaoSpeed。所以 `run_check_once` 用
+  `tokio::time::timeout` 包住 `adapter.check`，超时按失败处理（`fail_check_run` + 释放租约），
+  Apalis 可重试。可用 `PHLOGO_CHECK_TIMEOUT_SECS` 覆盖（测试用 1s；会被夹到租约以下）。
+- **为什么租约必须短于 apalis 的孤儿窗口**：apalis-sql 0.7.4 默认 `keep_alive=30s`、
+  `reenqueue_orphaned_after=300s`，且 `reenqueue_orphaned()` 会把「worker 心跳已死」的
+  `Running` job 重置回 `Pending`（`last_error='Job was abandoned'`）。若租约比这个窗口长，重投会
+  撞上**仍然有效的租约** → `claim_for_exec` 返回 `None` → 该投递按 no-op 返回 `Ok` → Apalis 把它
+  标成 done，**唯一一次恢复机会被烧掉**，run 永远停在 `started`。所以租约取 240s < 300s。
+- 180s 是按**当前只发 ping**（`TEST_PING_RTT`，秒级）定的。P3 设计稿记的 30 分钟硬超时是上游
+  `context.WithTimeout(30*time.Minute)` 的等价目标；**M4 深度矩阵上线时必须同时抬高 timeout 与
+  租约**（或改为执行期心跳续租），否则上面这条链会断。见 §11.8。
 
 **终态写入同样带 owner 守卫，并在同一条语句里释放租约**：
 
@@ -393,26 +417,35 @@ RETURNING exec_owner
 | `exec_claim_is_exclusive` | 6 路并发认领同一 run（独立连接池），断言**恰好 1 个赢家**，且行里记录的 `exec_owner` 就是它 | 通过；不依赖时序 |
 | `concurrent_executions_of_one_run_id_hit_miaospeed_once` | 两个 handler 同时执行**同一 `run_id`**（屏障 + 两个独立池），mock MiaoSpeed 把首个请求挂 400ms；断言 checker **只收到 1 次** submit、输家 `Ok`、run 终态 `success`、结果 1 行、租约已清 | 通过 |
 | **基线对照** | 把 worker 换回 `e1d5105` 的 `check_job.rs`/`lib.rs` 跑同一测试 | **`left: 2, right: 1`** —— 旧代码确实打两次，测试有区分力，不是「永远绿」 |
+| `hung_checker_times_out_and_releases_the_lease` | mock 接了请求但 30s 不回终态帧；把 `PHLOGO_CHECK_TIMEOUT_SECS` 设成 1s → 断言 `run_check_once` 返回 `Err`、耗时 < 10s、只发生 1 次 submit、run 变 `failed`、`exec_owner`/`exec_lease_until` 均已释放 | 通过（这才是「互斥不会被一次挂住的测活破坏」的实测证据） |
 
-### 10.4 仍然没有的东西（如实，别过度声称）
+### 10.4 恢复的真实边界（S73 修正，别过度声称也别过度悲观）
 
-1. **没有后台恢复扫描器**。执行租约过期只是「允许被再认领」，不是自动恢复：没有任何东西会主动再
-   投递那个 `run_id`。周期任务的下一周期用的是**新** `run_id`，**所以上一周期卡在 `started` 的
-   记录不会自己好**。当前真正可自动恢复的只有一种：**同一 idempotency key 的手动重发**（§9.3）。
-   ⇒ 文档与对外说明**不得**把周期任务描述成「全部可自动恢复」。
-2. **幂等键不绑定请求内容**：服务端不保存 `node_ids`/`batch_size` 摘要，同 key 配不同请求会让
+1. **执行侧崩溃是可以被自动恢复的**——但不是靠我们的扫描器，而是靠 apalis 自带的孤儿重投：
+   apalis-sql 0.7.4 默认 `reenqueue_orphaned_after=300s`，worker 心跳（`keep_alive=30s`）停 300s 后，
+   它持有的 `Running` job 会被重置回 `Pending` 重新投递；因为执行租约（240s）**短于**这个窗口，
+   那次重投能赢认领并把检查重跑。前提是「先崩的 worker 心跳真的停了」。
+2. **仍然没有我们自己的 outbox / 过期租约扫描器**（投递租约与执行租约都没有）。由此留下的真实缺口：
+   - **周期任务不会回头救旧周期**：下一周期用的是**新** `run_id`，上周期卡住的记录不会被下一周期
+     重推；只有 apalis 的孤儿重投（上面 1）能救，且只针对「job 还在队列里、worker 心跳已死」的情形。
+   - **队列行已被消费的情况**：若那条 job 已被标成 `Done`/`Killed`（例如某次投递在租约仍有效时
+     按 no-op 返回了 `Ok`），后面就没人再投递它，run 会停在 `started`。§10.2 的三个不等式正是为了
+     让这条路径不出现，但一旦有人改坏常数（例如把租约调回 900s），缺口就会重新打开。
+   - 手动触发的恢复仍靠**同一 idempotency key 重发**（§9.3），这是唯一「人按一下就能救」的入口。
+3. **幂等键不绑定请求内容**：服务端不保存 `node_ids`/`batch_size` 摘要，同 key 配不同请求会让
    batch k 对应不同节点集合。执行侧仍按 `run_id` 去重（先到者执行），所以不会重复测活，但
    「恢复」的语义不完整。后续应为 key 保存请求摘要（fingerprint）。
-3. 崩溃在「check 已发出、结果未落库」时，该 run 会停在 `started` 直到有人重新投递（同上 1）。
 
-### 10.5 门禁（S72 实测）
+### 10.5 门禁（S73 实测，含 timeout 回归）
 
-worker **18**（`check_wiring` 16，含 11 项故障注入）/ curse **37** / database **4** /
-distribution **43** / adapter **18** / checker **11** 全绿；workspace `rustfmt --check` +
-`clippy --all-targets -- -D warnings` **0**。迁移 0001…0015 在一次性库 `phlogo_mig_scratch`
-全序执行 → (push_state 三列 3、`pushed` 0、恢复索引 1、configs 2、执行租约两列 2、执行租约索引 1)
-→ `0015.down` 只清执行租约（两列 0、索引 0、push_state 三列**仍为 3**）→ `0014.down` → `0013.down`
-→ 删库。一次性 `phlogo_jobs_test_m3` 建库→测试→销毁，生产 `phlogo_jobs` 零接触。
+worker **19**（`check_wiring` 17，含 12 项故障注入，新增 `hung_checker_times_out_and_releases_the_lease`）
+/ curse **37** / database **4** / distribution **43** / adapter **18** / checker **11** 全绿；
+workspace `rustfmt --check` + `clippy --all-targets -- -D warnings` **0**。迁移 0001…0015 在一次性库
+`phlogo_mig_scratch` 全序执行 → (push_state 三列 3、`pushed` 0、恢复索引 1、configs 2、执行租约两列 2、
+执行租约索引 1) → `0015.down` 只清执行租约（两列 0、索引 0、push_state 三列**仍为 3**）→ `0014.down`
+→ `0013.down` → 删库。一次性 `phlogo_jobs_test_m3` 建库→测试→销毁（**删除由链内断言校验：
+`TESTDB_LEFT` 计数必须为 0**，S73 修掉了「内联长链尾部不执行却 EXIT=0」的假通过），生产
+`phlogo_jobs` 零接触。
 
 ## 11. 遗留
 
@@ -422,10 +455,14 @@ distribution **43** / adapter **18** / checker **11** 全绿；workspace `rustfm
 3. 深度矩阵/协议载荷保真属 **M4**（**冻结中**，裁定不进入）；`InvokeDuration` 归一化接 p3-03 也在 M4。
 4. 投递语义是 **at-least-once**：崩溃窗口内可能有重复 push；执行侧已由**原子执行租约**收口（§10），
    所以同一 `run_id` 只会有一个执行者进 MiaoSpeed。
-5. **没有统一 outbox / 过期租约恢复扫描器**（投递租约与执行租约都没有）。这意味着：
-   过期租约只是「可被再认领」，**没有任何后台任务会主动去恢复它**；周期任务卡住的那一周期不会自己
-   恢复（下一周期是新 `run_id`）。要「无人值守恢复」就需要该扫描器——本轮按裁定未加。
-6. 投递租约 60s（`DELIVERY_LEASE_SECS`）、执行租约 900s（`EXEC_LEASE_SECS`）：链路耗时若长期超过
-   它们，会出现重复 push / 重复认领（执行侧仍互斥，但会多一次真实测活的重试机会），需按部署调大。
+5. **没有我们自己的统一 outbox / 过期租约恢复扫描器**（投递租约与执行租约都没有）。执行侧崩溃靠
+   apalis 的孤儿重投（300s，见 §10.4.1），周期任务不会回头救旧周期。要「无人值守地恢复所有过期
+   未完成 run（含队列行已被消费的）」就需要该扫描器——本轮按裁定未加。
+6. 常数是一组**互相约束**的值，改动前先读 §10.2 的不等式链：投递租约 60s（`DELIVERY_LEASE_SECS`）、
+   执行租约 240s（`EXEC_LEASE_SECS`）、单次执行超时 180s（`CHECK_RUN_TIMEOUT_SECS`）、
+   apalis 孤儿窗口 300s。调大其中任何一个都要同步检查另外两个，否则「互斥」或「可恢复」会失效。
 7. **幂等键未绑定请求摘要**：同 key 配不同 `node_ids`/`batch_size` 不报错、也不区分；后续应为
    `manual-<key>` 保存请求 fingerprint 并在不匹配时拒绝（412/409）。
+8. **M4 深度矩阵上线时**：P3 设计稿记的是 30 分钟硬超时（上游 `context.WithTimeout(30*time.Minute)`
+   等价），当前实现只有 180s（够 ping 批次）。必须**同时**抬高 timeout 与执行租约（或改成执行期心跳
+   续租），并重新核算它与 apalis 孤儿窗口的关系——否则 §10.2 的链会断。

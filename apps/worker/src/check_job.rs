@@ -153,10 +153,18 @@ pub async fn mark_enqueued_for_test(
 
 /// Execution lease length (M3.1-3).
 ///
-/// The delivery lease bounds the push window; this one bounds a real MiaoSpeed check of
-/// one batch. It must comfortably exceed that check, and it is the window after which an
-/// executor that died mid-run may be re-claimed by another delivery.
-pub const EXEC_LEASE_SECS: i64 = 900;
+/// The delivery lease bounds the push window; this one bounds the execution right. Its
+/// length is NOT arbitrary — it sits between two hard bounds (see the module notes on
+/// [`CHECK_RUN_TIMEOUT_SECS`]):
+///
+/// * **> the per-run timeout**: a live executor always finishes (or is failed) before its
+///   own lease can expire, so a concurrent claimant that grabs the expired lease can
+///   never overlap a running check.
+/// * **< apalis's `reenqueue_orphaned_after` (300 s by default in apalis-sql 0.7.4)**:
+///   a crashed executor's job is re-enqueued once its worker heartbeat is 300 s stale;
+///   by then this lease has already expired, so that re-delivery actually WINS the claim
+///   instead of being a no-op that burns the only recovery chance.
+pub const EXEC_LEASE_SECS: i64 = 240;
 
 /// Atomically take the EXECUTION right for one run (M3.1-3, ruling 2026-11-22).
 ///
@@ -193,7 +201,54 @@ pub async fn claim_for_exec(pool: &PgPool, run_id: Uuid) -> sqlx::Result<Option<
     Ok(row.map(|_| owner))
 }
 
+/// Wall-clock cap for one execution of a check run (M3.1-3).
+///
+/// The adapter itself has no timeout: a checker that accepts the connection and never
+/// sends the terminal frame would hold the worker forever, and would also outlive the
+/// execution lease (letting a second delivery run MiaoSpeed concurrently). The cap keeps
+/// the execution inside the lease.
+///
+/// **Invariant chain** (all three numbers are load-bearing):
+///
+/// ```text
+/// CHECK_RUN_TIMEOUT_SECS (180 s)  <  EXEC_LEASE_SECS (240 s)  <  apalis reenqueue_orphaned_after (300 s)
+///    a live executor ends           a dead executor's lease       ...so the orphaned job's
+///    before its lease can be        has expired by the time       re-delivery actually wins
+///    stolen                         the re-delivery arrives        the claim (not a no-op)
+/// ```
+///
+/// 180 s is sized for today's ping-only batches (`TEST_PING_RTT`, seconds of work). The
+/// P3 sketch recorded a 30-minute hard timeout mirroring upstream's
+/// `context.WithTimeout(30*time.Minute)`; when M4 deep matrices arrive, raise the timeout
+/// **and** the lease together (or add lease renewal), otherwise this chain breaks.
+/// Override with `PHLOGO_CHECK_TIMEOUT_SECS` (tests use 1 s; clamped below the lease).
+pub const CHECK_RUN_TIMEOUT_SECS: i64 = 180;
+
+/// Effective per-run timeout: env override, clamped to remain below the lease.
+fn check_run_timeout_secs() -> u64 {
+    let requested = env_nonempty("PHLOGO_CHECK_TIMEOUT_SECS")
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(CHECK_RUN_TIMEOUT_SECS as u64);
+    let ceiling = (EXEC_LEASE_SECS as u64).saturating_sub(30).max(1);
+    if requested > ceiling {
+        tracing::warn!(
+            requested,
+            ceiling,
+            "PHLOGO_CHECK_TIMEOUT_SECS exceeds the execution lease; clamping"
+        );
+        return ceiling;
+    }
+    requested
+}
+
 /// Mark the run finished (idempotent: only the first transition wins).
+///
+/// ⚠️ This does NOT participate in the execution lease (M3.1-3): no owner guard, no
+/// lease release. Production execution paths must use
+/// `database::check::finish_check_run_owned_in` through `persist_all`; this form exists
+/// for the terminal-transition idempotency test only. Calling it on a leased run would
+/// leave a stale `exec_owner` and is therefore a bug in any new caller.
 ///
 /// `check_runs` uses `success` as its terminal-ok status (`source_fetch_runs` uses
 /// `finished`; the two tables are separate vocabularies, see p3-04).
@@ -309,10 +364,14 @@ async fn existing_ids(pool: &PgPool, ids: &[Uuid]) -> sqlx::Result<HashSet<Uuid>
 ///   persisted once;
 /// * `failed` runs ARE claimable (that is the Apalis retry path) — the claim starts a
 ///   fresh attempt (`status='started'`, `finished_at=NULL`);
-/// * if an executor dies mid-run, its lease expires after [`EXEC_LEASE_SECS`] and another
-///   delivery may take the run over. There is deliberately **no background scanner**:
-///   an expired execution lease is only picked up if something delivers that run again
-///   (the exact limits are written down in the M3 page §10.4 / §11).
+/// * execution is bounded by [`CHECK_RUN_TIMEOUT_SECS`], which is kept below the lease, so
+///   a live executor never lets its lease be stolen mid-check;
+/// * a crashed executor IS recoverable without any scanner of ours: apalis-sql re-enqueues
+///   jobs whose worker heartbeat went stale (300 s by default), and because the lease is
+///   shorter than that window the re-delivery wins the claim and re-runs the check. The
+///   residual gap is a run whose queue row was already consumed as `Done`/`Killed` while
+///   the lease was still live — the invariant chain above is what keeps that from
+///   happening for the normal paths (see the M3 page §10.4).
 pub async fn run_check_once(pool: &PgPool, job: &CheckJob) -> anyhow::Result<()> {
     if let Err(e) = record_check_run(pool, job).await {
         tracing::error!(run_id = %job.run_id, error = %e, "record_check_run failed");
@@ -386,11 +445,24 @@ pub async fn run_check_once(pool: &PgPool, job: &CheckJob) -> anyhow::Result<()>
     };
 
     let adapter = MiaoSpeedAdapter::new(url, secret);
-    let results = match adapter.check(&request).await {
-        Ok(r) => r,
-        Err(e) => {
+    // Bounded execution: a hung checker must not outlive the execution lease (see
+    // CHECK_RUN_TIMEOUT_SECS) and must not pin a worker slot forever.
+    let timeout_secs = check_run_timeout_secs();
+    let results = match tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        adapter.check(&request),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
             fail_check_run(pool, job.run_id, exec_owner, &format!("checker: {e}")).await;
             return Err(anyhow::anyhow!("checker: {e}"));
+        }
+        Err(_elapsed) => {
+            let reason = format!("checker timed out after {timeout_secs}s");
+            fail_check_run(pool, job.run_id, exec_owner, &reason).await;
+            return Err(anyhow::anyhow!(reason));
         }
     };
 

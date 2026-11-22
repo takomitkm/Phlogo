@@ -1239,3 +1239,85 @@ async fn concurrent_executions_of_one_run_id_hit_miaospeed_once() {
         .await
         .ok();
 }
+
+/// Fault #9 (M3.1-3 follow-up): a HUNG checker is bounded.
+///
+/// The adapter has no built-in timeout, so without a cap a stuck check could outlive the
+/// execution lease — and then a second delivery could claim the run while the first was
+/// still inside MiaoSpeed, i.e. mutual exclusion would only hold inside the lease window.
+/// Here the mock accepts the request and never answers; the run must fail on the timeout
+/// and the lease must be released so the Apalis retry can take it.
+#[tokio::test]
+async fn hung_checker_times_out_and_releases_the_lease() {
+    use std::sync::atomic::Ordering;
+
+    let Some(pool) = setup().await else {
+        return;
+    };
+    let _guard = ENV_LOCK.lock().await;
+
+    // Answers only after 30 s; the cap below is 1 s.
+    let (addr, submits) = mock_server_counting(37, Duration::from_secs(30)).await;
+    std::env::set_var("PHLOGO_CHECKER_WS_URL", format!("ws://{addr}"));
+    std::env::set_var("PHLOGO_CHECKER_SECRET", "test-secret");
+    std::env::set_var("PHLOGO_CHECK_TIMEOUT_SECS", "1");
+
+    let server = format!("m31-hang-{}.example", Uuid::new_v4().simple());
+    let node = seed_node(&pool, &server, "pw").await;
+    let run_id = Uuid::new_v4();
+    let job = CheckJob {
+        run_id,
+        schedule_id: Uuid::new_v4(),
+        checker_tag: "default".into(),
+        node_ids: vec![node],
+        presets: vec!["TEST_PING_RTT".into()],
+    };
+
+    let started = tokio::time::Instant::now();
+    let res = run_check_once(&pool, &job).await;
+    let elapsed = started.elapsed();
+    std::env::remove_var("PHLOGO_CHECK_TIMEOUT_SECS");
+
+    assert!(
+        res.is_err(),
+        "a hung checker must surface as an error, not a silent success"
+    );
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "the run must be bounded by the timeout, took {elapsed:?}"
+    );
+    assert_eq!(
+        submits.load(Ordering::SeqCst),
+        1,
+        "exactly one submit before the timeout fired"
+    );
+
+    let (status, owner, lease): (String, Option<Uuid>, Option<String>) = sqlx::query_as(
+        "SELECT status, exec_owner, exec_lease_until::text FROM check_runs WHERE id=$1",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("run row");
+    assert_eq!(status, "failed", "a timed-out run is a failed run");
+    assert!(
+        owner.is_none() && lease.is_none(),
+        "the execution lease must be released so a retry can claim it: {owner:?} {lease:?}"
+    );
+
+    sqlx::query("DELETE FROM node_status WHERE node_id=$1")
+        .bind(node)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM nodes WHERE server=$1")
+        .bind(&server)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM check_runs WHERE id=$1")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .ok();
+}

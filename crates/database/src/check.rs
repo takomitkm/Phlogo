@@ -163,19 +163,6 @@ pub async fn upsert_node_status_in(
     Ok(())
 }
 
-/// Flip a run to `success` inside a caller-owned transaction (M2.1: the terminal write
-/// participates in the same commit as the results).
-pub async fn finish_check_run_in(tx: &mut sqlx::PgConnection, run_id: Uuid) -> anyhow::Result<()> {
-    sqlx::query(
-        "UPDATE check_runs SET status='success', finished_at=now() \
-         WHERE id=$1 AND finished_at IS NULL",
-    )
-    .bind(run_id)
-    .execute(&mut *tx)
-    .await?;
-    Ok(())
-}
-
 /// Owner-guarded terminal write for the execution lease (M3.1-3).
 ///
 /// Releases `exec_owner`/`exec_lease_until` in the SAME statement that confirms the
@@ -184,6 +171,10 @@ pub async fn finish_check_run_in(tx: &mut sqlx::PgConnection, run_id: Uuid) -> a
 /// to `success` inside this very transaction (the results and the terminal state commit
 /// together), so such a guard could never match. Ownership is the lease, and a lost lease
 /// makes the whole transaction roll back — taking the premature `success` with it.
+///
+/// This replaces the unguarded `finish_check_run_in` (M2.1), which was removed once every
+/// execution went through an execution lease: an unguarded terminal write would leave a
+/// stale `exec_owner` on a run it marked `success`. Do not reintroduce an unguarded form.
 pub async fn finish_check_run_owned_in(
     tx: &mut sqlx::PgConnection,
     run_id: Uuid,

@@ -1956,3 +1956,71 @@ distribution **43** / adapter **18** / checker **11** 全绿；workspace `rustfm
 ### 遗留
 
 无后台恢复扫描器（投递/执行租约都没有）；幂等键缺请求摘要；M4/M5 冻结未动。
+
+## [UTC 2026-11-22T12:50:00Z] S73 · 执行侧复核轮：挂死测活兜底 + 三个常数的依赖链（自检 + 独立复核）
+
+**触发**：本轮起按新工作方式走——干活与自检由本会话（work routing group）负责，复核与裁定交给
+**独立复核 agent**（smart routing 角色；`magpie/group/group-2` 在本会话未被授权，实际用
+`magpie/group/group-3`，见「路由限制」）。复核对象是 S72 的 `88316be` + `94593eb`。
+
+**复核裁定：REJECT**，两条缺陷：
+1. **[blocking]** `run_check_once` 里 `adapter.check(&request).await` **没有任何超时**：一个「接了
+   WebSocket 但永不发终态帧」的 MiaoSpeed 会把 worker 槽位永久占住，并且执行会跨过执行租约边界 ——
+   按文档写的「同 key 重发恢复」就能让第二条投递在租约过期后赢认领，**两个执行者同时进 MiaoSpeed**，
+   正好破掉本轮要保证的「一个 run_id 只有一个执行者」。adapter 自身确无超时（查证
+   `crates/checker-miaospeed`），且父提交 `e1d5105` 同样如此（既有问题，但本轮把它变成承重项）。
+2. **[minor]** `crates/database::check::finish_check_run_in` 在 `persist_all` 改用 owner 守卫版本后
+   **已无调用方**，却仍是 `pub` 且不带租约守卫——未来误用会重新打开「标 success 但留下陈旧
+   `exec_owner`」的口子。
+
+**自检追加（比复核更严重的一条）**：租约原为 900s，而 apalis-sql 0.7.4 默认
+`reenqueue_orphaned_after=300s`、`keep_alive=30s`，且 `reenqueue_orphaned()` 会把「worker 心跳已死」的
+`Running` job 重置回 `Pending` 重投。**重投（≈300s）会早于租约到期（900s）**：`claim_for_exec` 返回
+`None` → 该投递按 no-op 返回 `Ok` → Apalis 把它标成 done → **唯一一次恢复机会被烧掉**，run 永远停在
+`started`。这比「没有扫描器」严重得多，因为它会把 apalis 自带的自愈能力变成反效果。
+
+### 修法（三个常数组成一条依赖链）
+
+```text
+CHECK_RUN_TIMEOUT_SECS (180s) < EXEC_LEASE_SECS (240s) < apalis reenqueue_orphaned_after (300s)
+   活着的执行者一定在租约被抢     死掉的执行者，等到孤儿重投时          于是那次重投能赢认领，
+   走之前结束                     租约已过期                            而不是空转
+```
+
+1. `run_check_once` 用 `tokio::time::timeout` 包住 `adapter.check`：超时 → `fail_check_run`（释放
+   租约）+ 返回 `Err`（Apalis 可重试）。默认 180s，`PHLOGO_CHECK_TIMEOUT_SECS` 可覆盖，且被**夹到
+   租约以下**（`EXEC_LEASE_SECS - 30`）。
+2. `EXEC_LEASE_SECS` 900 → **240s**（低于 apalis 孤儿窗口 300s，理由如上）。
+3. 删除 `database::check::finish_check_run_in`；worker 侧 test-only 的 `finish_check_run` 保留并加
+   ⚠️ 文档（无租约守卫、禁止生产路径调用）。
+4. 新测试 `hung_checker_times_out_and_releases_the_lease`：mock 收下请求后 30s 不回终态帧，
+   `PHLOGO_CHECK_TIMEOUT_SECS=1` → 断言返回 `Err`、耗时 < 10s、只 1 次 submit、run `failed`、
+   租约字段清空。
+
+### 文档同步（把「过度悲观」也一起纠正）
+
+- §10.2 增加不等式链与三个数字的来源（apalis 默认值 300s/30s），并说明 `180s` 只够 ping，
+  **M4 深度矩阵必须同时抬高 timeout 与租约**（或改心跳续租）。
+- §10.4 重写：执行侧崩溃**可以**被 apalis 孤儿重投自动恢复（前提是租约短于该窗口）；我们自己仍无
+  outbox/过期扫描器，剩余缺口是「队列行已被消费」的情形与「周期任务不回头救旧周期」。
+- §11 把常数标成「互相约束」，改一个必须同时检查另外两个；新增 M4 提示条目。
+- `p3-01-apalis-check-job.md`（设计稿记的是 30 分钟硬超时）加「实现现状：180s + 依赖链」注。
+- `configuration-and-api.md` 补「单次执行硬超时 180s < 租约 240s」。
+
+### 门禁（本轮实测）
+
+worker **19**（`check_wiring` 17，含 12 项故障注入）/ curse **37** / database **4** /
+distribution **43** / adapter **18** / checker **11** 全绿；workspace `rustfmt --check` +
+`clippy --all-targets -- -D warnings` **0**；迁移 0001…0015 全序 up + 分步 down 已在一次性库验证；
+一次性 `phlogo_jobs_test_m3` 建库→测试→销毁，**并用链内断言确认删除（`TESTDB_LEFT` 计数 = 0）**。
+
+### 路由限制（需要用户处理）
+
+本会话的子代理模型白名单只有 `magpie/group/group-3`（短上下文 routing group）；指定
+`magpie/group/group-2` 会被拒（`child LLM route ... is not allowed for this Session`）。所以
+「检查与裁定交给 group/group-2」目前只能退化为 group/group-3，或由用户放开该路由。
+
+### 遗留
+
+无 outbox/过期扫描器（依赖 apalis 孤儿重投 + 手动同键重发）；幂等键缺请求摘要；M4 深度矩阵需重算
+三个常数；M4/M5 仍未动。

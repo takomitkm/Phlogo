@@ -137,6 +137,10 @@ async fn check_job_handler(job: CheckJob, data: Data<AppState>) -> Result<(), Er
   > 确切 retry/backoff API 以 P0-03 固定版本为准（预期形如 `.retry(Retry::retries(3))` 或 worker 级 `with_retry`）。
 - **超时（timeout）**：单次 CheckJob 设硬超时（Phlogo 原 goroutine 用 `context.WithTimeout(30*time.Minute)`，见 `internal/checker/handler.go:123`）。
   超时视为失败 → 触发重试或标记 `check_runs.status = 'failed'`。
+  > **实现现状（S73）**：已完成，但取 **180s**（`CHECK_RUN_TIMEOUT_SECS`），并与执行租约
+  > 240s、apalis 孤儿重投窗口 300s 组成一条不等式链（见 `17-m3-checkjob-scheduling.md` §10.2）。
+  > 180s 是按当前只发 ping 定的；**M4 深度矩阵启用时必须同时抬高 timeout 与租约**（或改为执行期
+  > 心跳续租），不能只改一个。
 - **恢复（recovery）**：Apalis PostgreSQL backend 在 Worker 崩溃后把 in-flight job 重新排队（方案 §3.1）。
   因此 handler 必须能安全地被重复执行（幂等），不能假设「只跑一次」。
 
