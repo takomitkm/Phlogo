@@ -24,13 +24,29 @@ async fn setup() -> Option<PgPool> {
 /// each submitted node name at a fixed latency. It keeps accepting so a redelivery of
 /// the same run can be tested too.
 async fn mock_server(latency_ms: i64) -> SocketAddr {
+    mock_server_counting(latency_ms, Duration::ZERO).await.0
+}
+
+/// Mock MiaoSpeed that COUNTS submitted requests and can hold each one open for `delay`
+/// before answering (M3.1-3: a second executor needs a real window to try claiming while
+/// the first is inside the check).
+async fn mock_server_counting(
+    latency_ms: i64,
+    delay: Duration,
+) -> (SocketAddr, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
+
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let submits = Arc::new(AtomicUsize::new(0));
+    let counter = submits.clone();
     tokio::spawn(async move {
         loop {
             let Ok((stream, _)) = listener.accept().await else {
                 break;
             };
+            let counter = counter.clone();
             tokio::spawn(async move {
                 let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
                     return;
@@ -40,6 +56,12 @@ async fn mock_server(latency_ms: i64) -> SocketAddr {
                     let Ok(req) = serde_json::from_str::<Value>(&text) else {
                         continue;
                     };
+                    // One submit request reached the checker — this is what must never
+                    // happen twice for a single run_id.
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
                     let names: Vec<String> = req["Nodes"]
                         .as_array()
                         .map(|a| {
@@ -65,7 +87,7 @@ async fn mock_server(latency_ms: i64) -> SocketAddr {
             });
         }
     });
-    addr
+    (addr, submits)
 }
 
 async fn seed_node(pool: &PgPool, server: &str, latency_secret: &str) -> Uuid {
@@ -1045,6 +1067,175 @@ async fn retry_layer_redelivers_until_exhausted() {
     sqlx::query("DELETE FROM apalis.jobs WHERE job_type=$1")
         .bind(job_type)
         .execute(&jobs_pool)
+        .await
+        .ok();
+}
+
+/// Fault #8a: the execution claim is a single atomic statement — N concurrent callers on
+/// one run row yield exactly one winner. Deterministic (no mock-timing involved), so it
+/// pins the property the previous `SELECT status` gate did not have.
+#[tokio::test]
+async fn exec_claim_is_exclusive() {
+    use worker::{claim_for_exec, record_check_run};
+
+    let Some(pool) = setup().await else {
+        return;
+    };
+    let node = Uuid::new_v4();
+    let run_id = Uuid::new_v4();
+    let job = CheckJob {
+        run_id,
+        schedule_id: Uuid::new_v4(),
+        checker_tag: "default".into(),
+        node_ids: vec![node],
+        presets: vec![],
+    };
+    record_check_run(&pool, &job).await.expect("record run");
+
+    let dsn = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let mut handles = Vec::new();
+    for _ in 0..6 {
+        let dsn = dsn.clone();
+        handles.push(tokio::spawn(async move {
+            let pool = database::connect(&dsn).await.expect("pool");
+            claim_for_exec(&pool, run_id).await.expect("claim")
+        }));
+    }
+    let mut winners = 0;
+    let mut winner: Option<Uuid> = None;
+    for h in handles {
+        if let Some(owner) = h.await.expect("join") {
+            winners += 1;
+            winner = Some(owner);
+        }
+    }
+    assert_eq!(
+        winners, 1,
+        "exactly one concurrent caller may own the execution right"
+    );
+
+    let stored: Option<Uuid> = sqlx::query_scalar("SELECT exec_owner FROM check_runs WHERE id=$1")
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("owner");
+    assert_eq!(
+        stored, winner,
+        "the row must record the winner's lease owner"
+    );
+
+    sqlx::query("DELETE FROM check_runs WHERE id=$1")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
+/// Fault #8 (ruling 2026-11-22): the EXECUTION right is atomic, not a read.
+///
+/// Two deliveries of the SAME `run_id` are executed simultaneously (independent
+/// connection pools + a barrier, so they really overlap). The mock MiaoSpeed holds the
+/// first request open, which is exactly the window in which the old `SELECT status` gate
+/// let both executors in. Assertion: the checker receives **exactly one** submit, the
+/// loser is a silent no-op (`Ok`), the run ends `success` once, and the lease is released.
+#[tokio::test]
+async fn concurrent_executions_of_one_run_id_hit_miaospeed_once() {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    let Some(pool) = setup().await else {
+        return;
+    };
+    let _guard = ENV_LOCK.lock().await;
+
+    // 400 ms of "inside MiaoSpeed" is a generous window for the second executor.
+    let (addr, submits) = mock_server_counting(37, Duration::from_millis(400)).await;
+    std::env::set_var("PHLOGO_CHECKER_WS_URL", format!("ws://{addr}"));
+    std::env::set_var("PHLOGO_CHECKER_SECRET", "test-secret");
+    std::env::remove_var("PHLOGO_CHECKER_VENDOR");
+
+    let server = format!("m31-exec-{}.example", Uuid::new_v4().simple());
+    let node = seed_node(&pool, &server, "pw").await;
+    let run_id = Uuid::new_v4();
+    let job = CheckJob {
+        run_id,
+        schedule_id: Uuid::new_v4(),
+        checker_tag: "default".into(),
+        node_ids: vec![node],
+        presets: vec!["TEST_PING_RTT".into()],
+    };
+
+    // A second, independent pool: two workers never share one connection here either.
+    let dsn = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let pool_b = database::connect(&dsn).await.expect("second pool");
+    let pool_a = pool.clone();
+    let job_a = job.clone();
+    let job_b = job.clone();
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let (ba, bb) = (barrier.clone(), barrier.clone());
+
+    let a = tokio::spawn(async move {
+        ba.wait().await;
+        run_check_once(&pool_a, &job_a).await
+    });
+    let b = tokio::spawn(async move {
+        bb.wait().await;
+        run_check_once(&pool_b, &job_b).await
+    });
+    let (ra, rb) = tokio::join!(a, b);
+    let ra = ra.expect("join a");
+    let rb = rb.expect("join b");
+
+    assert!(ra.is_ok(), "one executor must complete the run: {ra:?}");
+    assert!(
+        rb.is_ok(),
+        "the delivery without the execution right must be a no-op, not an error: {rb:?}"
+    );
+    assert_eq!(
+        submits.load(Ordering::SeqCst),
+        1,
+        "one run_id must reach MiaoSpeed exactly once, however many deliveries it gets"
+    );
+
+    let (status, results, owner, lease): (String, i64, Option<Uuid>, Option<String>) =
+        sqlx::query_as(
+            "SELECT r.status, \
+                    (SELECT count(*) FROM node_check_results c WHERE c.check_run_id=r.id), \
+                    r.exec_owner, \
+                    r.exec_lease_until::text \
+               FROM check_runs r WHERE r.id=$1",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("run row");
+    assert_eq!(
+        status, "success",
+        "the winning executor must finish the run"
+    );
+    assert_eq!(results, 1, "results are persisted exactly once");
+    assert!(
+        owner.is_none(),
+        "the lease owner must be cleared: {owner:?}"
+    );
+    assert!(
+        lease.is_none(),
+        "the lease expiry must be cleared: {lease:?}"
+    );
+
+    sqlx::query("DELETE FROM node_status WHERE node_id=$1")
+        .bind(node)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM nodes WHERE server=$1")
+        .bind(&server)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM check_runs WHERE id=$1")
+        .bind(run_id)
+        .execute(&pool)
         .await
         .ok();
 }

@@ -129,7 +129,11 @@ AST 形状（逻辑节点带 `operator: and|or|not`，叶子是条件对象）�
   period label（`manual-<key>`）**逐字**使用，因此**同一个 key 重发只会恢复丢弃的批次，不会再建一个
   逻辑运行**（崩溃后重发同键即可恢复）。不带 key 则是一次性触发（随机 label）。响应里回显 `period`，
   便于核对与重放；客户端永远不需要知道服务端生成的标签。投递语义是 **at-least-once**：极端崩溃窗口内
-  队列可能收到重复 job，但执行侧按 `run_id` 的 `success` 闸门保证同一 run 不会跑第二次真实测活。
+  队列可能收到重复 job，但执行侧有**执行租约**（`check_runs.exec_owner`/`exec_lease_until`，迁移 0015），
+  同一 `run_id` 同时只有一个 worker 能进 MiaoSpeed。
+  **限制（如实）**：① 幂等键**不绑定请求内容**——同 key 配不同 `node_ids`/`batch_size` 不会报错；
+  ② 服务端**没有**后台恢复扫描器，过期租约只是「可被再认领」，周期任务卡住的旧记录不会自动恢复；
+  可自动恢复的只有手动重发同一 key。
 - 登录限流：按真实客户端 IP（PROXY protocol）分桶，默认 10 次/分钟，超限 429；`X-Forwarded-For` 永不信任。
 - 错误码语义：401 = 缺失/无效凭据；403 = 凭据有效但身份越权（ServiceBearer 访问未授权路由）。
 

@@ -54,6 +54,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 | **P1 · M3 调度** | CheckJob 生产与调度 | `17-m3-checkjob-scheduling.md` | 周期调度（`check_schedule_interval_minutes`/`check_batch_size` 新配置键）+ `POST /api/v1/check/trigger`（AdminJWT only，ServiceBearer 403，202+stats）；**确定性 period/batch UUID v5 去重**（多 worker 不重复）；只调度 Linked+有载荷节点；首批只用 `TEST_PING_RTT`；首次 tick 显式推迟；一次性可销毁 jobs 测试库验证 |
 | **P1 · M3.1 可靠性收尾** | 复审五点落地 | `17-m3-checkjob-scheduling.md` §8 | ① **周期身份对齐时钟边界**（不同启动时刻的 worker 同槽同标签）；② 筛选改**真实可解密验证**（错钥/损坏密文排除并计数）；③ **handler 返回 Err + RetryPolicy(3)**（apalis retry feature）；④ **崩溃窗口恢复**：`check_runs.pushed` 三态 claim，丢失的 push 恰好重推一次（**已被 §9 否决并重写**）；⑤ 501 id 明确 422、jobs 测试库强制专用 DSN；worker **11** / curse 37 / database 4 / distribution 43 / adapter 18 / checker 11，fmt+clippy **0** |
 | **P1 · M3.1-2 再收紧** | 二轮复审六点落地 | `17-m3-checkjob-scheduling.md` §9 | ① timer **真正锚到全局 UTC 边界**，标签取自计划边界并算术推进（延迟 tick 不用 `Utc::now()`）；② **重写投递状态机**：`push_state`(pending/dispatching/enqueued)+`lease_until`+`lease_owner`，单条 UPSERT 原子 claim、新建与恢复同路径，**at-least-once** + 执行侧 `success` 闸门防重复测活（迁移 0014）；③ 手动触发 `idempotency_key` → `manual-<key>` verbatim，同键可恢复且不建第二个逻辑运行；④ 可解密筛选测试由**假通过**改为解析 payload 断言 UUID（并修掉夹具污染与 `total` 口径错误）；⑤ 九项故障注入含 **RetryLayer 真实重投**（执行 4 次=1+3、队列 `attempts=4`、终态 `Killed`）；⑥ 0013 **逐字节**复原、0014 新迁，一次性库验证 up/down；worker **16** / curse 37 / database 4 / distribution 43 / adapter 18 / checker 11，fmt+clippy **0** |
+| **P1 · M3.1-3 执行侧互斥** | 三轮复审裁定 | `17-m3-checkjob-scheduling.md` §10 | ① **执行租约**（迁移 0015：`exec_owner`/`exec_lease_until`+索引）：`claim_for_exec` 单条 `UPDATE ... WHERE 状态可认领 AND 租约空/过期`，**恰好一个**执行者拿到权；② 终态写入带 owner 守卫并在同语句释放租约（成功与结果同一事务，0 行即回滚；失败只 warn 不覆盖新主人）；③ 认领即开启新尝试（`status='started'`、清 `finished_at`），使 `failed` 重试能记成功；④ 证据：`exec_claim_is_exclusive`（6 路并发 1 赢家）+ `concurrent_executions_of_one_run_id_hit_miaospeed_once`（两 handler 同 run_id → checker **只 1 次** submit），并做**基线对照**（换回 `e1d5105` 版即 `2 vs 1`）；⑤ 如实记录**无后台恢复扫描器**、幂等键未绑请求摘要；worker **18** / curse 37 / database 4 / distribution 43 / adapter 18 / checker 11，fmt+clippy **0** |
 
 ### 实施状态总览（2026-11-13 更新）
 
@@ -63,7 +64,7 @@ Phlogo 当前是一个 Go 单体（Gin + GORM + oapi-codegen + expr-lang），�
 > `/sub` 仍输出占位载荷（见 `09-self-completed-gaps.md` §D）。**M1–M27 全部要做**，分两道门禁：
 > 可部署门禁（M1–M5 + M15）/ 生产级门禁（M6–M14 + M18–M27）。
 > 上线总门禁是「抓取 → 真测活 → deep 落库 → 评分更新 → /sub 出真实节点 → mihomo -t 通过 → 真代理出网 204」。
-> **进度**：M1 ✅（S63/S64/S65 + S69 保真补齐）；M2 ✅（S66 + S69 加固）；M3 ✅（S68）+ **M3.1 ✅**（S70 复审五点落地）+ **M3.1-2 ✅**（S71 二轮复审：投递状态机重写 / timer 全局边界 / 手动触发幂等键 / 0013 复原+0014 / RetryLayer 真实重投）；**M4 冻结**，等待裁定。
+> **进度**：M1 ✅（S63/S64/S65 + S69 保真补齐）；M2 ✅（S66 + S69 加固）；M3 ✅（S68）+ **M3.1 ✅**（S70 复审五点落地）+ **M3.1-2 ✅**（S71 二轮复审：投递状态机重写 / timer 全局边界 / 手动触发幂等键 / 0013 复原+0014 / RetryLayer 真实重投）+ **M3.1-3 ✅**（S72 三轮复审：执行租约原子认领 / 真实并发测试 + 基线对照 / 迁移 0015）；**M4 冻结**，等待裁定。
 > 关键决策与偏差均写入对应页面：
 
 - **P0**：VProxy 最小化移植（不作依赖）；MiaoSpeed 自建 `4.7.9`（sha256 记录）；Apalis `0.7.4` PG backend；Vben `v5.7.0`。

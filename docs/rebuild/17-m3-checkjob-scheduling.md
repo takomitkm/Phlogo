@@ -1,12 +1,14 @@
 # 17 M3 · CheckJob 调度（周期 + 手动触发）
 
-> 状态：**M3 主体完成（S68）+ M3.1 收尾（S69）+ M3.1-2 再收紧（S71，复审二轮裁定落地）**。
-> 基线 `9767908`（M3 主体）→ S69 `4abd0fd` → S71 见 ACTION-LOG。
+> 状态：**M3 主体完成（S68）+ M3.1 收尾（S69）+ M3.1-2 再收紧（S71）+ M3.1-3 执行侧互斥（S72）**。
+> 基线 `9767908`（M3 主体）→ S69 `4abd0fd` → S71 `e1d5105` → S72 见 ACTION-LOG。
 > M3.1 依据（2026-11-20 复审）：多实例周期身份、真实可解密筛选、handler 失败重试、
 > 崩溃窗口恢复、四类故障注入测试。
 > M3.1-2 依据（2026-11-20 二轮复审）：S69 的 `pushed` 布尔与 `New/LostBeforePush` 三态被否
 > （并发竞争 + 永久漏推窗口），要求重写为带租约的投递状态机、timer 真正锚到全局边界、
 > 手动触发可恢复、0013 迁移复原。见 §9。
+> M3.1-3 依据（2026-11-22 三轮复审）：六项通过/基本通过，但**执行侧没有互斥**（`SELECT status`
+> 是读不是认领），M3.1-2 暂缓最终验收。本轮补**主库执行租约 + 原子认领**与真实并发测试。见 §10。
 
 ## 1. M3 与 M2 的分界
 
@@ -223,21 +225,22 @@ push 之前 → 租约（60s）过期后任意实例可重认领并重推。
 
 **缺陷 C（push 成功后崩溃）**：`mark_enqueued` 在 `storage.push` 成功后才执行，且带 owner 守卫；
 若崩在「push 成功、mark 之前」，行留在 `dispatching`，租约过期后会被**再推一次**——即
-**at-least-once**，这是明确接受的设计，不是 bug。重复执行由**执行侧**闸门挡住：
+**at-least-once**，这是明确接受的设计，不是 bug。于是「队列里有两条同一 run_id 的 job」必须由
+**执行侧**收敛，而不是靠「数据库标了 pushed 就等于队列里只有一条」。
 
-```
-run_check_once: record_check_run(...) 之后，若 check_runs.status='success' → 直接 Ok(()) 返回
-```
+> ⚠️ 本条原方案只是「`run_check_once` 里读一次 `status`，`success` 就返回」——三轮复审指出那是
+> **读不是认领**：两条投递都读到 `started` 就会都进 MiaoSpeed。S72 已改为**主库执行租约 + 原子
+> 认领**（迁移 0015），见 §10。
 
-所以「队列里有两条同一 run_id 的 job」不会变成「两次真实 MiaoSpeed 测活」。**跨主库与 jobs 库
-没有分布式事务，因此绝不声称 exactly-once**；对外语义一律写 at-least-once + 执行侧一致。
+**跨主库与 jobs 库没有分布式事务，因此绝不声称 exactly-once**；对外语义一律写 at-least-once +
+执行侧互斥（§10）。
 
 **错误不吞**：`claim`/`mark_enqueued` 的 DB 错误一律 `?` 上抛（原 `let _ = mark_pushed` 已删除）。
 owner 守卫导致 0 行的情形不是错误，但会**明确记 warn**（「租约已被接管，本批会被当前持有者再推一次」），
 不留静默分支。
 
 **Apalis 0.7.4 没有确定性 job id**（查证：`apalis.jobs.id` 由存储生成，`push` 不接受调用方 id），
-所以本轮不假设它存在，重复投递只靠上面的执行侧闸门收敛。
+所以本轮不假设它存在，重复投递只靠执行侧互斥（§10）收敛。
 
 ### 9.3 手动触发可恢复（裁定 3）
 
@@ -251,7 +254,9 @@ owner 守卫导致 0 行的情形不是错误，但会**明确记 warn**（「�
 
 已知窗口（如实记录）：批次组成按「当次可调度节点」重新切分，若两次调用之间节点集合变了，同一
 label 的 batch k 覆盖的节点可能不同；执行侧仍按 `run_id` 去重（先到者执行），故不会重复测活，
-但「恢复」可能只覆盖部分节点。需要严格一致时应由服务端 outbox 扫描器接管（未做，见 §10）。
+但「恢复」可能只覆盖部分节点。需要严格一致时应由服务端 outbox 扫描器接管（未做，见 §11）。
+另：**幂等键不绑定请求内容**——服务端不保存 `node_ids`/`batch_size` 的摘要，同一个 key 配不同请求
+会算到同一批 run_id 上（见 §10.4、§11）。
 
 ### 9.4 可解密筛选测试：从「假通过」修成真证据（裁定 4）
 
@@ -315,14 +320,112 @@ workspace `rustfmt --check`（含递归）+ `clippy --all-targets -- -D warnings
 一次性 `phlogo_jobs_test_m3` 建库→测试→销毁，`apalis.jobs` 里 **12** 条任务（证明确实入队，
 不是空跑）；生产 `phlogo_jobs` 与正式队列零接触。
 
-## 10. 遗留
+> 上面是 **S71 当时的数字**。当前门禁见 §10.5（S72 加入执行侧互斥后 worker 变为 **18**）。
+
+## 10. M3.1-3 执行侧原子认领（S72，三轮复审裁定）
+
+三轮复审：全局 timer / 手动幂等 / 错钥测试 / 迁移纪律 **通过**，投递状态机、故障注入与 RetryLayer
+**基本通过**，但判定 **M3.1-2 暂缓最终验收**——理由只有一条：**执行侧没有互斥**。
+
+### 10.1 缺陷与根因
+
+复现条件就是 §9.2 缺陷 C 的尾部：push 成功、`mark_enqueued` 之前崩溃 → 投递租约过期 → 另一实例
+把它重推 → 队列里出现**同一 `run_id` 的两条 job** → 两个 worker 同时取走。
+
+旧代码（S71）：
+
+```
+record_check_run(...)            // INSERT ... ON CONFLICT DO NOTHING，返回值没人用
+SELECT status FROM check_runs    // 读！
+if status == 'success' { return }// 只挡「已经成功」
+MiaoSpeed.check(...)             // 两个执行者都读到了 'started' → 都进来
+```
+
+`record_check_run` 的返回值本可以表示「这次是不是我建的行」，但只有「第一次投递」为真，重投永远为
+假，所以它换不来执行权；`SELECT` 也不是认领。**投递侧解决的是「谁可以 push」，执行侧需要另一个
+租约。**
+
+### 10.2 执行租约（迁移 0015）
+
+`check_runs` 新增 `exec_owner uuid` + `exec_lease_until timestamptz`，并加部分索引
+`idx_check_runs_exec_lease (exec_lease_until) WHERE exec_lease_until IS NOT NULL`（供恢复扫描用）。
+**0014 未改动**（已应用迁移不可再改，§9.6 纪律）。
+
+**认领是一条语句**（`claim_for_exec`）：
+
+```sql
+UPDATE check_runs
+   SET exec_owner = $2,
+       exec_lease_until = now() + make_interval(secs => $3),
+       status = 'started',
+       finished_at = NULL
+ WHERE id = $1
+   AND status IN ('started','failed')
+   AND (exec_lease_until IS NULL OR exec_lease_until < now())
+RETURNING exec_owner
+```
+
+- 并发调用者在行锁上串行化，**恰好一个**拿到 `Some(owner)`；其余拿到 `None`。
+- `None` 不是错误：run 只有一个主人——要么已终态（`success` 不在可认领状态里），要么租约在另一个
+  活着的 worker 手里。这种投递对 Apalis 是 **no-op（返回 Ok）**，不制造假失败。
+- 认领同时**开启一次新尝试**（`status='started'`、`finished_at=NULL`）：`failed` 是可认领的
+  （Apalis 重试路径），不重置的话终态写入永远被 `finished_at IS NULL` 挡住，重试成功也记不进
+  `success`。
+- 执行租约 900s（`EXEC_LEASE_SECS`），要覆盖一批真实测活；超时即「死亡执行者让位」。
+
+**终态写入同样带 owner 守卫，并在同一条语句里释放租约**：
+
+| 路径 | 语句 | 0 行时 |
+| --- | --- | --- |
+| 成功 | `finish_check_run_owned_in`（与结果同一事务）：`SET status='success', finished_at=now(), exec_owner=NULL, exec_lease_until=NULL WHERE id=$1 AND exec_owner=$2` | **整事务回滚**——绝不把结果与 `success` 提交到别人拥有的 run 上 |
+| 失败 | `fail_check_run(owner, reason)`：同样守卫 + 释放租约 | 只 warn「租约已被接管，不覆盖新主人」 |
+
+**实现陷阱（本轮实翻车，值得记）**：`persist_check_run_in` 在**同一个事务里**已经把
+`status='success', finished_at=now()` 写掉了（M2.1 的「结果+终态同事务」）。所以终态守卫**不能**
+再要求 `finished_at IS NULL`——第一次实现就是这么写的，测试立刻报
+`execution lease lost before the terminal write`，因为该条件永远不成立。正确做法是：终态归属由
+**租约 owner** 判定，由事务回滚兜底。
+
+### 10.3 证据（含基线对照）
+
+| 测试 | 内容 | 结果 |
+| --- | --- | --- |
+| `exec_claim_is_exclusive` | 6 路并发认领同一 run（独立连接池），断言**恰好 1 个赢家**，且行里记录的 `exec_owner` 就是它 | 通过；不依赖时序 |
+| `concurrent_executions_of_one_run_id_hit_miaospeed_once` | 两个 handler 同时执行**同一 `run_id`**（屏障 + 两个独立池），mock MiaoSpeed 把首个请求挂 400ms；断言 checker **只收到 1 次** submit、输家 `Ok`、run 终态 `success`、结果 1 行、租约已清 | 通过 |
+| **基线对照** | 把 worker 换回 `e1d5105` 的 `check_job.rs`/`lib.rs` 跑同一测试 | **`left: 2, right: 1`** —— 旧代码确实打两次，测试有区分力，不是「永远绿」 |
+
+### 10.4 仍然没有的东西（如实，别过度声称）
+
+1. **没有后台恢复扫描器**。执行租约过期只是「允许被再认领」，不是自动恢复：没有任何东西会主动再
+   投递那个 `run_id`。周期任务的下一周期用的是**新** `run_id`，**所以上一周期卡在 `started` 的
+   记录不会自己好**。当前真正可自动恢复的只有一种：**同一 idempotency key 的手动重发**（§9.3）。
+   ⇒ 文档与对外说明**不得**把周期任务描述成「全部可自动恢复」。
+2. **幂等键不绑定请求内容**：服务端不保存 `node_ids`/`batch_size` 摘要，同 key 配不同请求会让
+   batch k 对应不同节点集合。执行侧仍按 `run_id` 去重（先到者执行），所以不会重复测活，但
+   「恢复」的语义不完整。后续应为 key 保存请求摘要（fingerprint）。
+3. 崩溃在「check 已发出、结果未落库」时，该 run 会停在 `started` 直到有人重新投递（同上 1）。
+
+### 10.5 门禁（S72 实测）
+
+worker **18**（`check_wiring` 16，含 11 项故障注入）/ curse **37** / database **4** /
+distribution **43** / adapter **18** / checker **11** 全绿；workspace `rustfmt --check` +
+`clippy --all-targets -- -D warnings` **0**。迁移 0001…0015 在一次性库 `phlogo_mig_scratch`
+全序执行 → (push_state 三列 3、`pushed` 0、恢复索引 1、configs 2、执行租约两列 2、执行租约索引 1)
+→ `0015.down` 只清执行租约（两列 0、索引 0、push_state 三列**仍为 3**）→ `0014.down` → `0013.down`
+→ 删库。一次性 `phlogo_jobs_test_m3` 建库→测试→销毁，生产 `phlogo_jobs` 零接触。
+
+## 11. 遗留
 
 1. **增量测活**（只测新/变过的节点）、连续失败降级、评分接入（M5）未做——裁定明确不混入 M3。
 2. `enqueue_for_active_sources`（fetch）仍是每 5 分钟全量 active 源入队（无 period 去重）；
    fetch 本身幂等性可接受，但如需同策略可复用 `enqueue_scheduled` 模式（另行裁定）。
 3. 深度矩阵/协议载荷保真属 **M4**（**冻结中**，裁定不进入）；`InvokeDuration` 归一化接 p3-03 也在 M4。
-4. 投递语义是 **at-least-once**：崩溃窗口内可能有重复 push，靠执行侧 `success` 闸门收敛；需要
-   「无人值守地恢复所有过期未投递 run」时，应加统一 outbox/恢复扫描器（本轮按裁定只做
-   client-key 恢复，未加扫描器）。
-5. 租约 60s（`DELIVERY_LEASE_SECS`）：投递链路耗时若长期超过它，会出现重复 push（仍被执行侧挡住），
-   需要按部署环境调大。
+4. 投递语义是 **at-least-once**：崩溃窗口内可能有重复 push；执行侧已由**原子执行租约**收口（§10），
+   所以同一 `run_id` 只会有一个执行者进 MiaoSpeed。
+5. **没有统一 outbox / 过期租约恢复扫描器**（投递租约与执行租约都没有）。这意味着：
+   过期租约只是「可被再认领」，**没有任何后台任务会主动去恢复它**；周期任务卡住的那一周期不会自己
+   恢复（下一周期是新 `run_id`）。要「无人值守恢复」就需要该扫描器——本轮按裁定未加。
+6. 投递租约 60s（`DELIVERY_LEASE_SECS`）、执行租约 900s（`EXEC_LEASE_SECS`）：链路耗时若长期超过
+   它们，会出现重复 push / 重复认领（执行侧仍互斥，但会多一次真实测活的重试机会），需按部署调大。
+7. **幂等键未绑定请求摘要**：同 key 配不同 `node_ids`/`batch_size` 不报错、也不区分；后续应为
+   `manual-<key>` 保存请求 fingerprint 并在不匹配时拒绝（412/409）。

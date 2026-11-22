@@ -151,6 +151,48 @@ pub async fn mark_enqueued_for_test(
     mark_enqueued(pool, run_id, owner).await
 }
 
+/// Execution lease length (M3.1-3).
+///
+/// The delivery lease bounds the push window; this one bounds a real MiaoSpeed check of
+/// one batch. It must comfortably exceed that check, and it is the window after which an
+/// executor that died mid-run may be re-claimed by another delivery.
+pub const EXEC_LEASE_SECS: i64 = 900;
+
+/// Atomically take the EXECUTION right for one run (M3.1-3, ruling 2026-11-22).
+///
+/// Replaces the previous `SELECT status` gate, which was a read: two deliveries of the
+/// same `run_id` both saw `started` and both called MiaoSpeed. Here ONE statement decides
+/// — `UPDATE ... WHERE status IN ('started','failed') AND (lease free or expired)` — and
+/// PostgreSQL serialises concurrent callers on the row, so exactly one gets `Some(owner)`.
+///
+/// Claiming also **starts a new attempt**: `status` is reset to `started` and
+/// `finished_at` cleared, so a retry of a previously failed run can record its own
+/// terminal state (`fail_check_run` still guards on `finished_at IS NULL`).
+///
+/// `None` means this delivery must not do the work — the run already succeeded
+/// (terminal), or another worker holds an unexpired execution lease. Both are no-ops for
+/// Apalis: the run has exactly one owner either way.
+pub async fn claim_for_exec(pool: &PgPool, run_id: Uuid) -> sqlx::Result<Option<Uuid>> {
+    let owner = Uuid::new_v4();
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "UPDATE check_runs \
+            SET exec_owner = $2, \
+                exec_lease_until = now() + make_interval(secs => $3), \
+                status = 'started', \
+                finished_at = NULL \
+          WHERE id = $1 \
+            AND status IN ('started','failed') \
+            AND (exec_lease_until IS NULL OR exec_lease_until < now()) \
+        RETURNING exec_owner",
+    )
+    .bind(run_id)
+    .bind(owner)
+    .bind(EXEC_LEASE_SECS)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|_| owner))
+}
+
 /// Mark the run finished (idempotent: only the first transition wins).
 ///
 /// `check_runs` uses `success` as its terminal-ok status (`source_fetch_runs` uses
@@ -167,18 +209,32 @@ pub async fn finish_check_run(pool: &PgPool, run_id: Uuid) -> sqlx::Result<()> {
 }
 
 /// Mark the run failed with a reason; one-shot like `finish_check_run`.
-async fn fail_check_run(pool: &PgPool, run_id: Uuid, reason: &str) {
-    if let Err(e) = sqlx::query(
-        "UPDATE check_runs SET status='failed', finished_at=now() \
-         WHERE id=$1 AND finished_at IS NULL",
+///
+/// Owner-guarded (M3.1-3): only the worker that still holds the execution lease may
+/// finish the run, and the terminal write releases `exec_owner`/`exec_lease_until` in
+/// the same statement. If the lease was superseded (we were assumed dead and someone
+/// else took the run over), this is a logged no-op — it must NOT overwrite the state the
+/// new owner is working on.
+async fn fail_check_run(pool: &PgPool, run_id: Uuid, exec_owner: Uuid, reason: &str) {
+    match sqlx::query(
+        "UPDATE check_runs \
+            SET status='failed', finished_at=now(), exec_owner=NULL, exec_lease_until=NULL \
+          WHERE id=$1 AND finished_at IS NULL AND exec_owner=$2",
     )
     .bind(run_id)
+    .bind(exec_owner)
     .execute(pool)
     .await
     {
-        tracing::error!(run_id = %run_id, error = %e, "fail_check_run failed");
+        Ok(r) if r.rows_affected() == 0 => {
+            tracing::warn!(
+                run_id = %run_id, reason,
+                "execution lease was superseded; not marking this run failed"
+            );
+        }
+        Ok(_) => tracing::warn!(run_id = %run_id, reason, "check run failed"),
+        Err(e) => tracing::error!(run_id = %run_id, error = %e, "fail_check_run failed"),
     }
-    tracing::warn!(run_id = %run_id, reason, "check run failed");
 }
 
 fn env_nonempty(key: &str) -> Option<String> {
@@ -240,33 +296,61 @@ async fn existing_ids(pool: &PgPool, ids: &[Uuid]) -> sqlx::Result<HashSet<Uuid>
 
 /// Execute one check run end to end (testable core; the Apalis handler wraps this).
 ///
-/// Execution-side idempotency gate (M3.1-2, ruling defect C): delivery is
-/// at-least-once, so the same run may be delivered twice (e.g. "push succeeded but the
-/// enqueued-mark crashed"). A run that already reached `success` is NOT re-executed —
-/// its results are persisted exactly once by the unique key, and re-running real
-/// MiaoSpeed checks would only waste resources. Failed runs MAY be re-executed (that
-/// is the retry path).
+/// Execution-side mutual exclusion (M3.1-3, ruling 2026-11-22): delivery is
+/// at-least-once, so the same `run_id` may be delivered more than once (e.g. "push
+/// succeeded but the enqueued-mark crashed", lease expired, re-pushed). Each delivery
+/// must therefore prove it owns the EXECUTION right before touching MiaoSpeed — see
+/// [`claim_for_exec`], which is a single atomic UPDATE, not a read. Consequences:
+///
+/// * exactly one delivery per `run_id` reaches MiaoSpeed at a time;
+/// * a delivery that loses the claim is a no-op (`Ok`), because the run already has an
+///   owner: either it is terminal, or a live lease belongs to another worker;
+/// * a run that already reached `success` is not claimable at all, so results are
+///   persisted once;
+/// * `failed` runs ARE claimable (that is the Apalis retry path) — the claim starts a
+///   fresh attempt (`status='started'`, `finished_at=NULL`);
+/// * if an executor dies mid-run, its lease expires after [`EXEC_LEASE_SECS`] and another
+///   delivery may take the run over. There is deliberately **no background scanner**:
+///   an expired execution lease is only picked up if something delivers that run again
+///   (the exact limits are written down in the M3 page §10.4 / §11).
 pub async fn run_check_once(pool: &PgPool, job: &CheckJob) -> anyhow::Result<()> {
     if let Err(e) = record_check_run(pool, job).await {
         tracing::error!(run_id = %job.run_id, error = %e, "record_check_run failed");
         return Err(e.into());
     }
 
-    // Gate: a run that already succeeded must not burn a second real MiaoSpeed pass.
-    let prior: Option<String> = sqlx::query_scalar("SELECT status FROM check_runs WHERE id=$1")
-        .bind(job.run_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| anyhow::anyhow!("run status: {e}"))?;
-    if prior.as_deref() == Some("success") {
-        tracing::info!(run_id = %job.run_id, "run already succeeded; skipping redelivery");
-        return Ok(());
-    }
+    // M3.1-3: EXECUTION claim, one atomic statement. The previous version read
+    // `status` here — a plain SELECT — so two deliveries of the same run_id could both
+    // read 'started' and both call MiaoSpeed. Now exactly one caller gets the lease; the
+    // other is a no-op (the run has one owner: either it already succeeded, or a live
+    // lease belongs to another worker).
+    let exec_owner = match claim_for_exec(pool, job.run_id).await {
+        Ok(Some(owner)) => owner,
+        Ok(None) => {
+            // Diagnostic only — but it must not swallow a DB error either.
+            let status: Option<String> =
+                sqlx::query_scalar("SELECT status FROM check_runs WHERE id=$1")
+                    .bind(job.run_id)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("run status: {e}"))?;
+            tracing::info!(
+                run_id = %job.run_id, status = ?status,
+                "no execution right (terminal run, or another worker holds the lease); \
+                 skipping this delivery"
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            tracing::error!(run_id = %job.run_id, error = %e, "claim_for_exec failed");
+            return Err(anyhow::anyhow!("claim_for_exec: {e}"));
+        }
+    };
 
     let (url, secret, vendor) = match checker_endpoint() {
         Ok(v) => v,
         Err(reason) => {
-            fail_check_run(pool, job.run_id, &reason).await;
+            fail_check_run(pool, job.run_id, exec_owner, &reason).await;
             return Err(anyhow::anyhow!(reason));
         }
     };
@@ -274,13 +358,13 @@ pub async fn run_check_once(pool: &PgPool, job: &CheckJob) -> anyhow::Result<()>
     let nodes = match load_checkable(pool, &job.node_ids).await {
         Ok(n) => n,
         Err(e) => {
-            fail_check_run(pool, job.run_id, &format!("load nodes: {e}")).await;
+            fail_check_run(pool, job.run_id, exec_owner, &format!("load nodes: {e}")).await;
             return Err(e.into());
         }
     };
     if nodes.is_empty() {
         let reason = "no node has a readable payload (fetch them first; check PHLOGO_PAYLOAD_KEY)";
-        fail_check_run(pool, job.run_id, reason).await;
+        fail_check_run(pool, job.run_id, exec_owner, reason).await;
         return Err(anyhow::anyhow!(reason));
     }
 
@@ -305,7 +389,7 @@ pub async fn run_check_once(pool: &PgPool, job: &CheckJob) -> anyhow::Result<()>
     let results = match adapter.check(&request).await {
         Ok(r) => r,
         Err(e) => {
-            fail_check_run(pool, job.run_id, &format!("checker: {e}")).await;
+            fail_check_run(pool, job.run_id, exec_owner, &format!("checker: {e}")).await;
             return Err(anyhow::anyhow!("checker: {e}"));
         }
     };
@@ -342,10 +426,10 @@ pub async fn run_check_once(pool: &PgPool, job: &CheckJob) -> anyhow::Result<()>
 
     // M2.1: results + node_status + terminal state must succeed TOGETHER. A failure in
     // any of them marks the run failed (never a surface-success run missing status).
-    match persist_all(pool, job, &rows, &unreported).await {
+    match persist_all(pool, job, exec_owner, &rows, &unreported).await {
         Ok(()) => {}
         Err(e) => {
-            fail_check_run(pool, job.run_id, &format!("persist: {e}")).await;
+            fail_check_run(pool, job.run_id, exec_owner, &format!("persist: {e}")).await;
             return Err(e);
         }
     }
@@ -369,6 +453,7 @@ pub async fn run_check_once(pool: &PgPool, job: &CheckJob) -> anyhow::Result<()>
 async fn persist_all(
     pool: &PgPool,
     job: &CheckJob,
+    exec_owner: Uuid,
     rows: &[CheckResultRow],
     unreported: &[Uuid],
 ) -> anyhow::Result<()> {
@@ -397,7 +482,7 @@ async fn persist_all(
         )
         .await?;
     }
-    database::check::finish_check_run_in(&mut tx, job.run_id).await?;
+    database::check::finish_check_run_owned_in(&mut tx, job.run_id, exec_owner).await?;
     tx.commit().await?;
     Ok(())
 }

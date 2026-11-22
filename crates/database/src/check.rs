@@ -175,3 +175,33 @@ pub async fn finish_check_run_in(tx: &mut sqlx::PgConnection, run_id: Uuid) -> a
     .await?;
     Ok(())
 }
+
+/// Owner-guarded terminal write for the execution lease (M3.1-3).
+///
+/// Releases `exec_owner`/`exec_lease_until` in the SAME statement that confirms the
+/// terminal state, and only if this caller still holds the lease. It deliberately does
+/// NOT require `finished_at IS NULL`: `persist_check_run_in` has already flipped the run
+/// to `success` inside this very transaction (the results and the terminal state commit
+/// together), so such a guard could never match. Ownership is the lease, and a lost lease
+/// makes the whole transaction roll back — taking the premature `success` with it.
+pub async fn finish_check_run_owned_in(
+    tx: &mut sqlx::PgConnection,
+    run_id: Uuid,
+    exec_owner: Uuid,
+) -> anyhow::Result<()> {
+    let affected = sqlx::query(
+        "UPDATE check_runs \
+            SET status='success', finished_at=now(), exec_owner=NULL, exec_lease_until=NULL \
+          WHERE id=$1 AND exec_owner=$2",
+    )
+    .bind(run_id)
+    .bind(exec_owner)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    anyhow::ensure!(
+        affected == 1,
+        "execution lease lost before the terminal write (run {run_id})"
+    );
+    Ok(())
+}

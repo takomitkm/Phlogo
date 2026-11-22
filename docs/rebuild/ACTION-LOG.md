@@ -1872,3 +1872,79 @@ workspace `rustfmt --check` + `clippy --all-targets -- -D warnings` **0**。一�
 
 M4 冻结（deep 矩阵、InvokeDuration 归一化）；M5 未动。投递语义 at-least-once，崩溃窗口内可能重复
 push（执行侧收敛）；手动触发恢复依赖客户端重发同键，统一 outbox 扫描器未做；租约 60s 可按部署调整。
+
+## [UTC 2026-11-22T10:45:00Z] S72 · M3.1-3 执行侧原子认领（三轮复审裁定）
+
+**用户裁定**（复审 `e1d5105`）：六项里 timer / 手动幂等 / 错钥测试 / 迁移纪律 **通过**，投递状态机、
+故障注入与 RetryLayer **基本通过**；但发现**执行侧没有互斥**，因此 M3.1-2 **暂缓最终验收**。原文要点：
+`run_check_once` 里 `SELECT status` 是**读**，不是认领——push 成功后崩溃、租约过期重推，队列里同一
+`run_id` 会有两条 job，两个 worker 都读到 `started` 就都调 MiaoSpeed。**M4/M5 继续冻结**，不回滚 `e1d5105`。
+
+### 1. 根因
+
+`record_check_run` 的返回值只表示「是不是我建的行」——只有首次投递为真，重投永远假，换不来执行权。
+投递侧（0014 的 `claim_for_push`）解决的是「谁可以 push」；**执行侧必须另有租约**。
+
+### 2. 执行租约 + 原子认领（迁移 0015）
+
+`check_runs` 加 `exec_owner uuid` / `exec_lease_until timestamptz` + 部分索引
+`idx_check_runs_exec_lease (exec_lease_until) WHERE exec_lease_until IS NOT NULL`；**0014 不动**。
+`claim_for_exec` 一条语句：
+
+```sql
+UPDATE check_runs SET exec_owner=$2, exec_lease_until=now()+make_interval(secs=>$3),
+       status='started', finished_at=NULL
+ WHERE id=$1 AND status IN ('started','failed')
+   AND (exec_lease_until IS NULL OR exec_lease_until < now())
+RETURNING exec_owner
+```
+
+- 行锁串行化 → 恰好一个 `Some(owner)`；其余 `None`，对 Apalis 是 **no-op（Ok）**，不造假失败。
+- 认领**开启新尝试**（重置 `status`/`finished_at`），否则 `failed` 的重试永远写不进 `success`
+  （终态写入带 `finished_at IS NULL` 守卫）。
+- `EXEC_LEASE_SECS = 900`，超时即「死亡执行者让位」。
+- 终态：成功走 `finish_check_run_owned_in`（**与结果同一事务**，`WHERE id=$1 AND exec_owner=$2`，
+  0 行即整事务回滚）；失败走 `fail_check_run(owner, …)`（同守卫 + 释放租约，0 行只 warn 不覆盖新主人）。
+
+### 3. 证据（含基线对照）
+
+- `exec_claim_is_exclusive`：6 路并发（独立池）认领同一 run → **恰好 1 个赢家**，行内 `exec_owner`
+  与之相符（无时序依赖）。
+- `concurrent_executions_of_one_run_id_hit_miaospeed_once`：两 handler（屏障 + 两池）同时执行同一
+  `run_id`，mock 把首请求挂 400ms → checker **只收到 1 次** submit、输家 `Ok`、run `success`、
+  结果 1 行、租约已清。
+- **基线对照**：换回 `e1d5105` 版 `check_job.rs`/`lib.rs` 跑同一测试 → `left: 2, right: 1`
+  （旧代码确实打两次）；恢复后 1。测试有区分力。
+
+### 4. 迁移纪律与实测
+
+`phlogo_mig_scratch` 全序 0001…0015 → (push_state 3、`pushed` 0、恢复索引 1、configs 2、
+执行租约两列 2、执行租约索引 1) → `0015.down` 只清执行租约（2→0、索引 1→0、push_state 仍 3）→
+`0014.down` → `0013.down` → 删库。
+
+### 5. 文档语义修正（复审明确要求）
+
+- 不再声称周期任务可自动恢复：**没有** outbox/过期租约扫描器，过期租约只是「可被再认领」；周期任务
+  的下一周期是**新** `run_id`，卡住的旧记录不会自己好。可自动恢复的只有手动重发同一 key。
+- 幂等键**不绑定请求内容**（无 fingerprint）：同 key 配不同 `node_ids`/`batch_size` 不报错，后续应存
+  请求摘要并在不匹配时拒绝。
+
+### 门禁
+
+worker **18**（`check_wiring` 16，含 11 项故障注入）/ curse **37** / database **4** /
+distribution **43** / adapter **18** / checker **11** 全绿；workspace `rustfmt --check` +
+`clippy --all-targets -- -D warnings` **0**；一次性 `phlogo_jobs_test_m3` 建库→测试→销毁，
+生产 `phlogo_jobs` 零接触。
+
+### 途中修正（记要点）
+
+1. **终态守卫踩到 M2.1 的既有行为**：`persist_check_run_in` 在同一事务里已写 `status='success'`、
+   `finished_at=now()`，所以终态守卫**不能**再要求 `finished_at IS NULL`（永不命中）——首版即报
+   `execution lease lost before the terminal write`；改为只按租约 owner 判归属、靠事务回滚兜底。
+2. 基线对照脚本的清理链返回 2（DROP DATABASE 被残留连接挡住），测试库留在机器上 → 手工 DROP 并复查
+   只剩 `phlogo` / `phlogo_jobs`。
+3. gates 脚本的诊断行（§S71 记的 `apalis.jobs` schema 问题）本轮保持 `|| echo` 兜底，销毁步骤不再被跳过。
+
+### 遗留
+
+无后台恢复扫描器（投递/执行租约都没有）；幂等键缺请求摘要；M4/M5 冻结未动。
