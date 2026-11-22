@@ -2024,3 +2024,47 @@ distribution **43** / adapter **18** / checker **11** 全绿；workspace `rustfm
 
 无 outbox/过期扫描器（依赖 apalis 孤儿重投 + 手动同键重发）；幂等键缺请求摘要；M4 深度矩阵需重算
 三个常数；M4/M5 仍未动。
+
+## [UTC 2026-11-22T13:25:00Z] S74 · 钉住 apalis 的孤儿窗口/心跳 + 把不变量链变成编译期断言（复核轮 2 收尾）
+
+**触发**：goal 循环第 2 轮独立复核对 `59b7580` 判 **ACCEPT**，但留下一个 minor：
+「不变量链的上界 `apalis reenqueue_orphaned_after = 300s` 只是**上游默认值**，项目从未显式设置；
+将来 apalis 升级若把它降到 ≤ 租约（240s），孤儿重投就会退化成 no-op `Ok`，run 永远停在 `started`
+—— 而这条危险不需要改我们仓库的代码就能被触发」。
+
+### 修法
+
+1. `check_job.rs` 新增 `APALIS_ORPHAN_REENQUEUE_SECS = 300` / `APALIS_KEEP_ALIVE_SECS = 30`；
+   `jobs_storage(pool)` 用 `apalis_sql::Config::new(type_name::<CheckJob>())`
+   `.set_keep_alive(..).set_reenqueue_orphaned_after(..)` 构造 —— namespace **刻意保持**
+   `type_name::<CheckJob>()`，因为它是 `apalis.jobs.job_type` 的判别列（改掉会孤儿化已入队任务）。
+2. **编译期断言**把链钉死：`const _: () = assert!(CHECK_RUN_TIMEOUT_SECS < EXEC_LEASE_SECS);`
+   与 `assert!((EXEC_LEASE_SECS as u64) < APALIS_ORPHAN_REENQUEUE_SECS);` —— 把超时抬到租约之上、或把
+   租约抬到孤儿窗口之上，直接**编译失败**，而不是等到线上出现「空转烧掉唯一恢复机会」。
+3. 所有构造 `CheckJob` 队列的位置改用 `jobs_storage`：`main.rs` check worker、`trigger_check_batch`、
+   `check_wiring.rs` 三处测试。
+4. 文档：§10.2 新增「这条链不靠上游默认值碰巧成立」（含升级 apalis 时的注意点：若上游改了 orphan 语义
+   要重评 §10.4.1）；§11.6 改为「由编译期断言强制」。
+
+### 测试区分力的实测证据（复核 J 项）
+
+把 `run_check_once` 的 `tokio::time::timeout` 包裹**临时去掉**、其余不动，重跑
+`hung_checker_times_out_and_releases_the_lease`：`FAILED … finished in 31.14s`（31s 正是 mock 的 30s
+静默不回帧），带包裹时 1s 返回 `Err` 并通过。结论：该测试确实在测超时本身，不是假通过。之后已把校机
+文件还原（本地/远端 md5 一致），一次性测试库删除并复查只剩 `phlogo` / `phlogo_jobs`。
+
+### 门禁（本轮实测）
+
+worker **19** / curse **37** / database **4** / distribution **43** / adapter **18** / checker **11**
+全绿；`rustfmt --check` + `clippy --all-targets -- -D warnings` **0**；`cargo check --workspace
+--all-targets` 0；一次性 `phlogo_jobs_test_m3` 建库→测试→销毁，链内断言确认删除（`TESTDB_LEFT` 计数 = 0）。
+
+### 复核结论
+
+第 2 轮 **ACCEPT**（无阻塞缺陷；唯一 minor 即本条已修）。第 3 轮针对本提交复核 namespace 一致性与
+断言有效性，结果见下一条目（若有）。
+
+### 路由限制（仍未解决，需用户处理）
+
+本会话子代理白名单只有 `magpie/group/group-3`；指定 `magpie/group/group-2`（用户指定的 smart
+routing group）会被拒。所以「检查与裁定交给 group/group-2」目前退化为 group/group-3。

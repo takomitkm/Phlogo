@@ -242,6 +242,33 @@ fn check_run_timeout_secs() -> u64 {
     requested
 }
 
+/// apalis-sql's orphan re-enqueue window that [`EXEC_LEASE_SECS`] is calibrated against.
+///
+/// apalis-sql 0.7.4 defaults to 300 s, but a default is not a contract: we PIN it here by
+/// building the storage with an explicit config, so the invariant chain below cannot be
+/// broken by an upstream default change or by someone tuning the storage elsewhere.
+pub const APALIS_ORPHAN_REENQUEUE_SECS: u64 = 300;
+
+/// apalis-sql worker heartbeat interval for our storages (kept at the upstream default).
+pub const APALIS_KEEP_ALIVE_SECS: u64 = 30;
+
+// The invariant chain is enforced at COMPILE TIME, not just in prose: a timeout at or above
+// the lease, or a lease at or above the orphan window, would silently reintroduce either
+// "two executors can overlap" or "the only recovery re-delivery no-ops".
+const _: () = assert!(CHECK_RUN_TIMEOUT_SECS < EXEC_LEASE_SECS);
+const _: () = assert!((EXEC_LEASE_SECS as u64) < APALIS_ORPHAN_REENQUEUE_SECS);
+
+/// Build a `CheckJob` queue storage with OUR pinned timing config (see the consts above).
+///
+/// The namespace must stay `type_name::<CheckJob>()` (apalis's default): it is the
+/// `apalis.jobs.job_type` discriminator, so changing it would strand already-queued jobs.
+pub fn jobs_storage(pool: sqlx::PgPool) -> apalis_sql::postgres::PostgresStorage<CheckJob> {
+    let cfg = apalis_sql::Config::new(std::any::type_name::<CheckJob>())
+        .set_keep_alive(std::time::Duration::from_secs(APALIS_KEEP_ALIVE_SECS))
+        .set_reenqueue_orphaned_after(std::time::Duration::from_secs(APALIS_ORPHAN_REENQUEUE_SECS));
+    apalis_sql::postgres::PostgresStorage::new_with_config(pool, cfg)
+}
+
 /// Mark the run finished (idempotent: only the first transition wins).
 ///
 /// ⚠️ This does NOT participate in the execution lease (M3.1-3): no owner guard, no
@@ -762,8 +789,7 @@ pub async fn trigger_check_batch(
     period_label: &str,
 ) -> anyhow::Result<(usize, usize, usize)> {
     let jobs_pool = database::connect_lazy(jobs_dsn)?;
-    let mut storage: apalis_sql::postgres::PostgresStorage<CheckJob> =
-        apalis_sql::postgres::PostgresStorage::new(jobs_pool);
+    let mut storage = jobs_storage(jobs_pool);
     let cfg = CheckScheduleConfig {
         interval_minutes: 0, // not used by this path
         batch_size: batch_size.max(1),

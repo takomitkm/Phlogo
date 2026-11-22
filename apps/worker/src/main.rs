@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
 
     let jobs_dsn = worker::jobs_dsn(&cfg);
     let jobs_pool: PgPool = database::connect(&jobs_dsn).await?;
-    let check_storage: PostgresStorage<CheckJob> = PostgresStorage::new(jobs_pool.clone());
+    let check_storage: PostgresStorage<CheckJob> = worker::jobs_storage(jobs_pool.clone());
     let fetch_storage: PostgresStorage<FetchJob> = PostgresStorage::new(jobs_pool.clone());
     PostgresStorage::setup(&jobs_pool)
         .await

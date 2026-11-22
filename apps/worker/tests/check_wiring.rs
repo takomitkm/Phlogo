@@ -339,8 +339,7 @@ async fn scheduled_enqueue_is_deduplicated_by_period() {
     // Apalis tables (jobs/workers) are created here if missing; the main DB keeps
     // business tables only.
     let _ = apalis_sql::postgres::PostgresStorage::setup(&jobs_pool).await;
-    let mut storage: apalis_sql::postgres::PostgresStorage<CheckJob> =
-        apalis_sql::postgres::PostgresStorage::new(jobs_pool);
+    let mut storage = worker::jobs_storage(jobs_pool);
 
     seed_node(&pool, "m3-a.example", "pw").await;
     seed_node(&pool, "m3-b.example", "pw").await;
@@ -759,8 +758,7 @@ async fn manual_trigger_idempotency_key_recovers() {
     };
     let jobs_pool = database::connect(&jobs_dsn).await.expect("jobs connect");
     let _ = apalis_sql::postgres::PostgresStorage::setup(&jobs_pool).await;
-    let mut storage: apalis_sql::postgres::PostgresStorage<CheckJob> =
-        apalis_sql::postgres::PostgresStorage::new(jobs_pool);
+    let mut storage = worker::jobs_storage(jobs_pool);
     let _ = &mut storage;
 
     // Unique server per run (see manual_trigger_enqueues_explicit_nodes): a leftover
@@ -837,8 +835,7 @@ async fn undecryptable_payloads_are_excluded_from_scheduling() {
     };
     let jobs_pool = database::connect(&jobs_dsn).await.expect("jobs connect");
     let _ = apalis_sql::postgres::PostgresStorage::setup(&jobs_pool).await;
-    let mut storage: apalis_sql::postgres::PostgresStorage<CheckJob> =
-        apalis_sql::postgres::PostgresStorage::new(jobs_pool);
+    let mut storage = worker::jobs_storage(jobs_pool);
 
     // A healthy node (must actually be pushed) and a wrong-key node (must not be).
     // Unique server names per run: a leftover fixture from an earlier panic was sealed

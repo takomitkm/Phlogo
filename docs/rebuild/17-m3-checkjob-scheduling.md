@@ -397,6 +397,21 @@ CHECK_RUN_TIMEOUT_SECS (180s) < EXEC_LEASE_SECS (240s) < apalis reenqueue_orphan
   `context.WithTimeout(30*time.Minute)` 的等价目标；**M4 深度矩阵上线时必须同时抬高 timeout 与
   租约**（或改为执行期心跳续租），否则上面这条链会断。见 §11.8。
 
+#### 这条链不靠上游默认值「碰巧成立」
+
+上游默认值不是契约，所以两件事都做在代码里（S73 复核的 minor 项）：
+
+- `jobs_storage()` 用 `apalis_sql::Config::new(type_name::<CheckJob>())` **显式钉住**
+  `keep_alive = 30s` / `reenqueue_orphaned_after = 300s`（`APALIS_KEEP_ALIVE_SECS` /
+  `APALIS_ORPHAN_REENQUEUE_SECS`）。namespace 必须保持 `type_name::<CheckJob>()` —— 它是
+  `apalis.jobs.job_type` 的判别列，改掉会孤儿化已入队任务。所有构造 `CheckJob` 队列的地方
+  （`main.rs` 的 check worker、`trigger_check_batch`、测试）都走这个函数。
+- 三个常数之间有**编译期断言**：`const _: () = assert!(CHECK_RUN_TIMEOUT_SECS < EXEC_LEASE_SECS)` 与
+  `assert!(EXEC_LEASE_SECS < APALIS_ORPHAN_REENQUEUE_SECS)` —— 把超时抬到租约之上、或把租约抬到孤儿
+  窗口之上，都会直接**编译失败**，而不是等到线上出现「空转烧掉恢复机会」。
+- 升级 apalis 时：我们显式设置这两项，不受上游默认值变化影响；但若上游改了
+  `reenqueue_orphaned_after` 的**语义**（不再把心跳已死的 `Running` job 重置），要重新评估 §10.4.1。
+
 **终态写入同样带 owner 守卫，并在同一条语句里释放租约**：
 
 | 路径 | 语句 | 0 行时 |
@@ -460,7 +475,9 @@ workspace `rustfmt --check` + `clippy --all-targets -- -D warnings` **0**。迁�
    未完成 run（含队列行已被消费的）」就需要该扫描器——本轮按裁定未加。
 6. 常数是一组**互相约束**的值，改动前先读 §10.2 的不等式链：投递租约 60s（`DELIVERY_LEASE_SECS`）、
    执行租约 240s（`EXEC_LEASE_SECS`）、单次执行超时 180s（`CHECK_RUN_TIMEOUT_SECS`）、
-   apalis 孤儿窗口 300s。调大其中任何一个都要同步检查另外两个，否则「互斥」或「可恢复」会失效。
+   apalis 孤儿窗口 300s（`APALIS_ORPHAN_REENQUEUE_SECS`，我们**显式设置**而非依赖默认）与
+   `APALIS_KEEP_ALIVE_SECS=30`。其中「timeout < 租约 < 孤儿窗口」由**编译期断言**强制；改任何一个
+   都会先编译失败，再谈运行行为。
 7. **幂等键未绑定请求摘要**：同 key 配不同 `node_ids`/`batch_size` 不报错、也不区分；后续应为
    `manual-<key>` 保存请求 fingerprint 并在不匹配时拒绝（412/409）。
 8. **M4 深度矩阵上线时**：P3 设计稿记的是 30 分钟硬超时（上游 `context.WithTimeout(30*time.Minute)`
