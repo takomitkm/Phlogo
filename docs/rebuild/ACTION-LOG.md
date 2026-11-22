@@ -2068,3 +2068,53 @@ worker **19** / curse **37** / database **4** / distribution **43** / adapter **
 
 本会话子代理白名单只有 `magpie/group/group-3`；指定 `magpie/group/group-2`（用户指定的 smart
 routing group）会被拒。所以「检查与裁定交给 group/group-2」目前退化为 group/group-3。
+
+## [UTC 2026-11-22T14:20:00Z] S75 · smart 侧直接复核 HEAD：抓到并修掉第 3 个租约泄漏（既有复核未覆盖）
+
+**角色变化**：用户要求「干活由 group/group、检查与裁定由 group/group-2」。本会话当前**已运行在
+`group/group-2`**（模型切换），因此本轮检查由本会话直接做；但「用 group/group-2 作为子代理路由」仍被
+会话策略拒绝（`child LLM route "magpie/group/group-2" is not allowed for this Session`），子代理白名单
+只有 `magpie/group/group-3`。
+
+**复核对象**：`1b22ba7`（工作树干净、本地=远端 0/0；门禁跑的校机文件与本地 md5 逐个一致）。
+
+### 发现的缺陷（`run_check_once` 的第 4 条错误路径）
+
+`claim_for_exec` 之后到终态写入之间的所有错误路径本应 `fail_check_run`（释放租约），但
+`existing_ids()`（`adapter.check` **返回之后**读主库的一步）是裸 `?`：
+
+```rust
+let known = existing_ids(pool, &job.node_ids).await
+    .map_err(|e| anyhow::anyhow!("existing_ids: {e}"))?;   // 直接把租约一起带走了
+```
+
+后果链条（比「没有扫描器」更硬）：主库一次抖动 → 该次投递返回 `Err` 但**仍持有 `exec_owner` + 未过期
+租约** → run 停在 `started` → worker **心跳还活着**，apalis 不会把它当孤儿重投 → Apalis 立即重试的那
+两三次全部撞上有效租约、按 no-op 返回 `Ok` 并完成 → 再也没有投递 → **run 永久卡在 `started`**。
+
+### 修法与证据
+
+1. 改走 `fail_check_run`（owner 守卫 + 同语句释放租约 + 标记 `failed`），使重试能重新认领。
+   并把「claim 之后所有早退路径都经 `fail_check_run`」写成注释约束。
+2. 新测试 `db_error_after_checker_releases_the_execution_lease`：用**真实的 DB 错误**制造该路径 ——
+   测试在 mock 回帧后对 `nodes` 取 `ACCESS EXCLUSIVE` 锁，worker 侧用带 `lock_timeout=300ms` 的池，
+   于是 `existing_ids` 超时失败；断言 `Err` + 只 1 次 submit + `status='failed'` + 租约字段清空。
+3. **基线对照**：把修复回退成裸 `?` 后同一测试失败，`left: "started" / right: "failed"` —— 精确复现
+   「带租约卡死」，证明测试有区分力（修完恢复，校机文件 md5 与本地一致）。
+
+### 门禁（本轮实测）
+
+worker **19**（`check_wiring` 17，含 13 项故障注入）/ curse **37** / database **4** /
+distribution **43** / adapter **18** / checker **11** 全绿；`cargo check --workspace --all-targets` 0；
+`rustfmt --check` + `clippy --all-targets -- -D warnings` 0；一次性 `phlogo_jobs_test_m3` 建库→测试→
+销毁并由链内断言确认（`TESTDB_LEFT` 计数 = 0）；迁移 0001…0015 的 up/down 已在一次性库验证。
+
+### 结论
+
+`1b22ba7` + 本条修复之后，claim→终态之间不再存在不释放租约的退出路径；三组常量由编译期断言钉住；
+恢复边界（apalis 孤儿重投可救、我们无自建扫描器、周期任务不回救旧周期）在文档里如实写清。
+
+### 仍未决（需用户）
+
+子代理路由 `magpie/group/group-2` 未授权 —— 若希望「检查由 group-2 的**独立代理**做」而不是由本会话
+以 group-2 身份做，需要在会话/插件配置里放开该路由。

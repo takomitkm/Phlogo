@@ -513,9 +513,21 @@ pub async fn run_check_once(pool: &PgPool, job: &CheckJob) -> anyhow::Result<()>
     let reported: HashSet<Uuid> = rows.iter().map(|r| r.node_id).collect();
     // M2.1: a DB error here must fail the run — swallowing it would silently drop the
     // `unknown` rows for unreported nodes and leave a run that looks complete.
-    let known = existing_ids(pool, &job.node_ids)
-        .await
-        .map_err(|e| anyhow::anyhow!("existing_ids: {e}"))?;
+    //
+    // M3.1-3c: and it must also RELEASE THE EXECUTION LEASE. A bare `?` here returned
+    // while still holding `exec_owner`, so a transient DB error left the run leased and
+    // `started`; the worker is alive (heartbeating), so apalis never treats the job as
+    // orphaned, and the instant Apalis retries all lost the claim as no-ops and completed
+    // — the run then had no delivery left and never finished. Every error path between
+    // the claim and the terminal write goes through `fail_check_run` (owner-guarded,
+    // releases the lease, makes the run claimable again by the retry).
+    let known = match existing_ids(pool, &job.node_ids).await {
+        Ok(k) => k,
+        Err(e) => {
+            fail_check_run(pool, job.run_id, exec_owner, &format!("existing_ids: {e}")).await;
+            return Err(anyhow::anyhow!("existing_ids: {e}"));
+        }
+    };
     let unreported: Vec<Uuid> = job
         .node_ids
         .iter()

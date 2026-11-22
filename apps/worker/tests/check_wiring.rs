@@ -1237,6 +1237,185 @@ async fn concurrent_executions_of_one_run_id_hit_miaospeed_once() {
         .ok();
 }
 
+/// Fault #11 (M3.1-3c): a SOURCE-SHAPE guard for the "every early exit releases the lease"
+/// rule.
+///
+/// The runtime test above proves one specific error path; this one makes the RULE
+/// mechanical: inside `run_check_once`, after the execution claim succeeds, every
+/// `return Err(..)` must be preceded by a `fail_check_run` call (the owner-guarded
+/// statement that releases the lease). A bare `?`/`return` that leaks the lease strands
+/// the run in `started` forever (see the M3 page §10.2).
+///
+/// It is a source scan rather than a runtime probe on purpose: it cannot be defeated by a
+/// transient error, and it fails the moment someone adds a new early return.
+#[test]
+fn every_early_exit_after_the_exec_claim_releases_the_lease() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/check_job.rs"))
+        .expect("read check_job.rs");
+
+    let start = src
+        .find("pub async fn run_check_once")
+        .expect("run_check_once in source");
+    let body = &src[start..];
+    let end = body
+        .find("\n/// Persist results")
+        .expect("end of run_check_once");
+    let body = &body[..end];
+
+    // Where the execution lease is actually HELD: after the claim match block ends
+    // (the claim's own error paths run before the lease exists, so they are excluded).
+    let claim_at = body
+        .find("let exec_owner = match claim_for_exec(pool, job.run_id).await {")
+        .expect("claim statement");
+    let lease_at = body[claim_at..]
+        .find("\n    };\n")
+        .map(|p| p + "\n    };\n".len())
+        .expect("end of the claim match block");
+    let leased = &body[claim_at + lease_at..];
+
+    // Every early exit inside the leased region must be accompanied by a
+    // `fail_check_run` call in the same statement block (look back a few lines).
+    //
+    // Two shapes count as an early exit:
+    //   * `return Err(..)`        — an explicit early return
+    //   * a line ending in `?`    — a `?`-propagated error (the pre-fix `existing_ids`
+    //                                leak had this shape and no `return` at all)
+    let mut checked = 0usize;
+    let mut leaked: Vec<String> = Vec::new();
+    let lines: Vec<&str> = leased.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let is_return_err = trimmed.contains("return Err(");
+        let is_question = trimmed.ends_with('?')
+            && !trimmed.starts_with("//")
+            && !trimmed.contains("= ?")
+            && !trimmed.contains("? as ");
+        if !is_return_err && !is_question {
+            continue;
+        }
+        // A `?` inside the claim's diagnostic SELECT is before the lease exists; the
+        // leased region starts after the claim match block, so nothing here qualifies.
+        checked += 1;
+        let window: String = lines[i.saturating_sub(4)..=i].join("\n");
+        if !window.contains("fail_check_run(") {
+            leaked.push(format!("{}: {}", i + 1, trimmed));
+        }
+    }
+    assert!(
+        checked >= 7,
+        "expected several early exits in the leased region, found {checked} — the \
+         scan probably stopped matching the code shape"
+    );
+    assert!(
+        leaked.is_empty(),
+        "these early exits do NOT release the execution lease:\n{}",
+        leaked.join("\n")
+    );
+}
+
+/// Fault #10 (M3.1-3c): a DB error AFTER the checker returned still releases the lease.
+///
+/// Every error path between the execution claim and the terminal write must go through
+/// `fail_check_run`; otherwise the run keeps `exec_owner` + a live lease, the worker keeps
+/// heartbeating (so apalis never treats the job as orphaned), and the instant Apalis
+/// retries all lose the claim as no-ops and complete — the run is stranded for good.
+///
+/// Here `existing_ids` (a main-DB read that happens after `adapter.check`) is forced to
+/// fail: the test holds an ACCESS EXCLUSIVE lock on `nodes` from the moment the mock has
+/// answered, and this worker's pool is created with `lock_timeout=300ms`.
+#[tokio::test]
+async fn db_error_after_checker_releases_the_execution_lease() {
+    use std::str::FromStr;
+
+    let Some(pool) = setup().await else {
+        return;
+    };
+    let _guard = ENV_LOCK.lock().await;
+
+    // Answer after 600ms so the lock can be taken first; it is held for the whole read.
+    let (addr, submits) = mock_server_counting(37, Duration::from_millis(600)).await;
+    std::env::set_var("PHLOGO_CHECKER_WS_URL", format!("ws://{addr}"));
+    std::env::set_var("PHLOGO_CHECKER_SECRET", "test-secret");
+    std::env::remove_var("PHLOGO_CHECK_TIMEOUT_SECS");
+
+    let server = format!("m31-lock-{}.example", Uuid::new_v4().simple());
+    let node = seed_node(&pool, &server, "pw").await;
+    let run_id = Uuid::new_v4();
+    let job = CheckJob {
+        run_id,
+        schedule_id: Uuid::new_v4(),
+        checker_tag: "default".into(),
+        node_ids: vec![node],
+        presets: vec!["TEST_PING_RTT".into()],
+    };
+
+    // Worker-side pool with a short lock timeout for the post-check read.
+    let dsn = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let opts = sqlx::postgres::PgConnectOptions::from_str(&dsn)
+        .expect("dsn")
+        .options([("lock_timeout", "300ms")]);
+    let worker_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(opts)
+        .await
+        .expect("locked-down pool");
+
+    // Locker: takes ACCESS EXCLUSIVE on nodes after the check has been submitted.
+    let locker_pool = pool.clone();
+    let locker = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let mut tx = locker_pool.begin().await.expect("locker tx");
+        sqlx::query("LOCK TABLE nodes IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *tx)
+            .await
+            .expect("lock nodes");
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        tx.rollback().await.ok();
+    });
+
+    let res = run_check_once(&worker_pool, &job).await;
+    assert!(
+        res.is_err(),
+        "the post-check DB error must surface as an error"
+    );
+    assert_eq!(
+        submits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the check itself did run before the DB error"
+    );
+
+    let (status, owner, lease): (String, Option<Uuid>, Option<String>) = sqlx::query_as(
+        "SELECT status, exec_owner, exec_lease_until::text FROM check_runs WHERE id=$1",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("run row");
+    locker.abort();
+
+    assert_eq!(status, "failed", "the run must be marked failed");
+    assert!(
+        owner.is_none() && lease.is_none(),
+        "a leased run must never survive an error path: {owner:?} {lease:?}"
+    );
+
+    sqlx::query("DELETE FROM node_status WHERE node_id=$1")
+        .bind(node)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM nodes WHERE server=$1")
+        .bind(&server)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM check_runs WHERE id=$1")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
 /// Fault #9 (M3.1-3 follow-up): a HUNG checker is bounded.
 ///
 /// The adapter has no built-in timeout, so without a cap a stuck check could outlive the

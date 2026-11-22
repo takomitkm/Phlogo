@@ -412,6 +412,28 @@ CHECK_RUN_TIMEOUT_SECS (180s) < EXEC_LEASE_SECS (240s) < apalis reenqueue_orphan
 - 升级 apalis 时：我们显式设置这两项，不受上游默认值变化影响；但若上游改了
   `reenqueue_orphaned_after` 的**语义**（不再把心跳已死的 `Running` job 重置），要重新评估 §10.4.1。
 
+#### 规则：claim 之后到终态之间，**每一条**退出路径都必须释放租约（S75）
+
+`claim_for_exec` 拿到租约之后，`run_check_once` 里任何一次提前返回都**必须**走
+`fail_check_run(pool, run_id, exec_owner, reason)`（owner 守卫 + 同语句释放租约 + 标记 `failed`）。
+裸 `?` / 裸 `return Err(..)` 都是 bug，原因不是「少了一次失败标记」，而是**租约泄漏**：
+
+```
+主库一次抖动 → 早退且仍持有 exec_owner + 未过期租约
+             → run 停在 started
+             → worker 心跳还活着 → apalis 不当孤儿重投
+             → Apalis 立即重试的那几次全撞有效租约 → 按 no-op 返回 Ok 并完成
+             → 再没有投递 → run 永久卡在 started
+```
+
+S75 就是这么抓到的：`existing_ids()`（测活**返回之后**读主库的一步）当时是裸 `?`。已改成走
+`fail_check_run`，并加测试 `db_error_after_checker_releases_the_execution_lease`（用真实的
+`ACCESS EXCLUSIVE` 锁 + `lock_timeout` 制造该错误，断言租约字段清空；基线对照：回退成裸 `?` 时该
+测试失败 `left:"started"`）。
+
+> 写新代码时的自查法：把 `run_check_once` 里 `claim_for_exec` 之后的每个 `?` / `return` 逐个数一遍，
+> 确认它们后面跟着的是 `fail_check_run`。
+
 **终态写入同样带 owner 守卫，并在同一条语句里释放租约**：
 
 | 路径 | 语句 | 0 行时 |
@@ -433,6 +455,8 @@ CHECK_RUN_TIMEOUT_SECS (180s) < EXEC_LEASE_SECS (240s) < apalis reenqueue_orphan
 | `concurrent_executions_of_one_run_id_hit_miaospeed_once` | 两个 handler 同时执行**同一 `run_id`**（屏障 + 两个独立池），mock MiaoSpeed 把首个请求挂 400ms；断言 checker **只收到 1 次** submit、输家 `Ok`、run 终态 `success`、结果 1 行、租约已清 | 通过 |
 | **基线对照** | 把 worker 换回 `e1d5105` 的 `check_job.rs`/`lib.rs` 跑同一测试 | **`left: 2, right: 1`** —— 旧代码确实打两次，测试有区分力，不是「永远绿」 |
 | `hung_checker_times_out_and_releases_the_lease` | mock 接了请求但 30s 不回终态帧；把 `PHLOGO_CHECK_TIMEOUT_SECS` 设成 1s → 断言 `run_check_once` 返回 `Err`、耗时 < 10s、只发生 1 次 submit、run 变 `failed`、`exec_owner`/`exec_lease_until` 均已释放 | 通过（这才是「互斥不会被一次挂住的测活破坏」的实测证据） |
+| `db_error_after_checker_releases_the_execution_lease` | 用**真实 DB 错误**打掉「测活返回之后」那一步：测试在 mock 回帧后对 `nodes` 取 `ACCESS EXCLUSIVE` 锁，worker 侧池带 `lock_timeout=300ms` → `existing_ids` 超时失败；断言 `Err`、只 1 次 submit、`status='failed'`、租约字段清空 | 通过（**基线对照**：回退成裸 `?` 时该测试失败 `left:"started" / right:"failed"`） |
+| `every_early_exit_after_the_exec_claim_releases_the_lease` | **源码形状守卫**：扫描 `run_check_once` 里「拿到租约之后」的每一处早退（`return Err(..)` **和**以 `?` 结尾的行），要求每处都在同一语句块里先 `fail_check_run` | 通过（**基线对照**：把 `existing_ids` 改回裸 `?` 后该守卫失败并点名那一行） |
 
 ### 10.4 恢复的真实边界（S73 修正，别过度声称也别过度悲观）
 
@@ -451,10 +475,12 @@ CHECK_RUN_TIMEOUT_SECS (180s) < EXEC_LEASE_SECS (240s) < apalis reenqueue_orphan
    batch k 对应不同节点集合。执行侧仍按 `run_id` 去重（先到者执行），所以不会重复测活，但
    「恢复」的语义不完整。后续应为 key 保存请求摘要（fingerprint）。
 
-### 10.5 门禁（S73 实测，含 timeout 回归）
+### 10.5 门禁（S75 实测，含 timeout 与租约泄漏回归）
 
-worker **19**（`check_wiring` 17，含 12 项故障注入，新增 `hung_checker_times_out_and_releases_the_lease`）
-/ curse **37** / database **4** / distribution **43** / adapter **18** / checker **11** 全绿；
+worker **21**（`check_wiring` 19，含 14 项故障注入，新增 `hung_checker_times_out_and_releases_the_lease`、
+`db_error_after_checker_releases_the_execution_lease`、`every_early_exit_after_the_exec_claim_releases_the_lease`）
+/ curse **37** / database **4** /
+distribution **43** / adapter **18** / checker **11** 全绿；
 workspace `rustfmt --check` + `clippy --all-targets -- -D warnings` **0**。迁移 0001…0015 在一次性库
 `phlogo_mig_scratch` 全序执行 → (push_state 三列 3、`pushed` 0、恢复索引 1、configs 2、执行租约两列 2、
 执行租约索引 1) → `0015.down` 只清执行租约（两列 0、索引 0、push_state 三列**仍为 3**）→ `0014.down`
