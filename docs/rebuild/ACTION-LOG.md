@@ -1943,7 +1943,15 @@ distribution **43** / adapter **18** / checker **11** 全绿；workspace `rustfm
    `execution lease lost before the terminal write`；改为只按租约 owner 判归属、靠事务回滚兜底。
 2. 基线对照脚本的清理链返回 2（DROP DATABASE 被残留连接挡住），测试库留在机器上 → 手工 DROP 并复查
    只剩 `phlogo` / `phlogo_jobs`。
-3. gates 脚本的诊断行（§S71 记的 `apalis.jobs` schema 问题）本轮保持 `|| echo` 兜底，销毁步骤不再被跳过。
+3. **gates 脚本尾部命令（DROP DATABASE / 停 PG）一直在「看似执行、实际没执行」**：把 ~6 分钟的
+   cargo 测试链整条内联进一条 ssh 命令时，尾部输出会丢、顺序会乱，链尾的 DROP 从未真正跑过，
+   而 `EXIT=0` 看起来一切正常（这就是前几轮测试库反复残留的真因；此前误记为「被残留连接挡住」）。
+   修法：把步骤写成校机上的 `.cmd` 文件（每步 `if errorlevel 1 goto gatefail`，失败即中止），
+   输出重定向到 `gates.out` 再 `scp` 回本地解析；并把「测试库是否真的删掉」做成**显式断言**
+   （同一条链内 `echo TESTDB_LEFT-BEGIN` / `psql -A -t -c "SELECT count(*) …"` / `END`，
+   解析必须为 `0`）。修完实测：`==GATES-OK==` + `disposable-db-check: count='0'`。
+   另记一个 cmd 陷阱：SQL 里带 `|`（如 `'X|'||count(*)`）会被 cmd 当管道拆开，即使整段在双引号里
+   —— 校验查询因此改成不带 `|` 的 `SELECT count(*)`。
 
 ### 遗留
 
