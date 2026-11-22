@@ -308,28 +308,13 @@ pub fn jobs_storage(pool: sqlx::PgPool) -> apalis_sql::postgres::PostgresStorage
     apalis_sql::postgres::PostgresStorage::new_with_config(pool, cfg)
 }
 
-/// Mark the run finished (idempotent: only the first transition wins).
+/// Mark the run failed with a reason; one-shot.
 ///
-/// ⚠️ This does NOT participate in the execution lease (M3.1-3): no owner guard, no
-/// lease release. Production execution paths must use
-/// `database::check::finish_check_run_owned_in` through `persist_all`; this form exists
-/// for the terminal-transition idempotency test only. Calling it on a leased run would
-/// leave a stale `exec_owner` and is therefore a bug in any new caller.
-///
-/// `check_runs` uses `success` as its terminal-ok status (`source_fetch_runs` uses
-/// `finished`; the two tables are separate vocabularies, see p3-04).
-pub async fn finish_check_run(pool: &PgPool, run_id: Uuid) -> sqlx::Result<()> {
-    sqlx::query(
-        "UPDATE check_runs SET status='success', finished_at=now() \
-         WHERE id=$1 AND finished_at IS NULL",
-    )
-    .bind(run_id)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Mark the run failed with a reason; one-shot like `finish_check_run`.
+/// (The former `finish_check_run` — the unguarded terminal write — was REMOVED in
+/// M3.1-3d: it had no owner guard and no lease release, so it could mark a leased run
+/// `success` while leaving a stale `exec_owner` behind, and it was exported from the
+/// crate, which made it a foot-gun for future callers. The only terminal write now is
+/// `database::check::finish_check_run_owned_in`, reached through `persist_all`.)
 ///
 /// Owner-guarded (M3.1-3): only the worker that still holds the execution lease may
 /// finish the run, and the terminal write releases `exec_owner`/`exec_lease_until` in

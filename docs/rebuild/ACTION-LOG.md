@@ -2206,3 +2206,40 @@ worker **22** / curse **37** / database **4** / distribution **43** / adapter **
 全绿；`rustfmt --check` + `clippy --all-targets -- -D warnings` 0；一次性 `phlogo_jobs_test_m3`
 建库→测试→销毁，链内断言确认删除（`TESTDB_LEFT` 计数 = 0）。另单独验证：`curse` 的
 `check_trigger_permission_matrix` **单跑**通过（此前必须依赖 worker 测试先跑）。
+
+## [UTC 2026-11-23T00:30:00Z] S78 · 移除无守卫的终态写出口 + 同步脚本加哈希校验（并记一次门禁拦住我）
+
+### 1. 移除 `finish_check_run`（无守卫的终态写）
+
+复核（round-2 minor #2 的同类）留下的最后一口子：worker crate **导出**了一个**无 owner 守卫、
+不释放租约**的终态写 `finish_check_run` —— 任何 crate 都能 import 它，把一个「有租约在身」的 run
+标成 `success` 并留下陈旧 `exec_owner`。本轮直接**删除**该函数（而不是降可见性）：
+删掉后 `cargo check` 报 `never used`（说明它确实只有那一个测试调用方），于是把
+`apps/worker/tests/check_job.rs` 的终态幂等断言改为走**有守卫**的路径 ——
+`claim_for_exec` 拿 owner → `database::check::finish_check_run_owned_in` → 断言「连调两次仍只生效一次」。
+现在 `check_runs` 的终态写**只有一条**路径，且带 owner 守卫。
+
+### 2. 同步脚本的「静默不同步」被封死（本轮真实踩到）
+
+删函数后我跑 `cargo check`，校机报的还是**旧代码**的警告（`finish_check_run` is never used 仍在），
+而本地早就删了 —— 因为**上一次 `p86-sync-src.py` 实际没同步成功**（`rmdir` 后 `scp -r` 的目录状态
+问题），脚本却仍然返回 0，紧接着的 `cargo check` 又命中缓存，于是「看起来编译过了」。
+这是继 S72「长链尾部不执行却 EXIT=0」之后的**第二例「工具静默失败」**，同一个根因：成功与否没有
+被断言。
+
+修法：`p86-sync-src.py` 现在在拷贝后**逐文件比对 MD5**（本地 vs 校机 `certutil -hashfile`），
+8 个关键文件全部打印 `hash OK` / `hash DIFF`，不一致即返回 5 并打印 `!! SYNC MISMATCH`。
+本轮实测 8/8 OK。
+
+### 3. 门禁真的拦住了我（clippy）
+
+删函数时我留了一段悬空的 doc 注释 → `clippy -D warnings` 报
+`empty_line_after_doc_comments` → 门禁 `==GATES-FAILED==`（我新链路里 `if errorlevel 1 goto gatefail`
+起作用了）。修正后重跑 `==GATES-OK==`。顺带说明：新链路的失败**不再被吞**，且失败时
+`disposable-db-check` 会报 `count='missing'`（而不是假 0）。
+
+### 门禁（本轮实测）
+
+worker **22** / curse **37** / database **4** / distribution **43** / adapter **18** / checker **11**
+全绿；`rustfmt --check` + `clippy --all-targets -- -D warnings` 0；同步 8/8 哈希一致；
+一次性 `phlogo_jobs_test_m3` 建库→测试→销毁，链内断言确认删除（`TESTDB_LEFT` 计数 = 0）。
