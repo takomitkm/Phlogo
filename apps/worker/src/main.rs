@@ -60,20 +60,30 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         let now = tokio::time::Instant::now();
         // All three start one full period AFTER startup (no immediate-fire first tick).
-        // NOTE on the period label: it is minute-granular, so two ticks within the same
-        // minute would share a label and the second would be skipped as duplicate —
-        // that is the desired behavior for sub-minute restarts, and the interval is
-        // always >= 60s by config.
         let mut fetch_tick =
             tokio::time::interval_at(now + Duration::from_secs(300), Duration::from_secs(300));
         let mut cleanup_tick = tokio::time::interval_at(
             now + Duration::from_secs(cleanup_secs),
             Duration::from_secs(cleanup_secs),
         );
+        // M3.1-2 fix #1: the check timer is anchored to GLOBAL UTC boundaries, not to
+        // this process's startup instant. First tick = the first boundary at or after
+        // startup + interval (the "at least one full period" ruling), so workers started
+        // minutes apart share the same boundary sequence and race on the SAME slot
+        // label; the dedup row then resolves the race. The label comes from the
+        // PLANNED boundary, never from a delayed execution's Utc::now().
+        let startup = chrono::Utc::now();
+        let (mut planned_at, first_label) = worker::check_job::next_boundary_after(
+            startup + chrono::Duration::seconds(check_secs as i64),
+            check_cfg.interval_minutes,
+        );
+        let wait_secs = (planned_at - startup).num_seconds().max(1) as u64;
         let mut check_tick = tokio::time::interval_at(
-            now + Duration::from_secs(check_secs),
+            tokio::time::Instant::now() + Duration::from_secs(wait_secs),
             Duration::from_secs(check_secs),
         );
+        // Label of the slot the NEXT tick will evaluate (kept in lockstep with ticks).
+        let mut planned_label = first_label;
         loop {
             tokio::select! {
                 _ = fetch_tick.tick() => {
@@ -97,20 +107,14 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 _ = check_tick.tick() => {
-                    // Period label = ALIGNED UTC boundary (M3.1 fix #1): every worker
-                    // derives the label from wall-clock now floored to the period
-                    // length, so instances started at different moments still share
-                    // one schedule identity for the same logical period — the
-                    // check_runs unique constraint then actually dedups them.
-                    let period = worker::check_job::aligned_period_label(
-                        chrono::Utc::now(),
-                        check_cfg.interval_minutes,
-                    );
+                    // Use the label PLANNED for this tick (its boundary time), never a
+                    // delayed execution's wall clock.
+                    let period = planned_label.clone();
                     match worker::enqueue_scheduled(&mut sched_check, &sched_pool, &period, &check_cfg).await {
-                        Ok((pushed, skipped, re_pushed, nodes, undecryptable)) => {
-                            if pushed > 0 || re_pushed > 0 {
+                        Ok((pushed, skipped, nodes, undecryptable)) => {
+                            if pushed > 0 {
                                 tracing::info!(
-                                    pushed, skipped, re_pushed, nodes, undecryptable, %period,
+                                    pushed, skipped, nodes, undecryptable, %period,
                                     "check batch scheduled"
                                 );
                             }
@@ -126,6 +130,16 @@ async fn main() -> anyhow::Result<()> {
                         }
                         Err(e) => tracing::error!(error = %e, "check scheduling failed"),
                     }
+                    // Advance the plan ARITHMETICALLY to the next slot. Recomputing it
+                    // from Utc::now() would be wrong exactly when the ruling cares: a
+                    // delayed tick must keep the label of the slot it was planned for,
+                    // and a catch-up burst of ticks must walk the missed slots one by
+                    // one instead of all claiming the current boundary.
+                    planned_at += chrono::Duration::seconds(check_secs as i64);
+                    planned_label = worker::check_job::aligned_period_label(
+                        planned_at,
+                        check_cfg.interval_minutes,
+                    );
                 }
             }
         }

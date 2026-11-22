@@ -20,9 +20,14 @@ pub struct CheckTriggerReq {
     /// Explicit node selection. Empty/absent = all schedulable (Linked + payload present).
     #[serde(default)]
     pub node_ids: Vec<Uuid>,
-    /// Batch size override (clamped to [1, 500]; default from `check_batch_size`).
+    /// Batch size override (clamped to [1, 100]; default from `check_batch_size`).
     #[serde(default)]
     pub batch_size: Option<usize>,
+    /// M3.1-2 idempotency key (ruling): the label is used VERBATIM as the schedule
+    /// identity. Re-sending the SAME key recovers lost/unpushed batches instead of
+    /// creating a second logical run. Omit it for a fresh one-shot trigger.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 /// POST /api/v1/check/trigger — enqueue CheckJobs (AdminJWT only; 202 with stats).
@@ -52,13 +57,17 @@ pub async fn trigger(State(st): State<AppState>, req: Option<Json<CheckTriggerRe
         .unwrap_or(50);
     let batch_size = req.batch_size.unwrap_or(default_batch).clamp(1, 100).max(1);
 
-    // Distinct period label per request: two manual triggers are two logical runs
-    // (unlike the periodic scheduler, which dedups by period).
-    let period = format!(
-        "manual-{}-{}",
-        chrono::Utc::now().format("%Y%m%dT%H%M%S"),
-        Uuid::new_v4().simple()
-    );
+    // Period label = the client's idempotency key when present (verbatim: re-sending
+    // the same key recovers instead of duplicating); otherwise a fresh unique label
+    // (a new one-shot trigger).
+    let period = match req.idempotency_key.as_deref().map(str::trim) {
+        Some(k) if !k.is_empty() => format!("manual-{k}"),
+        _ => format!(
+            "manual-{}-{}",
+            chrono::Utc::now().format("%Y%m%dT%H%M%S"),
+            Uuid::new_v4().simple()
+        ),
+    };
 
     match worker::trigger_check_batch(&jobs_dsn, st.pool(), Some(node_ids), batch_size, &period)
         .await
@@ -78,6 +87,8 @@ pub async fn trigger(State(st): State<AppState>, req: Option<Json<CheckTriggerRe
                     "duplicate_batches": skipped,
                     "nodes": nodes,
                     "batch_size": batch_size,
+                    // Echo the label so a client can re-send it verbatim to recover.
+                    "period": period,
                 })),
             )
                 .into_response()

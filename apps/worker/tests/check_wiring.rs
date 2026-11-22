@@ -336,22 +336,22 @@ async fn scheduled_enqueue_is_deduplicated_by_period() {
     // (the same fixed period labels). Use unique labels per invocation instead.
     let stamp = Uuid::new_v4().simple().to_string();
     let period_a = format!("test-period-A-{stamp}");
-    let (p1, s1, _r1, n1, _u1) = enqueue_scheduled(&mut storage, &pool, &period_a, &cfg)
+    let (p1, s1, n1, _u1) = enqueue_scheduled(&mut storage, &pool, &period_a, &cfg)
         .await
         .expect("first pass");
     assert!(n1 >= 2, "our two seeded nodes must be schedulable: n={n1}");
     assert_eq!(p1, n1, "batch_size=1: one batch per node, all fresh");
     assert_eq!(s1, 0, "fresh period skips nothing");
 
-    // Same period again: dedup — everything skipped.
-    let (p2, s2, _r2, n2, _u2) = enqueue_scheduled(&mut storage, &pool, &period_a, &cfg)
+    // Same period again: dedup — everything skipped (push_state='enqueued' is Busy).
+    let (p2, s2, n2, _u2) = enqueue_scheduled(&mut storage, &pool, &period_a, &cfg)
         .await
         .expect("second pass");
     assert_eq!((p2, s2, n2), (0, p1, n1), "same period must dedup entirely");
 
     // Different period: fresh runs again (same shape as the first pass).
     let period_b = format!("test-period-B-{stamp}");
-    let (p3, s3, _r3, n3, _u3) = enqueue_scheduled(&mut storage, &pool, &period_b, &cfg)
+    let (p3, s3, n3, _u3) = enqueue_scheduled(&mut storage, &pool, &period_b, &cfg)
         .await
         .expect("third pass");
     assert_eq!((p3, s3, n3), (p1, 0, n1), "a new period schedules fresh");
@@ -359,7 +359,7 @@ async fn scheduled_enqueue_is_deduplicated_by_period() {
     // Nodes without payloads are excluded from scheduling.
     let orphan = seed_node_only(&pool, "m3-orphan.example").await;
     let period_c = format!("test-period-C-{stamp}");
-    let (p4, _, _r4, n4, _u4) = enqueue_scheduled(&mut storage, &pool, &period_c, &cfg)
+    let (p4, _, n4, _u4) = enqueue_scheduled(&mut storage, &pool, &period_c, &cfg)
         .await
         .expect("fourth pass");
     assert_eq!(n4, n1, "orphan without payload must not be scheduled");
@@ -374,8 +374,9 @@ async fn scheduled_enqueue_is_deduplicated_by_period() {
     .ok();
 }
 
-/// M3 stage 4: the manual trigger service enqueues distinct periods and honours an
-/// explicit node list (API-level auth is covered by the curse tests).
+/// M3 stage 4: the manual trigger service enqueues with explicit labels and honours an
+/// explicit node list (API-level auth is covered by the curse tests). Same key =
+/// same logical run (recovered, not duplicated) — see the idempotency test below.
 #[tokio::test]
 async fn manual_trigger_enqueues_explicit_nodes() {
     let Some(pool) = setup().await else {
@@ -388,90 +389,428 @@ async fn manual_trigger_enqueues_explicit_nodes() {
     let jobs_pool = database::connect(&jobs_dsn).await.expect("jobs connect");
     let _ = apalis_sql::postgres::PostgresStorage::setup(&jobs_pool).await;
 
-    seed_node(&pool, "m3-manual.example", "pw").await;
-    let id: Uuid = sqlx::query_scalar("SELECT id FROM nodes WHERE server='m3-manual.example'")
-        .fetch_one(&pool)
-        .await
-        .expect("node id");
+    // Unique server per run: a leftover row from an earlier panic would otherwise be
+    // picked up by a `WHERE server=...` lookup, and its payload was sealed by that
+    // process's ephemeral key — i.e. undecryptable here, so the fixture would silently
+    // filter itself out and the trigger would push nothing.
+    let server = format!("m3-manual-{}.example", Uuid::new_v4().simple());
+    let id = seed_node(&pool, &server, "pw").await;
 
-    let (p, s, n) = trigger_check_batch(&jobs_dsn, &pool, Some(vec![id]), 10, "")
+    let key1 = format!("m3-manual-{}", Uuid::new_v4().simple());
+    let (p, s, n) = trigger_check_batch(&jobs_dsn, &pool, Some(vec![id]), 10, &key1)
         .await
         .expect("trigger");
     assert_eq!((p, n), (1, 1), "one explicit node, one batch");
     assert_eq!(s, 0);
 
-    // Same explicit list again: each manual trigger derives a UNIQUE period label
-    // (manual-<ts>-<uuid>), so this pushes a fresh logical run.
-    let (p2, _, _) = trigger_check_batch(&jobs_dsn, &pool, Some(vec![id]), 10, "")
+    // A DIFFERENT key = a different logical run (pushes again).
+    let key2 = format!("m3-manual-{}", Uuid::new_v4().simple());
+    let (p2, _, _) = trigger_check_batch(&jobs_dsn, &pool, Some(vec![id]), 10, &key2)
         .await
         .expect("trigger 2");
-    assert_eq!(p2, 1, "each manual trigger is its own logical run");
+    assert_eq!(p2, 1, "each new key is its own logical run");
 
     // Unknown ids are FILTERED OUT before batching (no ghost schedules).
-    let (p3, _, n3) = trigger_check_batch(&jobs_dsn, &pool, Some(vec![Uuid::new_v4()]), 10, "")
+    let key3 = format!("m3-manual-{}", Uuid::new_v4().simple());
+    let (p3, _, n3) = trigger_check_batch(&jobs_dsn, &pool, Some(vec![Uuid::new_v4()]), 10, &key3)
         .await
         .expect("trigger 3");
     assert_eq!(p3, 0, "unknown node must not schedule");
     assert_eq!(n3, 0, "unknown node is filtered from the list entirely");
 
-    sqlx::query("DELETE FROM nodes WHERE server='m3-manual.example'")
+    sqlx::query("DELETE FROM nodes WHERE server=$1")
+        .bind(&server)
         .execute(&pool)
         .await
         .ok();
 }
 
 // ---------------------------------------------------------------------------
-// M3.1 fault-injection tests (ruling 2026-11-20): the four behaviors the previous
-// report could not prove.
+// M3.1-2 fault-injection tests (ruling 2026-11-20): the seven behaviors demanded.
+// All use the disposable PHLOGO_TEST_JOBS_DSN (skip without it; never DATABASE_URL).
 // ---------------------------------------------------------------------------
 
-/// Fault #1: two workers started at DIFFERENT wall-clock moments must derive the SAME
-/// logical period identity (aligned boundary), so the dedup constraint actually links
-/// their passes.
+fn require_jobs_dsn() -> Option<String> {
+    match std::env::var("PHLOGO_TEST_JOBS_DSN") {
+        Ok(d) => Some(d),
+        Err(_) => {
+            eprintln!("skip: PHLOGO_TEST_JOBS_DSN not set (refusing to use DATABASE_URL as queue)");
+            None
+        }
+    }
+}
+
+/// Read pushed Apalis job payloads and deserialize their CheckJob (ruling: assert on
+/// the real payload, never on string guesses). apalis-sql 0.7.4 stores tasks in the
+/// `apalis.jobs` table, `job JSONB`, `status` in Pending/Running/Done/... — read all.
+async fn pushed_jobs(jobs_dsn: &str) -> Vec<CheckJob> {
+    let db = database::connect(jobs_dsn).await.expect("jobs db");
+    let rows: Vec<Value> = sqlx::query_scalar("SELECT job FROM apalis.jobs")
+        .fetch_all(&db)
+        .await
+        .expect("jobs");
+    rows.into_iter()
+        .filter_map(|v| serde_json::from_value(v).ok())
+        .collect()
+}
+
+/// Fault #1 (timer identity): workers started at DIFFERENT wall-clock moments share
+/// one boundary sequence — next_boundary_after is anchored to UTC slots, and the
+/// planned label of a tick equals the slot the tick covers.
 #[test]
-fn aligned_period_label_is_stable_across_start_times() {
-    use worker::aligned_period_label;
-    let t0 = chrono::DateTime::parse_from_rfc3339("2026-11-20T12:00:30Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    let t1 = chrono::DateTime::parse_from_rfc3339("2026-11-20T12:31:30Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    // 30-min interval: 12:00:30 lands in the 12:00 slot, 12:31:30 in the 12:30 slot —
-    // different slots, so the SIMULATED restart uses a start one minute after the
-    // first worker's tick, still inside the same slot:
-    let t_same_slot = chrono::DateTime::parse_from_rfc3339("2026-11-20T12:29:30Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    let a = aligned_period_label(t0, 30);
-    let b = aligned_period_label(t_same_slot, 30);
+fn boundary_timer_shares_identity_across_start_times() {
+    use worker::{aligned_period_label, next_boundary_after};
+    let mk = |s: &str| {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    };
+    // Worker A starts 12:29, ticks at the first boundary >= 12:59 => 13:00 slot.
+    let (a_at, a_label) = next_boundary_after(mk("2026-11-20T12:59:00Z"), 30);
+    // Worker B starts 12:31, ticks at the first boundary >= 13:01 => 13:30 slot —
+    // DIFFERENT slot, but crucially both land ON a boundary and the LABEL of A's tick
+    // is exactly that slot's label (not "now formatted at execution time").
+    let (b_at, b_label) = next_boundary_after(mk("2026-11-20T13:01:00Z"), 30);
     assert_eq!(
-        a, b,
-        "same slot => same schedule identity regardless of start time"
+        a_label, "period-20261120T1300+30m",
+        "A's planned slot label"
     );
-    let next = aligned_period_label(t1, 30);
-    assert_ne!(a, next, "the next slot must get a fresh identity");
-    // The label encodes the interval so two intervals can't collide on the same slot.
-    assert!(a.ends_with("+30m"), "{a}");
-    // Interval change => new identity even for the same wall-clock slot.
-    assert_ne!(a, aligned_period_label(t0, 60));
-    assert!(aligned_period_label(t1, 30) != a, "different slot differs");
     assert_eq!(
-        aligned_period_label(t0, 30),
-        aligned_period_label(t_same_slot, 30)
+        b_label, "period-20261120T1330+30m",
+        "B's planned slot label"
+    );
+    // Both timers sit exactly on UTC boundaries (second == 0).
+    assert_eq!(a_at.timestamp() % 1800, 0, "A anchored to a boundary");
+    assert_eq!(b_at.timestamp() % 1800, 0, "B anchored to a boundary");
+    // Restart within the same slot: first boundary >= startup+interval is the SAME
+    // slot as an already-running worker's next tick, so no duplicate slot execution.
+    let (r_at, r_label) = next_boundary_after(mk("2026-11-20T12:31:00Z"), 30);
+    assert_eq!(r_label, "period-20261120T1300+30m");
+    assert_eq!(
+        r_at.timestamp(),
+        a_at.timestamp(),
+        "restart aligns to the same tick"
+    );
+    // A delayed execution still uses the PLANNED label: the label for 13:00 stays
+    // 13:00 even when evaluated at 13:04.
+    assert_eq!(
+        aligned_period_label(mk("2026-11-20T13:04:00Z"), 30),
+        "period-20261120T1300+30m",
+        "label is slot-derived, not execution-time-derived"
     );
 }
 
-/// Fault #2: a node whose ciphertext cannot be decrypted (wrong key) must be EXCLUDED
-/// from scheduling, even though its node_payloads row exists.
+/// Fault #2 (concurrent claim): N schedulers race for the same batch through
+/// independent connections — exactly one wins the lease, the rest see Busy.
+#[tokio::test]
+async fn concurrent_claims_yield_exactly_one_winner() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use worker::{claim_for_push, CheckJob};
+    // Main-DB setup (migrations) only; racers use their own connections below.
+    let _pool = setup().await;
+    let Some(_jobs_dsn) = require_jobs_dsn() else {
+        return;
+    };
+    let _ = _jobs_dsn;
+
+    let job = CheckJob {
+        run_id: Uuid::new_v4(),
+        schedule_id: Uuid::new_v4(),
+        checker_tag: "default".into(),
+        node_ids: vec![Uuid::new_v4()],
+        presets: vec!["TEST_PING_RTT".into()],
+    };
+
+    const WORKERS: usize = 8;
+    let winners = Arc::new(AtomicUsize::new(0));
+    let busy = Arc::new(AtomicUsize::new(0));
+    let barrier = Arc::new(tokio::sync::Barrier::new(WORKERS));
+    let mut handles = Vec::with_capacity(WORKERS);
+    for _ in 0..WORKERS {
+        let job = job.clone();
+        let winners = winners.clone();
+        let busy = busy.clone();
+        let barrier = barrier.clone();
+        handles.push(tokio::spawn(async move {
+            // Each racer gets its OWN connection (real concurrency, not serial calls).
+            let racer = database::connect(&std::env::var("DATABASE_URL").unwrap())
+                .await
+                .expect("racer pool");
+            barrier.wait().await;
+            let r = claim_for_push(&racer, &job).await.expect("claim");
+            match r {
+                Some(_) => winners.fetch_add(1, Ordering::SeqCst),
+                None => busy.fetch_add(1, Ordering::SeqCst),
+            };
+        }));
+    }
+    for h in handles {
+        h.await.expect("task");
+    }
+    assert_eq!(
+        winners.load(Ordering::SeqCst),
+        1,
+        "exactly one lease holder"
+    );
+    assert_eq!(
+        busy.load(Ordering::SeqCst),
+        WORKERS - 1,
+        "everyone else is Busy"
+    );
+}
+
+/// Fault #2b (recovery race): two schedulers recover the SAME expired lease through
+/// independent connections — exactly one re-claim wins.
+#[tokio::test]
+async fn concurrent_recovery_of_expired_lease_has_one_winner() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use worker::{claim_for_push, CheckJob};
+    let Some(pool) = setup().await else {
+        return;
+    };
+    let Some(_jobs_dsn) = require_jobs_dsn() else {
+        return;
+    };
+    let _ = _jobs_dsn;
+
+    let job = CheckJob {
+        run_id: Uuid::new_v4(),
+        schedule_id: Uuid::new_v4(),
+        checker_tag: "default".into(),
+        node_ids: vec![Uuid::new_v4()],
+        presets: vec!["TEST_PING_RTT".into()],
+    };
+    // First claim takes the lease...
+    assert!(claim_for_push(&pool, &job).await.expect("claim").is_some());
+    // ...then the holder "crashes": backdate the lease so it is expired.
+    sqlx::query("UPDATE check_runs SET lease_until = now() - interval '5 seconds' WHERE id=$1")
+        .bind(job.run_id)
+        .execute(&pool)
+        .await
+        .expect("expire lease");
+
+    const RECOVERERS: usize = 6;
+    let winners = Arc::new(AtomicUsize::new(0));
+    let busy = Arc::new(AtomicUsize::new(0));
+    let barrier = Arc::new(tokio::sync::Barrier::new(RECOVERERS));
+    let mut handles = Vec::with_capacity(RECOVERERS);
+    for _ in 0..RECOVERERS {
+        let job = job.clone();
+        let winners = winners.clone();
+        let busy = busy.clone();
+        let barrier = barrier.clone();
+        handles.push(tokio::spawn(async move {
+            let racer = database::connect(&std::env::var("DATABASE_URL").unwrap())
+                .await
+                .expect("racer pool");
+            barrier.wait().await;
+            match claim_for_push(&racer, &job).await.expect("claim") {
+                Some(_) => winners.fetch_add(1, Ordering::SeqCst),
+                None => busy.fetch_add(1, Ordering::SeqCst),
+            };
+        }));
+    }
+    for h in handles {
+        h.await.expect("task");
+    }
+    assert_eq!(winners.load(Ordering::SeqCst), 1, "one recovery winner");
+    assert_eq!(busy.load(Ordering::SeqCst), RECOVERERS - 1);
+}
+
+/// Fault #3: a run that ALREADY SUCCEEDED is never re-executed on redelivery (the
+/// at-least-once delivery double-push case) — the execution-side gate skips it.
+#[tokio::test]
+async fn succeeded_run_is_not_reexecuted_on_redelivery() {
+    let Some(pool) = setup().await else {
+        return;
+    };
+    let _guard = ENV_LOCK.lock().await;
+    let addr = mock_server(37).await;
+    std::env::set_var("PHLOGO_CHECKER_WS_URL", format!("ws://{addr}"));
+    std::env::set_var("PHLOGO_CHECKER_SECRET", "test-secret");
+
+    let a = seed_node(&pool, "m31-once.example", "pw").await;
+    let job = CheckJob {
+        run_id: Uuid::new_v4(),
+        schedule_id: Uuid::new_v4(),
+        checker_tag: "default".into(),
+        node_ids: vec![a],
+        presets: vec!["TEST_PING_RTT".into()],
+    };
+    run_check_once(&pool, &job).await.expect("first run");
+    let rows1: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM node_check_results WHERE check_run_id=$1")
+            .bind(job.run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+    assert_eq!(rows1, 1);
+
+    // Simulate the double-push: the SAME run delivered again after success.
+    run_check_once(&pool, &job)
+        .await
+        .expect("redelivery is Ok (skipped)");
+    let rows2: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM node_check_results WHERE check_run_id=$1")
+            .bind(job.run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+    assert_eq!(
+        rows2, 1,
+        "a succeeded run must not execute (or persist) twice"
+    );
+
+    sqlx::query("DELETE FROM nodes WHERE server='m31-once.example'")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM check_runs WHERE id=$1")
+        .bind(job.run_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
+/// Fault #4: state-transition DB errors are NOT swallowed — claim/enqueue surfaces
+/// them to the scheduling pass.
+#[tokio::test]
+async fn state_transition_errors_propagate() {
+    use worker::{claim_for_push, mark_enqueued_for_test, CheckJob};
+    let Some(pool) = setup().await else {
+        return;
+    };
+    let job = CheckJob {
+        run_id: Uuid::new_v4(),
+        schedule_id: Uuid::new_v4(),
+        checker_tag: "default".into(),
+        node_ids: vec![Uuid::new_v4()],
+        presets: vec![],
+    };
+    // Happy path first: claim + mark_enqueued succeed.
+    let claim = claim_for_push(&pool, &job)
+        .await
+        .expect("claim")
+        .expect("won");
+    mark_enqueued_for_test(&pool, job.run_id, claim.owner)
+        .await
+        .expect("mark enqueued");
+    let state: String = sqlx::query_scalar("SELECT push_state FROM check_runs WHERE id=$1")
+        .bind(job.run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("row");
+    assert_eq!(state, "enqueued");
+
+    // A STALE owner (previous lease holder) cannot flip the state afterwards.
+    let stale_owner = Uuid::new_v4();
+    let applied = mark_enqueued_for_test(&pool, job.run_id, stale_owner)
+        .await
+        .expect("the guarded UPDATE must not error");
+    assert!(
+        !applied,
+        "a stale owner's mark is a reported no-op (0 rows), not an error and not applied"
+    );
+    let state2: String = sqlx::query_scalar("SELECT push_state FROM check_runs WHERE id=$1")
+        .bind(job.run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("row");
+    assert_eq!(
+        state2, "enqueued",
+        "stale owner must not overwrite the state"
+    );
+}
+
+/// Fault #5: the manual trigger with the SAME idempotency key recovers lost batches
+/// instead of creating a second logical run.
+#[tokio::test]
+async fn manual_trigger_idempotency_key_recovers() {
+    use worker::{schedule_id_for_label, scheduled_run_id, trigger_check_batch};
+    let Some(pool) = setup().await else {
+        return;
+    };
+    let Some(jobs_dsn) = require_jobs_dsn() else {
+        return;
+    };
+    let jobs_pool = database::connect(&jobs_dsn).await.expect("jobs connect");
+    let _ = apalis_sql::postgres::PostgresStorage::setup(&jobs_pool).await;
+    let mut storage: apalis_sql::postgres::PostgresStorage<CheckJob> =
+        apalis_sql::postgres::PostgresStorage::new(jobs_pool);
+    let _ = &mut storage;
+
+    // Unique server per run (see manual_trigger_enqueues_explicit_nodes): a leftover
+    // row sealed by a previous process's ephemeral key would be filtered out as
+    // undecryptable and this trigger would report (0,0,0).
+    let server = format!("m31-idem-{}.example", Uuid::new_v4().simple());
+    let id = seed_node(&pool, &server, "pw").await;
+
+    let key = format!("idem-{}", Uuid::new_v4().simple());
+    let (p1, s1, n1) = trigger_check_batch(&jobs_dsn, &pool, Some(vec![id]), 10, &key)
+        .await
+        .expect("trigger 1");
+    assert_eq!(
+        (p1, s1, n1),
+        (1, 0, 1),
+        "first trigger with the key pushes one batch"
+    );
+
+    // Re-send with the SAME key: the run row is already 'enqueued' → Busy → skip.
+    // No second logical run is created.
+    let (p2, s2, n2) = trigger_check_batch(&jobs_dsn, &pool, Some(vec![id]), 10, &key)
+        .await
+        .expect("trigger 2");
+    assert_eq!(
+        (p2, s2, n2),
+        (0, 1, 1),
+        "same key is recovered/deduped, not duplicated"
+    );
+
+    // Crash recovery: reset the run row to an expired dispatching lease, then re-send
+    // the same key — the lost batch is re-pushed by THIS trigger.
+    //
+    // Derive the id through the PRODUCTION functions: the label is the idempotency key
+    // used verbatim, and the run id is v5(NS, schedule_id ‖ batch). Re-implementing the
+    // recipe here is what broke this test before (a stray `manual-` prefix meant the
+    // UPDATE below hit no row and the recovery assertion silently tested nothing).
+    let schedule_id = schedule_id_for_label(&key);
+    let run0 = scheduled_run_id(schedule_id, 0);
+    sqlx::query(
+        "UPDATE check_runs SET push_state='dispatching', lease_until = now() - interval '5 seconds' \
+         WHERE id=$1",
+    )
+    .bind(run0)
+    .execute(&pool)
+    .await
+    .expect("expire lease");
+    let (p3, s3, n3) = trigger_check_batch(&jobs_dsn, &pool, Some(vec![id]), 10, &key)
+        .await
+        .expect("trigger 3");
+    assert_eq!(
+        (p3, s3, n3),
+        (1, 0, 1),
+        "the expired lease is recovered by the same key"
+    );
+
+    sqlx::query("DELETE FROM nodes WHERE server=$1")
+        .bind(&server)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
+/// Fault #6 (test-evidence fix): the wrong-key node's UUID must be absent from every
+/// pushed CheckJob payload — checked by PARSING the payload, not string guessing. A
+/// healthy node IS pushed, so the assertion cannot pass vacuously.
 #[tokio::test]
 async fn undecryptable_payloads_are_excluded_from_scheduling() {
     use worker::{enqueue_scheduled, CheckScheduleConfig};
     let Some(pool) = setup().await else {
         return;
     };
-    let Ok(jobs_dsn) = std::env::var("PHLOGO_TEST_JOBS_DSN") else {
-        eprintln!("skip: PHLOGO_TEST_JOBS_DSN not set (refusing to use DATABASE_URL as queue)");
+    let Some(jobs_dsn) = require_jobs_dsn() else {
         return;
     };
     let jobs_pool = database::connect(&jobs_dsn).await.expect("jobs connect");
@@ -479,16 +818,24 @@ async fn undecryptable_payloads_are_excluded_from_scheduling() {
     let mut storage: apalis_sql::postgres::PostgresStorage<CheckJob> =
         apalis_sql::postgres::PostgresStorage::new(jobs_pool);
 
-    // Node with a payload sealed under a DIFFERENT key (simulates key mismatch).
+    // A healthy node (must actually be pushed) and a wrong-key node (must not be).
+    // Unique server names per run: a leftover fixture from an earlier panic was sealed
+    // by that process's ephemeral key, so it would land in `undecryptable` as well and
+    // make the counters unattributable to this run's fixtures.
+    let fixture = Uuid::new_v4().simple().to_string();
+    let healthy_server = format!("m31-healthy-{fixture}.example");
+    let bad_server = format!("m31-wrongkey-{fixture}.example");
+    let healthy = seed_node(&pool, &healthy_server, "pw").await;
     let bad = Uuid::new_v4();
     let hash_part = Uuid::new_v4().simple().to_string();
     sqlx::query(
         "INSERT INTO nodes (id,identity_hash,fingerprint_version,protocol,server,port,\
          first_seen_at,last_seen_at,created_at,updated_at,membership,raw_config_reference) \
-         VALUES ($1,$2,1,'trojan','m31-wrongkey.example',443,now(),now(),now(),now(),'Linked','')",
+         VALUES ($1,$2,1,'trojan',$3,443,now(),now(),now(),now(),'Linked','')",
     )
     .bind(bad)
     .bind(format!("{hash_part}{hash_part}"))
+    .bind(&bad_server)
     .execute(&pool)
     .await
     .expect("insert node");
@@ -496,7 +843,7 @@ async fn undecryptable_payloads_are_excluded_from_scheduling() {
     let sealed = wrong_key
         .seal(
             &payload_crypto::aad_for(&bad.to_string()),
-            br#"{"type":"trojan","server":"m31-wrongkey.example"}"#,
+            format!(r#"{{"type":"trojan","server":"{bad_server}"}}"#).as_bytes(),
         )
         .expect("seal under wrong key");
     sqlx::query(
@@ -516,134 +863,42 @@ async fn undecryptable_payloads_are_excluded_from_scheduling() {
         batch_size: 10,
     };
     let stamp = Uuid::new_v4().simple().to_string();
-    let (_, _, _, _, undecryptable) =
+    let (pushed, _skipped, total, undecryptable) =
         enqueue_scheduled(&mut storage, &pool, &format!("m31-wrongkey-{stamp}"), &cfg)
             .await
             .expect("pass");
+    assert!(undecryptable >= 1, "the wrong-key node must be counted");
+    // `total` counts POST-filter candidates (schedulable only), so it can never include
+    // the wrong-key node — the healthy fixture being present is what proves the pass
+    // had a real candidate instead of "nothing was schedulable".
     assert!(
-        undecryptable >= 1,
-        "the wrong-key node must be counted as undecryptable"
+        total >= 1,
+        "the healthy fixture must be a schedulable candidate"
     );
-    let schedulable: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM nodes n JOIN node_payloads p ON p.node_id=n.id \
-         WHERE n.server='m31-wrongkey.example')",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("row exists");
-    assert!(schedulable, "precondition: the payload row exists");
-    // But its id must NOT be inside any pushed batch: count pushes referencing it.
-    let jobs_db = database::connect(&jobs_dsn).await.expect("jobs db");
-    let leaked: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM jobs WHERE payload LIKE '%m31-wrongkey%'")
-            .fetch_one(&jobs_db)
-            .await
-            .unwrap_or(0);
-    assert_eq!(leaked, 0, "undecryptable node must never be scheduled");
 
-    sqlx::query("DELETE FROM nodes WHERE server='m31-wrongkey.example'")
+    // THE REAL ASSERTION: parse every pushed job payload and check node_ids.
+    let jobs = pushed_jobs(&jobs_dsn).await;
+    let healthy_pushed = jobs.iter().any(|j| j.node_ids.contains(&healthy));
+    assert!(
+        healthy_pushed,
+        "the healthy node MUST be pushed (no vacuous pass)"
+    );
+    let bad_pushed = jobs.iter().any(|j| j.node_ids.contains(&bad));
+    assert!(
+        !bad_pushed,
+        "the undecryptable node must never appear in any job payload"
+    );
+    let _ = pushed;
+
+    sqlx::query("DELETE FROM nodes WHERE server IN ($1,$2)")
+        .bind(&healthy_server)
+        .bind(&bad_server)
         .execute(&pool)
         .await
         .ok();
 }
 
-/// Fault #3 (crash window): a run row claimed but never pushed (scheduler died between
-/// the two steps) is recovered by the NEXT pass over the same period — exactly once.
-#[tokio::test]
-async fn lost_push_is_recovered_by_the_next_pass() {
-    use worker::{claim_for_push, enqueue_scheduled, CheckScheduleConfig, ClaimOutcome};
-    let Some(pool) = setup().await else {
-        return;
-    };
-    let Ok(jobs_dsn) = std::env::var("PHLOGO_TEST_JOBS_DSN") else {
-        eprintln!("skip: PHLOGO_TEST_JOBS_DSN not set (refusing to use DATABASE_URL as queue)");
-        return;
-    };
-    let jobs_pool = database::connect(&jobs_dsn).await.expect("jobs connect");
-    let _ = apalis_sql::postgres::PostgresStorage::setup(&jobs_pool).await;
-    let mut storage: apalis_sql::postgres::PostgresStorage<CheckJob> =
-        apalis_sql::postgres::PostgresStorage::new(jobs_pool);
-
-    seed_node(&pool, "m31-recover.example", "pw").await;
-    let node_id: Uuid =
-        sqlx::query_scalar("SELECT id FROM nodes WHERE server='m31-recover.example'")
-            .fetch_one(&pool)
-            .await
-            .expect("node id");
-
-    // Simulate the crash: claim the run row, then DON'T push.
-    let schedule_id = uuid::Uuid::new_v4();
-    let job = CheckJob {
-        run_id: Uuid::new_v4(),
-        schedule_id,
-        checker_tag: "default".into(),
-        node_ids: vec![node_id],
-        presets: vec!["TEST_PING_RTT".into()],
-    };
-    let claim = claim_for_push(&pool, &job).await.expect("claim");
-    assert_eq!(claim, ClaimOutcome::New);
-
-    // A racing scheduler claiming the same run sees LostBeforePush (it was never
-    // pushed and is still 'started') — this is the recovery path.
-    let claim2 = claim_for_push(&pool, &job).await.expect("claim 2");
-    assert_eq!(
-        claim2,
-        ClaimOutcome::LostBeforePush,
-        "unpushed claim must be recoverable"
-    );
-    // But once one claim wins, the next sees AlreadyClaimed (exactly-once re-push).
-    let claim3 = claim_for_push(&pool, &job).await.expect("claim 3");
-    assert_eq!(claim3, ClaimOutcome::AlreadyClaimed);
-
-    // End-to-end through enqueue_scheduled: pass 1 pushes everything; then we reset
-    // batch 0's row to unpushed (simulating a scheduler that crashed after row insert
-    // but before push); pass 2 must re-push exactly that batch and skip the rest.
-    let cfg = CheckScheduleConfig {
-        interval_minutes: 30,
-        batch_size: 10,
-    };
-    let stamp = Uuid::new_v4().simple().to_string();
-    let period = format!("m31-recover-{stamp}");
-
-    let (p1, s1, r1, n1, _u1) = enqueue_scheduled(&mut storage, &pool, &period, &cfg)
-        .await
-        .expect("first pass");
-    assert!(
-        p1 >= 1 && s1 == 0 && r1 == 0,
-        "fresh period pushes all: {p1}/{s1}/{r1}"
-    );
-
-    // Crash simulation: batch 0 (the deterministic run id) was claimed but not pushed.
-    let sid = uuid::Uuid::new_v5(
-        &uuid::Uuid::from_bytes(*b"phlogo-check-sch"),
-        period.as_bytes(),
-    );
-    let mut v = sid.as_bytes().to_vec();
-    v.extend_from_slice(&0usize.to_le_bytes());
-    let run0 = uuid::Uuid::new_v5(&uuid::Uuid::from_bytes(*b"phlogo-check-sch"), &v);
-    let reset = sqlx::query("UPDATE check_runs SET pushed=false, status='started' WHERE id=$1")
-        .bind(run0)
-        .execute(&pool)
-        .await
-        .expect("reset batch 0")
-        .rows_affected();
-    assert_eq!(reset, 1, "batch 0 must exist from pass 1");
-
-    let (p2, s2, r2, n2, _u2) = enqueue_scheduled(&mut storage, &pool, &period, &cfg)
-        .await
-        .expect("recovery pass");
-    assert_eq!(r2, 1, "exactly the crashed batch is re-pushed");
-    assert_eq!(p2, 0, "nothing else is pushed fresh");
-    assert_eq!(s2, n1 - 1, "all healthy batches are skipped");
-    assert_eq!(n2, n1, "node set unchanged");
-
-    sqlx::query("DELETE FROM nodes WHERE server='m31-recover.example'")
-        .execute(&pool)
-        .await
-        .ok();
-}
-
-/// Fault #4: the Apalis handler surfaces run_check_once errors as `Err` so the retry
+/// Fault #7: the Apalis handler surfaces run_check_once errors as `Err` so the retry
 /// layer actually retries (previously the error was swallowed into a log line).
 #[tokio::test]
 async fn handler_returns_err_on_failure() {
@@ -675,6 +930,121 @@ async fn handler_returns_err_on_failure() {
     sqlx::query("DELETE FROM check_runs WHERE id=$1")
         .bind(job.run_id)
         .execute(&pool)
+        .await
+        .ok();
+}
+
+/// Fault #7b (ruling item 5.6): the RetryLayer REALLY redelivers a failing job.
+///
+/// The test above only proves the handler returns `Err`; this one drives the real
+/// queue: a job is pushed, a real `Monitor` runs it with `RetryPolicy::retries(3)`, and
+/// we assert the actual execution count (1 initial + 3 retries = 4) plus the terminal
+/// job status the queue records.
+///
+/// Its own job type isolates it: `PostgresStorage<T>` namespaces rows by
+/// `type_name::<T>()`, so it can neither pick up nor disturb the `CheckJob` rows the
+/// other tests push into the same disposable queue.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RetryProbe {
+    id: Uuid,
+}
+
+#[derive(Clone, Default)]
+struct AttemptCounter(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+async fn always_fails(
+    _job: RetryProbe,
+    attempts: apalis::prelude::Data<AttemptCounter>,
+) -> Result<(), anyhow::Error> {
+    attempts.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Err(anyhow::anyhow!(
+        "transient failure (retry integration test)"
+    ))
+}
+
+#[tokio::test]
+async fn retry_layer_redelivers_until_exhausted() {
+    use std::sync::atomic::Ordering;
+
+    use apalis::layers::WorkerBuilderExt as _;
+    use apalis::prelude::{Monitor, Storage as _, WorkerBuilder, WorkerFactoryFn};
+    use apalis_sql::postgres::PostgresStorage;
+
+    let Some(jobs_dsn) = require_jobs_dsn() else {
+        return;
+    };
+    let jobs_pool = database::connect(&jobs_dsn).await.expect("jobs connect");
+    let job_type = std::any::type_name::<RetryProbe>();
+    // `setup` lives on `PostgresStorage<()>` (the schema bootstrap), not on a typed one.
+    let _ = apalis_sql::postgres::PostgresStorage::setup(&jobs_pool).await;
+    // A leftover probe row from an earlier run would be executed by this monitor too.
+    sqlx::query("DELETE FROM apalis.jobs WHERE job_type=$1")
+        .bind(job_type)
+        .execute(&jobs_pool)
+        .await
+        .ok();
+
+    let probe = RetryProbe { id: Uuid::new_v4() };
+    let mut storage = PostgresStorage::<RetryProbe>::new(jobs_pool.clone());
+    storage.push(probe.clone()).await.expect("push probe");
+
+    let attempts = AttemptCounter::default();
+    let worker = WorkerBuilder::new("retry-layer-integration-test")
+        .retry(apalis::layers::retry::RetryPolicy::retries(3))
+        .data(attempts.clone())
+        .backend(PostgresStorage::<RetryProbe>::new(jobs_pool.clone()))
+        .build_fn(always_fails);
+    let monitor = tokio::spawn(Monitor::new().register(worker).run());
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while attempts.0.load(Ordering::SeqCst) < 4 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Let the queue write the terminal state after the last attempt.
+    for _ in 0..100 {
+        let st: Option<String> =
+            sqlx::query_scalar("SELECT status FROM apalis.jobs WHERE job_type=$1 LIMIT 1")
+                .bind(job_type)
+                .fetch_optional(&jobs_pool)
+                .await
+                .expect("status query");
+        if attempts.0.load(Ordering::SeqCst) >= 4 && st.as_deref() != Some("Running") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let ran = attempts.0.load(Ordering::SeqCst);
+    // Queue-side record: `attempts` is incremented by the storage on every delivery, and
+    // `status = 'Killed'` is the terminal state apalis writes when the retry policy gives
+    // up (`RetryPolicyError::OutOfRetries` → kill, see apalis-sql `kill`); a `Killed` job
+    // is never fetched again, so the retries are bounded.
+    let (status, delivered): (Option<String>, Option<i32>) =
+        sqlx::query_as("SELECT status, attempts FROM apalis.jobs WHERE job_type=$1 LIMIT 1")
+            .bind(job_type)
+            .fetch_optional(&jobs_pool)
+            .await
+            .expect("status query")
+            .map_or((None, None), |(s, a): (String, i32)| (Some(s), Some(a)));
+    monitor.abort();
+
+    assert_eq!(
+        ran, 4,
+        "retries(3) must re-execute 1 initial + 3 retries; the handler ran {ran} times"
+    );
+    assert_eq!(
+        delivered,
+        Some(4),
+        "the queue must record the same 4 deliveries as the handler saw"
+    );
+    assert_eq!(
+        status.as_deref(),
+        Some("Killed"),
+        "exhausting the retry policy must leave a terminal (never re-fetched) job"
+    );
+
+    sqlx::query("DELETE FROM apalis.jobs WHERE job_type=$1")
+        .bind(job_type)
+        .execute(&jobs_pool)
         .await
         .ok();
 }

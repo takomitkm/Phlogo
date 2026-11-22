@@ -5,8 +5,9 @@ pub mod fetch_job;
 
 pub use check_job::{
     aligned_period_label, claim_for_push, enqueue_scheduled, finish_check_run, handle_check,
-    load_check_schedule_config, record_check_run, run_check_once, trigger_check_batch, CheckJob,
-    CheckScheduleConfig, ClaimOutcome,
+    load_check_schedule_config, mark_enqueued_for_test, next_boundary_after, record_check_run,
+    run_check_once, schedule_id_for_label, scheduled_run_id, trigger_check_batch, CheckJob,
+    CheckScheduleConfig, Claim,
 };
 pub use fetch_job::{
     enqueue_for_active_sources, handle_fetch, run_fetch, trigger_fetch_batch, FetchJob,

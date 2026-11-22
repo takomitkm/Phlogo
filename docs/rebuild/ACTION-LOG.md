@@ -1791,3 +1791,84 @@ worker **11** / curse **37** / database **4** / distribution **43** / adapter **
 
 M4 冻结（deep 矩阵、InvokeDuration 归一化）；评分（M5）未动；push 失败秒级恢复扫描器未做
 （按裁定保持最小范围）。
+
+## [UTC 2026-11-22T02:55:00Z] S71 · M3.1-2 再收紧：投递状态机重写（二轮复审裁定六点）
+
+**用户裁定**（复审 `4abd0fd`）：五项里 2/3/5 部分接受；**`claim_for_push()` 否**——`pushed` 布尔把
+「正在 push」与「已 push 成功」压成一个状态位，同时存在并发双推（New vs LostBeforePush）、认领后崩溃
+永久漏推、push 成功后崩溃重推三个窗口；另外 timer 相位仍挂在各进程启动时刻、手动触发换 uuid4 无法
+恢复、0013 迁移被事后修改。**M4 继续冻结**。本条是六点全落地。
+
+### 1. timer 锚到全局 UTC 边界（裁定 1）
+
+`next_boundary_after(not_before, interval)` 返回「首个不早于 not_before 的边界」+ 该槽标签；worker 以
+`startup + interval` 作 `not_before`，`interval_at(首边界, check_secs)`，之后每 tick 标签按**算术推进**
+（`planned_at += interval`），**不再**用 `Utc::now()` 重算——延迟 tick 必须用原计划标签，补齐的连续 tick
+也要逐个走过各自槽位，否则同一逻辑周期会被重复执行。
+测试 `boundary_timer_shares_identity_across_start_times`。
+
+### 2. 投递状态机重写（裁定 2，主项）
+
+迁移 `0014_check_push_state`：`push_state`（pending/dispatching/enqueued）+ `lease_until` + `lease_owner`
++ 恢复索引。`claim_for_push` 收敛成**单条 UPSERT**
+（`INSERT ... ON CONFLICT DO UPDATE ... WHERE pending OR 过期 dispatching AND status='started' RETURNING xmax=0`），
+新建与恢复同一条竞争路径 → 缺陷 A 结构性消失；认领只写租约，崩在 push 前 → 租约过期可重认领 →
+缺陷 B 消失；push 成功后 `mark_enqueued(owner 守卫)`，若崩在标记前则过期后**再推一次**，即
+**at-least-once**，重复执行由执行侧闸门挡住：`run_check_once` 见 `status='success'` 直接返回，不再跑
+真实 MiaoSpeed。`let _ = mark_*` 全部删除，DB 错误一律上抛；owner 守卫导致 0 行时明确 warn。
+查证 apalis 0.7.4 **没有**确定性 job id（`jobs.id` 由存储生成），故不依赖它。
+对外语义写 **at-least-once**，跨主库/jobs 库不声称 exactly-once。
+
+### 3. 手动触发可恢复（裁定 3）
+
+请求体加 `idempotency_key`；label = `manual-<key>`，verbatim 派生 schedule_id。同键重发 → 已 enqueued
+则跳过、崩溃未推则按过期租约恢复；无键仍是随机 label（一次性语义不变）；响应回显 `period`。
+权限面不变（AdminJWT-only / ServiceBearer 403 / 匿名 401 / >500 id 422）。
+
+### 4. 可解密筛选测试：假通过 → 真证据（裁定 4）
+
+`pushed_jobs()` 反序列化 `apalis.jobs.payload` 取 `node_ids`，断言 healthy UUID 在、wrong-key UUID 不在
+（原 `payload LIKE` 恒为 0，无效）。**本轮真正的卡点是夹具污染**：固定 server 名 + `SELECT id WHERE
+server=...` 选中历史 panic 留下的行，那些行由上个进程的临时密钥封印（`PHLOGO_PAYLOAD_KEY` 缺省即
+ephemeral）→ 本进程解不开 → 触发返回 `(0,0,0)`。修法：server 每次唯一 + 直接用 `seed_node` 返回的 id。
+另修 `total >= 2` 的口径错误（`total` 是筛选后计数）。测试不再手抄 v5 recipe：`schedule_id_for_label` /
+`scheduled_run_id` 从 worker 导出后直接调用（上一轮手写版本多包命名空间 + 多 `manual-` 前缀，把恢复用的
+UPDATE 打到不存在的行）。
+
+### 5. 故障注入测试（裁定 5，九项）
+
+一次性 `PHLOGO_TEST_JOBS_DSN`（缺省跳过，不回退 DATABASE_URL）：`concurrent_claims_yield_exactly_one_winner`、
+`concurrent_recovery_of_expired_lease_has_one_winner`、`succeeded_run_is_not_reexecuted_on_redelivery`、
+`state_transition_errors_propagate`、`manual_trigger_idempotency_key_recovers`、
+`undecryptable_payloads_are_excluded_from_scheduling`、`handler_returns_err_on_failure`、以及新增
+**`retry_layer_redelivers_until_exhausted`**（裁定 5.6 的真实重投集成测试：真 `Monitor` + 真队列，
+handler 执行 **4** 次 = 1+3 retries、队列 `attempts=4`、终态 **`Killed`**（apalis 重试耗尽走 kill，
+不是 Failed，也不再被 fetch）。用测试自有 job 类型 `RetryProbe` 靠 `type_name::<T>()` 划 namespace，
+不干扰别的测试的 CheckJob 行）。
+
+### 6. 迁移纪律（裁定 6）
+
+`0013_check_schedule.{up,down}.sql` **逐字节**恢复 `30ea99c`（连注释也不加：sqlx 校验和是整文件哈希）。
+新增 0014：up 建状态列 + 索引并 `DROP COLUMN IF EXISTS pushed`（清被否决的列，全新库 no-op）；down 只
+回滚自己加的。一次性库 `phlogo_mig_scratch` 实测 0001…0014 → (3 列, pushed 0, 索引 1, configs 2) →
+`0014.down` → (0, 0, 0, configs 仍 2) → `0013.down` → configs 0 → 删库。dev 库历史修复（仅 dev）：删
+13/14 两行 + 清 0013 的 configs 行，让 sqlx 按序重放（14 的 up 全 `IF NOT EXISTS`）。
+
+### 门禁
+
+worker **16** / curse **37** / database **4** / distribution **43** / adapter **18** / checker **11** 全绿；
+workspace `rustfmt --check` + `clippy --all-targets -- -D warnings` **0**。一次性 `phlogo_jobs_test_m3`
+建库→测试→销毁，`apalis.jobs` **12** 条（非空跑）；生产队列零接触。
+
+### 途中修正（记要点）
+
+1. 夹具复用固定 server 名 → 历史行被选中且载荷不可解密 → 触发 `(0,0,0)`；改唯一 server + 用返回 id。
+2. 交接时把「测试派生 run_id」的诊断做反了（去掉命名空间又保留 `manual-` 前缀）→ 改为直接调用生产函数。
+3. gates 脚本里 `SELECT count(*) FROM jobs` 漏 schema：apalis 用 **`apalis` schema**；且该诊断行用 `&&`
+   串在 DROP DATABASE 之前，一失败就跳过销毁，把测试库留在机器上 → 改 `apalis.jobs` 并加 `|| echo`。
+4. 屏幕上 `manual_trigger_idempotency_key_recovers` 先前「通过」其实是陈旧二进制；每次同步后必须重编。
+
+### 遗留
+
+M4 冻结（deep 矩阵、InvokeDuration 归一化）；M5 未动。投递语义 at-least-once，崩溃窗口内可能重复
+push（执行侧收敛）；手动触发恢复依赖客户端重发同键，统一 outbox 扫描器未做；租约 60s 可按部署调整。

@@ -51,56 +51,104 @@ pub async fn record_check_run(pool: &PgPool, job: &CheckJob) -> sqlx::Result<boo
     Ok(n > 0)
 }
 
-/// Claim outcome for the schedule→push two-step (M3.1 fix #4, crash window).
+/// Delivery lease length for the schedule→push handoff (M3.1-2 state machine).
+///
+/// A scheduler that claims a batch holds the lease for this long; a row whose lease
+/// expired is recoverable by any other pass. The lease does NOT make delivery
+/// exactly-once — it bounds the recovery window. Delivery is at-least-once by design;
+/// duplicate MiaoSpeed executions of a SUCCEEDED run are prevented on the execution
+/// side (`run_check_once` skips runs that already reached `success`).
+pub const DELIVERY_LEASE_SECS: i64 = 60;
+
+/// Outcome of the atomic delivery claim (`claim_for_push`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClaimOutcome {
-    /// This pass created the run row; the caller must push the job now.
-    New,
-    /// The run row exists, was never marked pushed, and is still 'started': the prior
-    /// scheduler died between row-insert and push. The caller re-pushes.
-    LostBeforePush,
-    /// Someone already pushed (or the run already finished/failed): do nothing.
-    AlreadyClaimed,
+pub struct Claim {
+    /// True when this call INSERTED the run row (first scheduling of the batch).
+    pub created: bool,
+    /// Lease holder recorded by the claim statement; `mark_enqueued` only accepts
+    /// this owner, so a stale instance cannot overwrite a newer lease.
+    pub owner: Uuid,
 }
 
-/// Atomically claim a batch for pushing, distinguishing "never pushed" from "pushed".
+/// Atomically claim the delivery right for one batch (M3.1-2, replaces the racy
+/// New/LostBeforePush pair).
 ///
-/// The `pushed` flag is written by the SAME statement that inserts/claims, so the
-/// crash window between `record_check_run` and `storage.push` is recoverable: a later
-/// pass finds `pushed=false AND status='started'` and re-pushes exactly once (the
-/// UPDATE guards against two racing schedulers both re-pushing).
-pub async fn claim_for_push(pool: &PgPool, job: &CheckJob) -> sqlx::Result<ClaimOutcome> {
-    // 1) Insert when absent, marking pushed=false.
-    let inserted = sqlx::query(
-        "INSERT INTO check_runs (id,checker_tag,node_count,status,started_at,pushed) \
-         VALUES ($1,$2,$3,'started',now(),false) ON CONFLICT (id) DO NOTHING",
+/// ONE statement handles both first-claim and recovery, so the review's defect A
+/// ("insert returns New while another instance claims LostBeforePush") cannot happen:
+/// the INSERT ... ON CONFLICT DO UPDATE carries the lease conditions in its WHERE
+/// clause, PostgreSQL row-locks the existing row, and exactly one concurrent caller
+/// gets `rows_affected = 1`.
+///
+/// Claimable when: row absent, OR `push_state='pending'`, OR the lease expired
+/// (`dispatching` + `lease_until < now()`), AND the run has not reached a terminal
+/// state. This is the recovery rule for "claimed but crashed before push" (defect B):
+/// the crashed instance's lease expires, the next pass re-claims. The same rule
+/// covers "push succeeded but the enqueued-mark crashed" (defect C): delivery is
+/// **at-least-once** — the queue may see a second push; duplicate MiaoSpeed execution
+/// of a succeeded run is prevented by the execution-side gate in `run_check_once`.
+pub async fn claim_for_push(pool: &PgPool, job: &CheckJob) -> sqlx::Result<Option<Claim>> {
+    let lease_owner = Uuid::new_v4();
+    let row: Option<(bool,)> = sqlx::query_as(
+        "INSERT INTO check_runs \
+           (id,checker_tag,node_count,status,started_at,push_state,lease_until,lease_owner) \
+         VALUES ($1,$2,$3,'started',now(),'dispatching', \
+                 now() + make_interval(secs => $4), $5) \
+         ON CONFLICT (id) DO UPDATE \
+           SET push_state='dispatching', \
+               lease_until = now() + make_interval(secs => $4), \
+               lease_owner = $5 \
+         WHERE (check_runs.push_state = 'pending' \
+                OR (check_runs.push_state = 'dispatching' \
+                    AND check_runs.lease_until < now())) \
+               AND check_runs.status = 'started' \
+         RETURNING (xmax = 0) AS inserted",
     )
     .bind(job.run_id)
     .bind(&job.checker_tag)
     .bind(job.node_ids.len() as i32)
-    .execute(pool)
-    .await?
-    .rows_affected()
-        > 0;
-    if inserted {
-        return Ok(ClaimOutcome::New);
-    }
-    // 2) Existing row: claim the push if (and only if) nobody pushed yet and the run
-    //    has not reached a terminal state. Only the winner may re-push.
-    let claimed = sqlx::query(
-        "UPDATE check_runs SET pushed=true WHERE id=$1 AND pushed=false \
-         AND status='started'",
+    .bind(DELIVERY_LEASE_SECS)
+    .bind(lease_owner)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(created,)| Claim {
+        created,
+        owner: lease_owner,
+    }))
+}
+
+/// Transition a claimed batch to `enqueued` after a successful `storage.push`.
+///
+/// Errors are PROPAGATED to the caller (ruling: never silently swallowed). A failure
+/// here leaves the row in `dispatching` with a running lease — delivery is
+/// at-least-once and the next pass will re-push after the lease expires; the
+/// execution-side gate keeps a redelivered job from re-running a succeeded check.
+///
+/// Returns `true` when the transition applied. `false` means this lease was already
+/// superseded (a slower instance lost it), so the row will be — or is being — pushed
+/// again by its current holder: the caller logs that as the at-least-once window
+/// instead of treating it as success.
+async fn mark_enqueued(pool: &PgPool, run_id: Uuid, owner: Uuid) -> sqlx::Result<bool> {
+    let applied = sqlx::query(
+        "UPDATE check_runs SET push_state='enqueued', lease_until=NULL, lease_owner=NULL \
+         WHERE id=$1 AND lease_owner=$2",
     )
-    .bind(job.run_id)
+    .bind(run_id)
+    .bind(owner)
     .execute(pool)
     .await?
     .rows_affected()
         > 0;
-    Ok(if claimed {
-        ClaimOutcome::LostBeforePush
-    } else {
-        ClaimOutcome::AlreadyClaimed
-    })
+    Ok(applied)
+}
+
+/// Test-only wrapper for [`mark_enqueued`] (same guard semantics; used by fault-injection
+/// tests to verify the owner guard and error propagation).
+pub async fn mark_enqueued_for_test(
+    pool: &PgPool,
+    run_id: Uuid,
+    owner: Uuid,
+) -> sqlx::Result<bool> {
+    mark_enqueued(pool, run_id, owner).await
 }
 
 /// Mark the run finished (idempotent: only the first transition wins).
@@ -191,10 +239,28 @@ async fn existing_ids(pool: &PgPool, ids: &[Uuid]) -> sqlx::Result<HashSet<Uuid>
 }
 
 /// Execute one check run end to end (testable core; the Apalis handler wraps this).
+///
+/// Execution-side idempotency gate (M3.1-2, ruling defect C): delivery is
+/// at-least-once, so the same run may be delivered twice (e.g. "push succeeded but the
+/// enqueued-mark crashed"). A run that already reached `success` is NOT re-executed —
+/// its results are persisted exactly once by the unique key, and re-running real
+/// MiaoSpeed checks would only waste resources. Failed runs MAY be re-executed (that
+/// is the retry path).
 pub async fn run_check_once(pool: &PgPool, job: &CheckJob) -> anyhow::Result<()> {
     if let Err(e) = record_check_run(pool, job).await {
         tracing::error!(run_id = %job.run_id, error = %e, "record_check_run failed");
         return Err(e.into());
+    }
+
+    // Gate: a run that already succeeded must not burn a second real MiaoSpeed pass.
+    let prior: Option<String> = sqlx::query_scalar("SELECT status FROM check_runs WHERE id=$1")
+        .bind(job.run_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("run status: {e}"))?;
+    if prior.as_deref() == Some("success") {
+        tracing::info!(run_id = %job.run_id, "run already succeeded; skipping redelivery");
+        return Ok(());
     }
 
     let (url, secret, vendor) = match checker_endpoint() {
@@ -350,9 +416,23 @@ pub async fn handle_check(job: CheckJob, pool: Data<PgPool>) -> Result<(), anyho
 /// Namespace for deterministic schedule ids (arbitrary but fixed bytes).
 const SCHEDULE_NS: [u8; 16] = *b"phlogo-check-sch";
 
+/// Deterministic schedule id for one logical period label.
+///
+/// The label is used VERBATIM (no prefixing): the caller's idempotency key *is* the
+/// label, so the same key must derive the same schedule id. Exported so tests derive
+/// run ids from the production function instead of re-implementing the v5 recipe —
+/// a hand-rolled copy silently drifts (it did: a stray `manual-` prefix pointed the
+/// test's recovery UPDATE at a nonexistent row).
+pub fn schedule_id_for_label(period_label: &str) -> Uuid {
+    Uuid::new_v5(&Uuid::from_bytes(SCHEDULE_NS), period_label.as_bytes())
+}
+
 /// Deterministic run id for one (period, batch) pair — identical across workers,
 /// so racing schedulers produce the same `check_runs.id` and the duplicate is dropped.
-fn scheduled_run_id(schedule_id: Uuid, batch: usize) -> Uuid {
+///
+/// `v5(namespace = SCHEDULE_NS, name = schedule_id ‖ batch_le_u64)`: the namespace is
+/// applied exactly once, over the schedule id bytes.
+pub fn scheduled_run_id(schedule_id: Uuid, batch: usize) -> Uuid {
     let mut v5 = schedule_id.as_bytes().to_vec();
     v5.extend_from_slice(&(batch as u64).to_le_bytes());
     Uuid::new_v5(&Uuid::from_bytes(SCHEDULE_NS), &v5)
@@ -374,6 +454,29 @@ pub fn aligned_period_label(now: chrono::DateTime<chrono::Utc>, interval_minutes
         .format("%Y%m%dT%H%M")
         .to_string();
     format!("period-{start}+{mins}m")
+}
+
+/// The next global UTC period boundary strictly AFTER `now` (M3.1-2 fix #1).
+///
+/// Timers are anchored to shared wall-clock boundaries, not to each process's startup
+/// instant: all workers tick on the same boundary sequence, so two instances started
+/// minutes apart evaluate the SAME slot label at (approximately) the same moment and
+/// the dedup constraint actually sees their race. The ruling's "wait at least one full
+/// period after startup" is honored by the caller passing `startup + interval` as
+/// `not_before`.
+///
+/// Returns (tick_instant, label_for_that_slot).
+pub fn next_boundary_after(
+    not_before: chrono::DateTime<chrono::Utc>,
+    interval_minutes: i32,
+) -> (chrono::DateTime<chrono::Utc>, String) {
+    let mins = interval_minutes.max(1) as i64;
+    let not_before_min = not_before.timestamp() / 60;
+    // First slot START strictly after not_before's minute.
+    let slot = not_before_min.div_euclid(mins) + 1;
+    let slot_start_min = slot * mins;
+    let start = chrono::DateTime::from_timestamp(slot_start_min * 60, 0).unwrap_or(not_before);
+    (start, aligned_period_label(start, interval_minutes))
 }
 
 /// Config values for the check scheduler (configs table; sane fallbacks for tests).
@@ -437,29 +540,22 @@ async fn schedulable_node_ids(pool: &PgPool) -> anyhow::Result<(Vec<Uuid>, usize
 }
 
 /// One scheduling pass (M3): build batches over schedulable nodes for `period` and
-/// enqueue them. Idempotent per period: `run_id = v5(schedule_id, batch)`, and a batch
-/// is only pushed when its `check_runs` row does not exist yet (guarded by
-/// `record_check_run` BEFORE the push, so a crash between push and run cannot
-/// duplicate either side).
+/// enqueue them via the lease state machine (M3.1-2).
 ///
-/// M3.1 fix #4 (crash window): a batch whose run row exists but whose job was never
-/// pushed (crash between the two) is detected via a sentinel — `record_check_run`
-/// returns a tri-state instead of a boolean, and `missing_push` batches are re-pushed
-/// by THIS pass. See [`RunRowState`].
+/// Delivery is at-least-once; see [`claim_for_push`] and [`run_check_once`] for how
+/// duplicates are contained.
 ///
-/// Returns (pushed_batches, skipped_duplicates, re_pushed_lost, total_nodes,
-/// undecryptable_nodes).
+/// Returns (pushed_batches, skipped_busy, total_nodes, undecryptable_nodes).
 pub async fn enqueue_scheduled(
     storage: &mut apalis_sql::postgres::PostgresStorage<CheckJob>,
     pool: &PgPool,
     period_label: &str,
     cfg: &CheckScheduleConfig,
-) -> anyhow::Result<(usize, usize, usize, usize, usize)> {
-    let schedule_id = Uuid::new_v5(&Uuid::from_bytes(SCHEDULE_NS), period_label.as_bytes());
+) -> anyhow::Result<(usize, usize, usize, usize)> {
+    let schedule_id = schedule_id_for_label(period_label);
     let (ids, undecryptable) = schedulable_node_ids(pool).await?;
     let mut pushed = 0usize;
     let mut skipped = 0usize;
-    let mut re_pushed = 0usize;
     for (batch, chunk) in ids.chunks(cfg.batch_size).enumerate() {
         let job = CheckJob {
             run_id: scheduled_run_id(schedule_id, batch),
@@ -469,54 +565,29 @@ pub async fn enqueue_scheduled(
             // Ruling: initial schedule only pings; download matrices come later (M4+).
             presets: vec!["TEST_PING_RTT".into()],
         };
-        match claim_for_push(pool, &job).await? {
-            ClaimOutcome::New => {
-                if storage.push(job.clone()).await.is_ok() {
-                    // Mark pushed=true AFTER a successful push so the second pass sees
-                    // AlreadyClaimed (not another "lost" re-push). The UPDATE is
-                    // idempotent and only touches this run row.
-                    let _ = mark_pushed(pool, job.run_id).await;
-                    pushed += 1;
-                } else {
-                    // Push failed: un-claim so a later pass can retry the push.
-                    let _ = mark_unpushed(pool, job.run_id).await;
-                }
+        // Lease errors propagate (ruling: no `let _ =` on state transitions). A claim
+        // that wins here will be marked enqueued below; a mark failure surfaces as an
+        // error from this pass — delivery stays at-least-once via the expired lease.
+        if let Some(claim) = claim_for_push(pool, &job).await? {
+            storage.push(job.clone()).await?;
+            // A superseded lease is not an error — the current holder pushes again
+            // (that IS the at-least-once window) — but it must be visible in logs.
+            if !mark_enqueued(pool, job.run_id, claim.owner).await? {
+                tracing::warn!(
+                    run_id = %job.run_id,
+                    "delivery lease superseded before the enqueued mark; the batch will \
+                     be pushed again by its current holder (at-least-once)"
+                );
             }
-            ClaimOutcome::LostBeforePush => {
-                // The run row exists but no job was ever pushed for it (crash window).
-                // Re-push; on failure, un-claim again for the next pass.
-                if storage.push(job.clone()).await.is_ok() {
-                    let _ = mark_pushed(pool, job.run_id).await;
-                    re_pushed += 1;
-                } else {
-                    let _ = mark_unpushed(pool, job.run_id).await;
-                }
-            }
-            ClaimOutcome::AlreadyClaimed => skipped += 1,
+            pushed += 1;
+        } else {
+            skipped += 1;
         }
     }
-    Ok((pushed, skipped, re_pushed, ids.len(), undecryptable))
+    Ok((pushed, skipped, ids.len(), undecryptable))
 }
 
 use apalis::prelude::Storage as _;
-
-/// Mark a run as pushed (after a successful `storage.push`).
-async fn mark_pushed(pool: &PgPool, run_id: Uuid) -> sqlx::Result<()> {
-    sqlx::query("UPDATE check_runs SET pushed=true WHERE id=$1")
-        .bind(run_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-/// Un-claim a run whose push failed, so a later pass can retry the push.
-async fn mark_unpushed(pool: &PgPool, run_id: Uuid) -> sqlx::Result<()> {
-    sqlx::query("UPDATE check_runs SET pushed=false WHERE id=$1")
-        .bind(run_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
 
 /// API-facing scheduled-enqueue trigger (M3 stage 4): same service as the periodic
 /// scheduler, with an explicit node list (default: all schedulable). Batches by
@@ -540,15 +611,13 @@ pub async fn trigger_check_batch(
         interval_minutes: 0, // not used by this path
         batch_size: batch_size.max(1),
     };
-    let label = if period_label.is_empty() {
-        format!(
-            "manual-{}-{}",
-            chrono::Utc::now().format("%Y%m%dT%H%M%S"),
-            Uuid::new_v4().simple()
-        )
-    } else {
-        period_label.to_string()
-    };
+    // M3.1-2 (ruling): the period label IS the caller's idempotency key and is used
+    // VERBATIM — re-sending the same request recovers lost batches via the claim
+    // state machine instead of creating a second logical run.
+    anyhow::ensure!(
+        !period_label.is_empty(),
+        "trigger_check_batch requires an explicit period label (idempotency key)"
+    );
     // Explicit list wins but is FILTERED to schedulable nodes (decryptable payload) —
     // the ruling forbids sending payload-less/undecryptable nodes to MiaoSpeed, and the
     // API surface must not silently schedule ghost ids either.
@@ -562,7 +631,7 @@ pub async fn trigger_check_batch(
         }
         _ => schedulable,
     };
-    let schedule_id = Uuid::new_v5(&Uuid::from_bytes(SCHEDULE_NS), label.as_bytes());
+    let schedule_id = schedule_id_for_label(period_label);
     let mut pushed = 0usize;
     let mut skipped = 0usize;
     for (batch, chunk) in ids.chunks(cfg.batch_size).enumerate() {
@@ -573,13 +642,18 @@ pub async fn trigger_check_batch(
             node_ids: chunk.to_vec(),
             presets: vec!["TEST_PING_RTT".into()],
         };
-        if claim_for_push(pool, &job).await? != ClaimOutcome::AlreadyClaimed {
-            if storage.push(job.clone()).await.is_ok() {
-                let _ = mark_pushed(pool, job.run_id).await;
-                pushed += 1;
-            } else {
-                let _ = mark_unpushed(pool, job.run_id).await;
+        if let Some(claim) = claim_for_push(pool, &job).await? {
+            storage.push(job.clone()).await?;
+            // A superseded lease is not an error — the current holder pushes again
+            // (that IS the at-least-once window) — but it must be visible in logs.
+            if !mark_enqueued(pool, job.run_id, claim.owner).await? {
+                tracing::warn!(
+                    run_id = %job.run_id,
+                    "delivery lease superseded before the enqueued mark; the batch will \
+                     be pushed again by its current holder (at-least-once)"
+                );
             }
+            pushed += 1;
         } else {
             skipped += 1;
         }

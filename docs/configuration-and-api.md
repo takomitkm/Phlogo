@@ -125,6 +125,11 @@ AST 形状（逻辑节点带 `operator: and|or|not`，叶子是条件对象）�
   之前的「全部 GET 读」已撤销——读会暴露订阅内容（`SourceView.content`）、整张 `configs` KV 表与运行历史，
   并非无害。新增路由默认 AdminOnly，必须显式申请并证明有真实服务调用者。
 - MiaoSpeed WebSocket 是 worker 内部调用，不经 HTTP 权限面。
+- **手动触发幂等（M3.1-2）**：`POST /api/v1/check/trigger` 请求体可带 `idempotency_key`；服务端把它当
+  period label（`manual-<key>`）**逐字**使用，因此**同一个 key 重发只会恢复丢弃的批次，不会再建一个
+  逻辑运行**（崩溃后重发同键即可恢复）。不带 key 则是一次性触发（随机 label）。响应里回显 `period`，
+  便于核对与重放；客户端永远不需要知道服务端生成的标签。投递语义是 **at-least-once**：极端崩溃窗口内
+  队列可能收到重复 job，但执行侧按 `run_id` 的 `success` 闸门保证同一 run 不会跑第二次真实测活。
 - 登录限流：按真实客户端 IP（PROXY protocol）分桶，默认 10 次/分钟，超限 429；`X-Forwarded-For` 永不信任。
 - 错误码语义：401 = 缺失/无效凭据；403 = 凭据有效但身份越权（ServiceBearer 访问未授权路由）。
 
