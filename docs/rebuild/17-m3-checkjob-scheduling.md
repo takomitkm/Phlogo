@@ -494,6 +494,13 @@ S75 就是这么抓到的：`existing_ids()`（测活**返回之后**读主库�
    > 可以**立即**重试，不必等 60s 租约过期；而「租约自然过期、但没人再推」的那种（进程在 push
    > 之后、mark 之前硬死）仍然无自动回收 —— 那才是需要扫描器的那一类。测试
    > `failed_push_releases_the_delivery_claim`。
+   >
+   > **S80 实测量化了这条缺口的实际影响**（校机 dev 库）：44 行处于「过期 `dispatching` +
+   > `status='started'`」，而生产队列里对应的 job **根本不存在**（只有 1 条 job）—— 即这些是
+   > **纯粹的死行**。但**节点不会因此漏测**：`schedulable_node_ids` 按 `nodes.membership='Linked'`
+   > 全量取候选、**不看历史 run 行**，下一周期照常用新 `run_id` 重新调度同一批节点。
+   > ⇒ 这类死行是**可观测性/运维噪声**（`check_runs` 里永远停在 `started` 的行），不是漏测。
+   > 要清理它们需要一个按 `push_state`/`lease_until` 的运维查询或定期清理任务（登记为遗留）。
 5. **fetch（抓取）侧有同一类问题，但不在 M3 范围**（S76 实测记录，未修）：`handle_fetch` 把错误吞进
    日志（`let _ = registry::reconcile_fetch_result(..)`），返回 `()`；而 fetch worker **没有**配
    `.retry(RetryPolicy::..)`（check 侧在 M3.1 裁定 3 已经改成「返回 Err + RetryPolicy(3)」）。
@@ -534,6 +541,9 @@ workspace `rustfmt --check` + `clippy --all-targets -- -D warnings` **0**。迁�
    都会先编译失败，再谈运行行为。
 7. **幂等键未绑定请求摘要**：同 key 配不同 `node_ids`/`batch_size` 不报错、也不区分；后续应为
    `manual-<key>` 保存请求 fingerprint 并在不匹配时拒绝（412/409）。
+8. **投递侧死行需要运维清理**（S80 实测）：校机 dev 库里有 44 行「过期 `dispatching` +
+   `status='started'`」且队列里无对应 job —— 永远不会被认领、也永远不会变终态。节点不受影响
+   （见 §10.4.4），但这些行是噪声。清理方式（运维 SQL / 定期任务 / 迁移）待定。
 8. **M4 深度矩阵上线时**：P3 设计稿记的是 30 分钟硬超时（上游 `context.WithTimeout(30*time.Minute)`
    等价），当前实现只有 180s（够 ping 批次）。必须**同时**抬高 timeout 与执行租约（或改成执行期心跳
    续租），并重新核算它与 apalis 孤儿窗口的关系——否则 §10.2 的链会断。

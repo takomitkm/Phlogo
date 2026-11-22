@@ -2285,3 +2285,41 @@ worker **22** / curse **37** / database **4** / distribution **43** / adapter **
 「守卫测试」本身也会有盲区，而且**它的基线对照可能以错误的方式失败**（计数变化而非点名问题）。
 可靠做法是**注入式控制实验**：分别注入「有缺陷的形状」与「合法的同形形状」，要求守卫**前者报错并
 指名、后者沉默**。本轮就是这么发现固定窗口这个第二盲点的 —— 只靠「回退整段代码」是看不出来的。
+
+## [UTC 2026-11-23T01:35:00Z] S80 · 复核收尾 + 投递侧死行实测（缺口的实际影响被量化）
+
+### 1. 复核 NEW minor 修掉（注释与代码不一致）
+
+`58debac` 把 `no_duplicate_work` 从「调 `finish_check_run` 两次」改成「调
+`finish_check_run_owned_in` 一次」，但注释仍写「Calling it twice with the same owner must
+still be one-shot」，而二次调用的语义其实已变：首调把 `exec_owner` 置 NULL，二调的 owner 守卫
+不再命中 → **报错**（`ensure!(affected == 1)`），不再是「静默 no-op」。
+
+现在把断言补回去并把语义写准：二次调用必须是 **`Err`**（被拒绝），且 `finished_at` 仍只有一处。
+属性由 SQL + `ensure!` 结构保证，wiring 层的「重投不再重复执行」覆盖同一行为。
+
+### 2. 投递侧死行的实际影响被量化（S79 文档里那段的实测支撑）
+
+校机 dev 库实测：
+- 44 行处于「过期 `dispatching` + `status='started'`」，而生产队列里只有 **1** 条 job ⇒ 这些行
+  在队列里**没有对应 job**（push 从未成功，或 job 已被消费）⇒ 是**纯粹的死行**，永远不会被认领、
+  也永远不会变终态；
+- **但节点不会漏测**：`schedulable_node_ids` 按 `nodes.membership='Linked'` 全量取候选、**不看历史
+  run 行**，下一周期照常用新 `run_id` 重新调度同一批节点。
+⇒ 这类死行是**可观测性/运维噪声**（`check_runs` 里永远停在 `started` 的行），不是漏测。已写进
+§10.4.4 与 §11（清理方式待定；本轮不做扫描器 —— 超出裁定范围）。
+
+### 3. 复核（round-6）对 `ea85960` + `58debac` 的结论
+
+**ACCEPT**，四条确认全部用独立证据核实。值得记的是它的验证方法：**只读、无工具链，于是逐字复刻
+守卫算法做 Python 仿真**，输入是真实 `check_job.rs` 的 leased 区域 + 合成注入 ——
+① 真实代码 checked=7 / leaked=[]（无误报）；② 注入 `?;` 泄漏 → 失败并点名那一行；
+③ 注入合法早退 → checked=8 / leaked=[]（沉默）；④ **对照组**：旧守卫在同一 `?;` 泄漏上
+checked=7 / leaked=[] → **静默漏检**，直接证实「旧守卫看不见它要防的形状」，也证实我的自我认账
+（基线失败只因 7→6 计数）是对的。
+
+### 门禁（本轮实测）
+
+worker **22** / curse **37** / database **4** / distribution **43** / adapter **18** / checker **11**
+全绿；`rustfmt --check` + `clippy --all-targets -- -D warnings` 0；同步 8/8 哈希一致；
+一次性 `phlogo_jobs_test_m3` 建库→测试→销毁，链内断言确认删除（`TESTDB_LEFT` 计数 = 0）。
