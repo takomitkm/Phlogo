@@ -456,7 +456,8 @@ S75 就是这么抓到的：`existing_ids()`（测活**返回之后**读主库�
 | **基线对照** | 把 worker 换回 `e1d5105` 的 `check_job.rs`/`lib.rs` 跑同一测试 | **`left: 2, right: 1`** —— 旧代码确实打两次，测试有区分力，不是「永远绿」 |
 | `hung_checker_times_out_and_releases_the_lease` | mock 接了请求但 30s 不回终态帧；把 `PHLOGO_CHECK_TIMEOUT_SECS` 设成 1s → 断言 `run_check_once` 返回 `Err`、耗时 < 10s、只发生 1 次 submit、run 变 `failed`、`exec_owner`/`exec_lease_until` 均已释放 | 通过（这才是「互斥不会被一次挂住的测活破坏」的实测证据） |
 | `db_error_after_checker_releases_the_execution_lease` | 用**真实 DB 错误**打掉「测活返回之后」那一步：测试在 mock 回帧后对 `nodes` 取 `ACCESS EXCLUSIVE` 锁，worker 侧池带 `lock_timeout=300ms` → `existing_ids` 超时失败；断言 `Err`、只 1 次 submit、`status='failed'`、租约字段清空 | 通过（**基线对照**：回退成裸 `?` 时该测试失败 `left:"started" / right:"failed"`） |
-| `every_early_exit_after_the_exec_claim_releases_the_lease` | **源码形状守卫**：扫描 `run_check_once` 里「拿到租约之后」的每一处早退（`return Err(..)` **和**以 `?` 结尾的行），要求每处都在同一语句块里先 `fail_check_run` | 通过（**基线对照**：把 `existing_ids` 改回裸 `?` 后该守卫失败并点名那一行） |
+| `every_early_exit_after_the_exec_claim_releases_the_lease` | **源码形状守卫**：扫描 `run_check_once` 里「拿到租约之后」的每一处早退（`return Err(..)` **和** `?` 终止的语句——带或不带结尾 `;`），要求每处都在**所属语句块内**先 `fail_check_run` | 通过（**两个控制实验**：注入 `?;` 形状的泄漏 → 守卫**点名那一行**；注入**合法**的（已守卫）早退 → 守卫**不误报**） |
+| `failed_push_releases_the_delivery_claim` | 把 storage 指向一个**不存在的数据库**让 push 必然失败 → 断言调度器派生的那一行回到 `pending`（而不是停在 `dispatching`），且可立即重新认领 | 通过（证明 push 失败不会把批次永久卡住） |
 
 ### 10.4 恢复的真实边界（S73 修正，别过度声称也别过度悲观）
 
@@ -501,11 +502,11 @@ S75 就是这么抓到的：`existing_ids()`（测活**返回之后**读主库�
    修法与 check 侧同构（`handle_fetch` 返回 `Result` + worker 加 retry 层），属 P2/fetch 阶段，
    需要另行裁定（不在 M3 的「小范围」内，本轮不擅自扩范围）。
 
-### 10.5 门禁（S75 实测，含 timeout 与租约泄漏回归）
+### 10.5 门禁（S79 实测）
 
-worker **21**（`check_wiring` 19，含 14 项故障注入，新增 `hung_checker_times_out_and_releases_the_lease`、
-`db_error_after_checker_releases_the_execution_lease`、`every_early_exit_after_the_exec_claim_releases_the_lease`）
-/ curse **37** / database **4** /
+worker **22**（`check_wiring` 20，含 15 项故障注入：周期身份 / 并发认领 / 并发恢复过期租约 / 重投不再重复执行 /
+状态错误传播 / 同键恢复 / 错钥排除 / handler Err / RetryLayer 真实重投 / 执行租约互斥 / 同一 run_id 只打
+一次 / 挂死测活超时 / 测活后 DB 错误 / 早退形状守卫 / push 失败释放认领）/ curse **37** / database **4** /
 distribution **43** / adapter **18** / checker **11** 全绿；
 workspace `rustfmt --check` + `clippy --all-targets -- -D warnings` **0**。迁移 0001…0015 在一次性库
 `phlogo_mig_scratch` 全序执行 → (push_state 三列 3、`pushed` 0、恢复索引 1、configs 2、执行租约两列 2、

@@ -69,13 +69,16 @@ pub async fn trigger(State(st): State<AppState>, req: Option<Json<CheckTriggerRe
     // (a new one-shot trigger).
     let key = req.idempotency_key.as_deref().map(str::trim);
     if let Some(k) = key {
-        if k.len() > MAX_IDEMPOTENCY_KEY_LEN {
+        // Count CHARACTERS, not bytes: the cap is documented as 128 characters, and a
+        // byte count would silently make the effective limit much smaller for
+        // non-ASCII keys (a 128-character CJK key is ~384 bytes).
+        let chars = k.chars().count();
+        if chars > MAX_IDEMPOTENCY_KEY_LEN {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 format!(
                     "idempotency_key exceeds the {MAX_IDEMPOTENCY_KEY_LEN}-character cap \
-                     (got {})",
-                    k.len()
+                     (got {chars})"
                 ),
             )
                 .into_response();

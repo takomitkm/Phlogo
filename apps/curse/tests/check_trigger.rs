@@ -210,6 +210,15 @@ async fn check_trigger_permission_matrix() {
         "a 128-character key is within the cap (422 here would be 'no schedulable \
          nodes', which is fine): {status} {msg}"
     );
+    // The cap counts CHARACTERS, not bytes: 128 multi-byte characters must NOT be
+    // rejected for its length (a byte count would have rejected it at ~43 chars).
+    let multibyte = "键".repeat(128);
+    let body_mb = format!(r#"{{"idempotency_key":"{multibyte}"}}"#);
+    let (status, msg) = post(addr, "/api/v1/check/trigger", Some(&token), &body_mb).await;
+    assert_ne!(
+        status, 422,
+        "128 multi-byte characters are within the character cap: {msg}"
+    );
 
     sqlx::query("DELETE FROM nodes WHERE id=$1")
         .bind(node_id)

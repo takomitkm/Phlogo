@@ -1356,25 +1356,48 @@ fn every_early_exit_after_the_exec_claim_releases_the_lease() {
     //
     // Two shapes count as an early exit:
     //   * `return Err(..)`        — an explicit early return
-    //   * a line ending in `?`    — a `?`-propagated error (the pre-fix `existing_ids`
-    //                                leak had this shape and no `return` at all)
+    //   * a `?`-TERMINATED STATEMENT — a `?`-propagated error, with OR without a
+    //     trailing `;`. The pre-fix `existing_ids` leak had exactly this shape:
+    //
+    //         let known = existing_ids(pool, &job.node_ids).await
+    //             .await
+    //             .map_err(|e| anyhow::anyhow!("existing_ids: {e}"))?;
+    //
+    //     …i.e. the line ends with `?;`, NOT with a bare `?`. An earlier version of
+    //     this guard only matched a bare `?` and therefore could not see the very
+    //     leak class it was written for (its baseline control only failed because the
+    //     `checked` count dropped, not because the offending line was named).
     let mut checked = 0usize;
     let mut leaked: Vec<String> = Vec::new();
     let lines: Vec<&str> = leased.lines().collect();
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         let is_return_err = trimmed.contains("return Err(");
-        let is_question = trimmed.ends_with('?')
+        let is_question = (trimmed.ends_with('?') || trimmed.ends_with("?;"))
             && !trimmed.starts_with("//")
             && !trimmed.contains("= ?")
             && !trimmed.contains("? as ");
         if !is_return_err && !is_question {
             continue;
         }
-        // A `?` inside the claim's diagnostic SELECT is before the lease exists; the
-        // leased region starts after the claim match block, so nothing here qualifies.
         checked += 1;
-        let window: String = lines[i.saturating_sub(4)..=i].join("\n");
+        // Look back to the START of the enclosing statement, not a fixed number of
+        // lines: the `fail_check_run` that guards an error path can sit several lines
+        // above the `return Err(..)` (e.g. inside the `Err(reason) => { ... }` arm),
+        // and a fixed window silently missed it.
+        let mut window = String::new();
+        for j in (0..=i).rev() {
+            let l = lines[j].trim();
+            // Stop at the start of a statement: a line that ends a block or begins a
+            // new binding.
+            if j < i && (l.ends_with('}') || l.ends_with('{') || l.is_empty()) {
+                break;
+            }
+            window.insert_str(0, &format!("{l}\n"));
+            if j == 0 {
+                break;
+            }
+        }
         if !window.contains("fail_check_run(") {
             leaked.push(format!("{}: {}", i + 1, trimmed));
         }

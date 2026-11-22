@@ -145,16 +145,6 @@ async fn release_push_claim(pool: &PgPool, run_id: Uuid, owner: Uuid) -> sqlx::R
     }
     Ok(())
 }
-///
-/// Errors are PROPAGATED to the caller (ruling: never silently swallowed). A failure
-/// here leaves the row in `dispatching` with a running lease — delivery is
-/// at-least-once and the next pass will re-push after the lease expires; the
-/// execution-side gate keeps a redelivered job from re-running a succeeded check.
-///
-/// Returns `true` when the transition applied. `false` means this lease was already
-/// superseded (a slower instance lost it), so the row will be — or is being — pushed
-/// again by its current holder: the caller logs that as the at-least-once window
-/// instead of treating it as success.
 /// Transition a claimed batch to `enqueued` after a successful `storage.push`.
 ///
 /// Errors are PROPAGATED to the caller (ruling: never silently swallowed). A failure
