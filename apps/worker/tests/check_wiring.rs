@@ -489,7 +489,7 @@ async fn cleanup_run_rows(pool: &PgPool, labels: &[&str]) {
                 .bind(worker::scheduled_run_id(schedule_id, batch))
                 .execute(pool)
                 .await
-                .ok();
+                .expect("cleanup DELETE must succeed");
         }
         // Self-check: the row for this label must be gone. This turns "the test leaves
         // rows behind in the shared dev database" into a test failure instead of a
@@ -505,7 +505,7 @@ async fn cleanup_run_rows(pool: &PgPool, labels: &[&str]) {
         )
         .fetch_one(pool)
         .await
-        .unwrap_or(0);
+        .expect("cleanup count query must succeed");
         assert_eq!(
             left, 0,
             "the test left {left} run row(s) for period '{label}' in the shared dev \
