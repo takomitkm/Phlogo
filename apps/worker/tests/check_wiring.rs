@@ -393,6 +393,8 @@ async fn scheduled_enqueue_is_deduplicated_by_period() {
     .execute(&pool)
     .await
     .ok();
+    // S81: remove the run rows this test's periods created.
+    cleanup_run_rows(&pool, &[&period_a, &period_b, &period_c]).await;
 }
 
 /// M3 stage 4: the manual trigger service enqueues with explicit labels and honours an
@@ -444,12 +446,73 @@ async fn manual_trigger_enqueues_explicit_nodes() {
         .execute(&pool)
         .await
         .ok();
+    // Clean up the run rows this test created (S81): every trigger creates a
+    // `check_runs` row, and the row's id is derived from the period label, so the
+    // test can compute exactly which rows to remove. Without this the test left
+    // rows behind in the shared dev database on every run.
+    for key in [&key1, &key2] {
+        let schedule_id = worker::schedule_id_for_label(key);
+        sqlx::query("DELETE FROM check_runs WHERE id=$1")
+            .bind(worker::scheduled_run_id(schedule_id, 0))
+            .execute(&pool)
+            .await
+            .ok();
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM check_runs WHERE id=$1")
+            .bind(worker::scheduled_run_id(schedule_id, 0))
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
+        assert_eq!(left, 0, "the test left a run row for key '{key}' behind");
+    }
+    // key3 scheduled nothing (its node id was unknown), so it created no row.
 }
 
 // ---------------------------------------------------------------------------
 // M3.1-2 fault-injection tests (ruling 2026-11-20): the seven behaviors demanded.
 // All use the disposable PHLOGO_TEST_JOBS_DSN (skip without it; never DATABASE_URL).
 // ---------------------------------------------------------------------------
+
+/// Delete the `check_runs` rows a scheduling pass created for the given period labels
+/// (S81).
+///
+/// The rows' ids are derived from the period label, so the exact set is computable.
+/// Without this, every scheduling test left rows behind in the shared dev database --
+/// which is how it accumulated hundreds of rows whose `status` never left 'started'.
+async fn cleanup_run_rows(pool: &PgPool, labels: &[&str]) {
+    for label in labels {
+        let schedule_id = worker::schedule_id_for_label(label);
+        // Do NOT stop at the first missing batch: the number of batches depends on how
+        // many nodes are schedulable at that moment, and a gap in the middle is
+        // possible in principle. Scanning the whole range is cheap (64 DELETEs).
+        for batch in 0..64usize {
+            sqlx::query("DELETE FROM check_runs WHERE id=$1")
+                .bind(worker::scheduled_run_id(schedule_id, batch))
+                .execute(pool)
+                .await
+                .ok();
+        }
+        // Self-check: the row for this label must be gone. This turns "the test leaves
+        // rows behind in the shared dev database" into a test failure instead of a
+        // slow-burning pollution problem nobody notices.
+        let left: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM check_runs \
+             WHERE id = ANY($1::uuid[])",
+        )
+        .bind(
+            (0..64usize)
+                .map(|b| worker::scheduled_run_id(schedule_id, b))
+                .collect::<Vec<_>>(),
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+        assert_eq!(
+            left, 0,
+            "the test left {left} run row(s) for period '{label}' in the shared dev \
+             database"
+        );
+    }
+}
 
 fn require_jobs_dsn() -> Option<String> {
     match std::env::var("PHLOGO_TEST_JOBS_DSN") {
@@ -529,7 +592,9 @@ async fn concurrent_claims_yield_exactly_one_winner() {
     use std::sync::Arc;
     use worker::{claim_for_push, CheckJob};
     // Main-DB setup (migrations) only; racers use their own connections below.
-    let _pool = setup().await;
+    let Some(pool) = setup().await else {
+        return;
+    };
     let Some(_jobs_dsn) = require_jobs_dsn() else {
         return;
     };
@@ -579,6 +644,13 @@ async fn concurrent_claims_yield_exactly_one_winner() {
         WORKERS - 1,
         "everyone else is Busy"
     );
+    // S81: `claim_for_push` INSERTs the row when it does not exist yet — this test
+    // therefore creates one. Delete it (S81: no test leaves run rows behind).
+    sqlx::query("DELETE FROM check_runs WHERE id=$1")
+        .bind(job.run_id)
+        .execute(&pool)
+        .await
+        .ok();
 }
 
 /// Fault #2b (recovery race): two schedulers recover the SAME expired lease through
@@ -638,6 +710,12 @@ async fn concurrent_recovery_of_expired_lease_has_one_winner() {
     }
     assert_eq!(winners.load(Ordering::SeqCst), 1, "one recovery winner");
     assert_eq!(busy.load(Ordering::SeqCst), RECOVERERS - 1);
+    // S81: this test created the row through `claim_for_push`'s INSERT branch.
+    sqlx::query("DELETE FROM check_runs WHERE id=$1")
+        .bind(job.run_id)
+        .execute(&pool)
+        .await
+        .ok();
 }
 
 /// Fault #3: a run that ALREADY SUCCEEDED is never re-executed on redelivery (the
@@ -743,6 +821,12 @@ async fn state_transition_errors_propagate() {
         state2, "enqueued",
         "stale owner must not overwrite the state"
     );
+    // S81: the `claim_for_push` INSERT branch created this row.
+    sqlx::query("DELETE FROM check_runs WHERE id=$1")
+        .bind(job.run_id)
+        .execute(&pool)
+        .await
+        .ok();
 }
 
 /// Fault #5: the manual trigger with the SAME idempotency key recovers lost batches
@@ -819,6 +903,19 @@ async fn manual_trigger_idempotency_key_recovers() {
         .execute(&pool)
         .await
         .ok();
+    // Clean up the run row this test created (S81) — same key ⇒ same run id.
+    let run_id = worker::scheduled_run_id(worker::schedule_id_for_label(&key), 0);
+    sqlx::query("DELETE FROM check_runs WHERE id=$1")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .ok();
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM check_runs WHERE id=$1")
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap_or(0);
+    assert_eq!(left, 0, "the test left a run row behind");
 }
 
 /// Fault #6 (test-evidence fix): the wrong-key node's UUID must be absent from every
@@ -882,8 +979,9 @@ async fn undecryptable_payloads_are_excluded_from_scheduling() {
         batch_size: 10,
     };
     let stamp = Uuid::new_v4().simple().to_string();
+    let period = format!("m31-wrongkey-{stamp}");
     let (pushed, _skipped, total, undecryptable) =
-        enqueue_scheduled(&mut storage, &pool, &format!("m31-wrongkey-{stamp}"), &cfg)
+        enqueue_scheduled(&mut storage, &pool, &period, &cfg)
             .await
             .expect("pass");
     assert!(undecryptable >= 1, "the wrong-key node must be counted");
@@ -915,6 +1013,9 @@ async fn undecryptable_payloads_are_excluded_from_scheduling() {
         .execute(&pool)
         .await
         .ok();
+    // S81: remove the run rows this scheduling pass created.
+    let period = format!("m31-wrongkey-{stamp}");
+    cleanup_run_rows(&pool, &[&period]).await;
 }
 
 /// Fault #7: the Apalis handler surfaces run_check_once errors as `Err` so the retry
@@ -1308,11 +1409,11 @@ async fn failed_push_releases_the_delivery_claim() {
         .execute(&pool)
         .await
         .ok();
-    sqlx::query("DELETE FROM check_runs WHERE id=$1")
-        .bind(run_id)
-        .execute(&pool)
-        .await
-        .ok();
+    // S81: remove EVERY row of this period — `enqueue_scheduled` batches over ALL
+    // schedulable nodes, so the number of batches depends on what else is in the
+    // shared dev database. Deleting only batch 0 left the others behind (visible only
+    // when the whole suite runs, with more fixture nodes present).
+    cleanup_run_rows(&pool, &[period]).await;
 }
 
 /// Fault #11 (M3.1-3c): a SOURCE-SHAPE guard for the "every early exit releases the lease"

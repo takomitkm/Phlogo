@@ -451,7 +451,24 @@ S75 就是这么抓到的：`existing_ids()`（测活**返回之后**读主库�
 `execution lease lost before the terminal write`，因为该条件永远不成立。正确做法是：终态归属由
 **租约 owner** 判定，由事务回滚兜底。
 
-### 10.3 证据（含基线对照）
+#### `push_state` 只描述**投递**，不描述**执行**（别误判为矛盾行）
+
+`push_state`（pending / dispatching / enqueued）与 `status`（started / success / failed）是**两套正交
+的语义**，分属两个阶段：
+
+| 列 | 描述的问题 | 由谁写 |
+| --- | --- | --- |
+| `push_state` | 这个 run **有没有被送进队列**（投递阶段） | `claim_for_push` / `mark_enqueued` / `release_push_claim` |
+| `status` | 这个 run 的**测活结果**（执行阶段） | `claim_for_exec` / 终态写 |
+| `exec_owner` / `exec_lease_until` | **执行权**归谁（执行阶段） | `claim_for_exec` / 终态写 |
+
+所以「`status='success'` 且 `push_state='pending'`」**不是矛盾行**，而是「这个 run 被直接执行过、从未
+经过投递」——只有测试直调 `run_check_once`（不经队列）才会产生，生产上不存在（执行入口只有 Apalis
+handler `handle_check`，即只可能来自队列里的 job）。S81 实测：dev 库里这 55 行全部来自测试直调
+（`started_at` 跨 11-11 至今）。
+
+同理，**投递认领要求 `status='started'`**，所以终态行永远不会被重新投递 —— 两个阶段的正交性在 SQL
+里已经由这一条保证了，不需要靠额外的一致性维护。
 
 | 测试 | 内容 | 结果 |
 | --- | --- | --- |
@@ -462,6 +479,8 @@ S75 就是这么抓到的：`existing_ids()`（测活**返回之后**读主库�
 | `db_error_after_checker_releases_the_execution_lease` | 用**真实 DB 错误**打掉「测活返回之后」那一步：测试在 mock 回帧后对 `nodes` 取 `ACCESS EXCLUSIVE` 锁，worker 侧池带 `lock_timeout=300ms` → `existing_ids` 超时失败；断言 `Err`、只 1 次 submit、`status='failed'`、租约字段清空 | 通过（**基线对照**：回退成裸 `?` 时该测试失败 `left:"started" / right:"failed"`） |
 | `every_early_exit_after_the_exec_claim_releases_the_lease` | **源码形状守卫**：扫描 `run_check_once` 里「拿到租约之后」的每一处早退（`return Err(..)` **和** `?` 终止的语句——带或不带结尾 `;`），要求每处都在**所属语句块内**先 `fail_check_run` | 通过（**两个控制实验**：注入 `?;` 形状的泄漏 → 守卫**点名那一行**；注入**合法**的（已守卫）早退 → 守卫**不误报**） |
 | `failed_push_releases_the_delivery_claim` | 把 storage 指向一个**不存在的数据库**让 push 必然失败 → 断言调度器派生的那一行回到 `pending`（而不是停在 `dispatching`），且可立即重新认领 | 通过（证明 push 失败不会把批次永久卡住） |
+
+### 10.3 证据（含基线对照）
 
 ### 10.4 恢复的真实边界（S73 修正，别过度声称也别过度悲观）
 

@@ -2323,3 +2323,55 @@ checked=7 / leaked=[] → **静默漏检**，直接证实「旧守卫看不见�
 worker **22** / curse **37** / database **4** / distribution **43** / adapter **18** / checker **11**
 全绿；`rustfmt --check` + `clippy --all-targets -- -D warnings` 0；同步 8/8 哈希一致；
 一次性 `phlogo_jobs_test_m3` 建库→测试→销毁，链内断言确认删除（`TESTDB_LEFT` 计数 = 0）。
+
+## [UTC 2026-11-24T04:30:00Z] S81 · 封死测试对共享 dev 库的污染（实测 448 行 → 门禁净增 0）
+
+### 起因（本轮 round-3 自查发现的真问题）
+
+核对 dev 库的 `check_runs` 时看到一堆语义上不可能同时出现的组合：`status='started'` 却有
+`push_state='enqueued'`、`status='success'` 却 `push_state='pending'`，共 448 行。分析后确认：
+
+1. **绝大多数是测试残留，不是生产数据**。触发源是各测试直接调 `run_check_once` /
+   `claim_for_push` / `enqueue_scheduled` / `trigger_check_batch`，这些都会经
+   `record_check_run`（裸 INSERT，默认 `push_state='pending'`）或 `claim_for_push` 的 INSERT 分支
+   建 `check_runs` 行；而测试**只删 `nodes`、不删 `check_runs`**。
+2. 生产上执行入口只有 Apalis handler `handle_check`（只可能来自队列里的 job），所以
+   `success`+`pending` 这种矛盾组合只可能来自测试直调。→ 写进文档（§10.3 前的新段），
+   **不改语义**：`push_state` 只描述投递、`status` 只描述执行，两者正交，`claim_for_push` 的
+   `WHERE status='started'` 已保证终态行不会被重新投递。
+
+### 修复（5 个文件，全部「删完再断言已删」）
+
+- `apps/worker/tests/check_wiring.rs`：新增 `cleanup_run_rows(pool, labels)` 助手（按 label 派生
+  的 run_id 扫 0..64 批，**不中途 break**——批数取决于当时有多少可调度节点，中途空档有可能）；
+  给 12 个建行测试补清理与自检断言。补上的关键一类是**直接调 `claim_for_push`** 的测试
+  （`concurrent_claims_yield_exactly_one_winner`、`concurrent_recovery_of_expired_lease_has_one_winner`
+  与 `state_transition_errors_propagate`）——`claim_for_push` 的 INSERT 分支会建行，我最初的启发式
+  （只搜 `run_check_once`/`enqueue_scheduled`/`trigger_check_batch`）**漏掉了这个模式**，
+  正是它造成「单跑 0 残留、整套跑 +3」。
+- `apps/curse/tests/check_trigger.rs`：3 个不同幂等键（idem / 128 字符 / 多字节）各自派生不同
+  run_id，全删并逐个自检。
+- `apps/worker/tests/check_job.rs`、`crates/database/tests/check_persist.rs`：各删自己建的那一行。
+- `.tmp/p86-sync-src.py`：同步哈希清单从 8 个文件扩到 9 个（加入 `check_persist.rs`）。
+
+### 实测（不是靠读代码推断）
+
+- 清理前 448 行；用受控清理脚本（只删 `status='started'` 且无结果的行，保留 60 行终态/有结果的）
+  后剩 60 行。
+- **注入式对照**：去掉 curse 测试的清理块 → 跑一次 `+1` 行；恢复后 → `+0` 行。确认污染源判断正确。
+- 逐二进制测量（同一条 ssh 链内 before/after）：worker/check_wiring、worker/check_job、
+  worker/fetch_loop、curse/check_trigger 全部 `delta=0`。
+- **最终门禁前后 `check_runs` 行数 81 → 81，净增 0**。一次性 jobs 库仍由链内断言确认销毁。
+
+### 踩过的环境坑（都已写进脚本注释，不再重复踩）
+
+1. 校机上 **postgres 是 ssh 会话的子进程**：把 `pg_ctl start` 和查询拆成两次 ssh 调用时，
+   PG 会随第一次会话结束被回收，第二次查询报 `Connection refused`。必须在**同一条链**里。
+2. Windows ssh 回显带 **CR**（`448\r`）且中文提示落在 stderr：解析计数要 `strip()` 且兼容两个通道。
+3. 交付脚本一律先 `py_precheck.py` + `ruff`（本轮每个新脚本都做了）。
+
+### 门禁
+
+worker **22** / curse **37** / database **4** / distribution **43** / adapter **18** / checker **11**
+全绿；rustfmt + clippy 0；同步哈希 9/9；一次性 jobs 库建→测→销，`TESTDB_LEFT`=0；
+`check_runs` 门禁净增 **0**。

@@ -115,6 +115,25 @@ async fn check_persistence_idempotent_and_metrics_roundtrip() {
     .unwrap();
     assert_eq!(dead_status, "dead", "latency -1 must persist as dead");
     assert!(statuses >= 0);
+
+    // S81: `persist_check_run` inserted this run row (and its results); remove them
+    // so this test leaves no residue in the shared dev database.
+    sqlx::query("DELETE FROM node_check_results WHERE check_run_id=$1")
+        .bind(run)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM check_runs WHERE id=$1")
+        .bind(run)
+        .execute(&pool)
+        .await
+        .ok();
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM check_runs WHERE id=$1")
+        .bind(run)
+        .fetch_one(&pool)
+        .await
+        .unwrap_or(0);
+    assert_eq!(left, 0, "the test left its run row behind");
 }
 
 /// Acceptance #3: late node_status write does not overwrite a newer snapshot.

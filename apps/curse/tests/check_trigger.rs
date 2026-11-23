@@ -146,7 +146,13 @@ async fn check_trigger_permission_matrix() {
         .await;
     });
 
-    let body = format!(r#"{{"node_ids":["{node_id}"],"batch_size":5}}"#);
+    // A per-run idempotency key: the server derives the run_id from it, so the test can
+    // compute (and clean up) the exact rows it created. Without this the API test left
+    // `check_runs` rows behind in the shared dev database on every run — hundreds of
+    // `push_state='enqueued'` rows whose status never left 'started', because the test
+    // never runs a worker.
+    let idem = format!("curse-trigger-{}", Uuid::new_v4().simple());
+    let body = format!(r#"{{"node_ids":["{node_id}"],"batch_size":5,"idempotency_key":"{idem}"}}"#);
 
     // Anonymous -> 401.
     let (status, _) = post(addr, "/api/v1/check/trigger", None, &body).await;
@@ -225,4 +231,52 @@ async fn check_trigger_permission_matrix() {
         .execute(&pool)
         .await
         .ok();
+    sqlx::query("DELETE FROM node_payloads WHERE node_id=$1")
+        .bind(node_id)
+        .execute(&pool)
+        .await
+        .ok();
+    // Clean up the run rows this test created (see the idempotency-key note above).
+    // Every request that reached `trigger_check_batch` created a row, and each used a
+    // DIFFERENT idempotency key (idem / the 128-char key / the multibyte key) -> a
+    // different run id. The 422 ones (unknown id / 501 ids / over-long key) never
+    // claimed anything and created nothing.
+    let mut deleted = 0usize;
+    for key in [&idem, &ok_key, &multibyte] {
+        let schedule_id = worker::schedule_id_for_label(&format!("manual-{key}"));
+        // Scan the whole batch range: the batch count depends on how many nodes are
+        // schedulable at that moment, so a fixed small range can miss rows.
+        for batch in 0..64usize {
+            let n = sqlx::query("DELETE FROM check_runs WHERE id=$1")
+                .bind(worker::scheduled_run_id(schedule_id, batch))
+                .execute(&pool)
+                .await
+                .map(|r| r.rows_affected())
+                .unwrap_or(0);
+            deleted += n as usize;
+        }
+    }
+    assert!(
+        deleted >= 1,
+        "the API test must clean up the run rows it created (deleted {deleted})"
+    );
+    // Self-check: nothing of ours may remain (S81). This turns "the API test pollutes
+    // the shared dev database" into a test failure instead of a slow-burning problem.
+    for key in [&idem, &ok_key, &multibyte] {
+        let schedule_id = worker::schedule_id_for_label(&format!("manual-{key}"));
+        let left: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM check_runs WHERE id = ANY($1::uuid[])")
+                .bind(
+                    (0..64usize)
+                        .map(|b| worker::scheduled_run_id(schedule_id, b))
+                        .collect::<Vec<_>>(),
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap_or(0);
+        assert_eq!(
+            left, 0,
+            "the API test left {left} run row(s) for key '{key}' in the shared dev database"
+        );
+    }
 }

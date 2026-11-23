@@ -84,4 +84,18 @@ async fn no_duplicate_work() {
     .unwrap();
     assert_eq!(status, "success");
     assert_eq!(finishes, 1, "finish transition must be one-shot");
+
+    // S81: remove the row this test created — it used to be left behind in the shared
+    // dev database on every run.
+    sqlx::query("DELETE FROM check_runs WHERE id=$1")
+        .bind(j.run_id)
+        .execute(&pool)
+        .await
+        .expect("delete run row");
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM check_runs WHERE id=$1")
+        .bind(j.run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap_or(0);
+    assert_eq!(left, 0, "the test left its run row behind");
 }
